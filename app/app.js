@@ -21,7 +21,7 @@ import {
 import {
   getStorage,
   ref,
-  uploadBytes,
+  uploadBytesResumable,
   getDownloadURL,
   deleteObject,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-storage.js";
@@ -244,17 +244,38 @@ function renderPhotoCard(photoId, data) {
 }
 
 // --- Opplasting av bilder (kamera eller eksisterende bilder) ---
+let uploadInProgress = false;
+
+window.addEventListener("beforeunload", (e) => {
+  if (uploadInProgress) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
+
 async function handlePhotoFiles(files, inputEl) {
   if (!files.length || !currentProject) return;
+  uploadInProgress = true;
   uploadStatusEl.classList.remove("hidden");
   for (let i = 0; i < files.length; i++) {
-    uploadStatusEl.textContent = `Laster opp bilde ${i + 1} av ${files.length}...`;
     try {
+      uploadStatusEl.textContent = `Komprimerer bilde ${i + 1} av ${files.length}...`;
       const compressed = await compressImage(files[i]);
       const filename = `${Date.now()}-${i}.jpg`;
       const storagePath = `projects/${currentProject.id}/${filename}`;
       const storageRef = ref(storage, storagePath);
-      await uploadBytes(storageRef, compressed, { contentType: "image/jpeg" });
+      const uploadTask = uploadBytesResumable(storageRef, compressed, { contentType: "image/jpeg" });
+      await new Promise((resolve, reject) => {
+        uploadTask.on(
+          "state_changed",
+          (snapshot) => {
+            const percent = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+            uploadStatusEl.textContent = `Laster opp bilde ${i + 1} av ${files.length} (${percent}%)...`;
+          },
+          reject,
+          resolve
+        );
+      });
       const url = await getDownloadURL(storageRef);
       await addDoc(collection(db, "projects", currentProject.id, "photos"), {
         url,
@@ -265,9 +286,10 @@ async function handlePhotoFiles(files, inputEl) {
       });
     } catch (err) {
       console.error("Opplasting feilet", err.code, err.message);
-      alert(`Opplasting feilet (${err.code || err.message}).`);
+      alert(`Opplasting feilet (${err.code || err.message}). Prøv på nytt uten å bytte app eller låse skjermen mens det laster.`);
     }
   }
+  uploadInProgress = false;
   uploadStatusEl.classList.add("hidden");
   inputEl.value = "";
 }
@@ -275,33 +297,24 @@ async function handlePhotoFiles(files, inputEl) {
 cameraInput.addEventListener("change", (e) => handlePhotoFiles(Array.from(e.target.files || []), cameraInput));
 galleryInput.addEventListener("change", (e) => handlePhotoFiles(Array.from(e.target.files || []), galleryInput));
 
-// Skalerer ned og komprimerer bildet før opplasting for å spare data/lagring
-function compressImage(file, maxDimension = 1600, quality = 0.8) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const reader = new FileReader();
-    reader.onload = () => {
-      img.onload = () => {
-        let { width, height } = img;
-        if (width > height && width > maxDimension) {
-          height = Math.round((height * maxDimension) / width);
-          width = maxDimension;
-        } else if (height > maxDimension) {
-          width = Math.round((width * maxDimension) / height);
-          height = maxDimension;
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext("2d").drawImage(img, 0, 0, width, height);
-        canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality);
-      };
-      img.onerror = reject;
-      img.src = reader.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+// Skalerer ned og komprimerer bildet før opplasting for å spare data/lagring.
+// createImageBitmap dekoder rå fil direkte (mye raskere enn FileReader/dataURL for store mobilbilder).
+async function compressImage(file, maxDimension = 1600, quality = 0.75) {
+  const bitmap = await createImageBitmap(file);
+  let { width, height } = bitmap;
+  if (width > height && width > maxDimension) {
+    height = Math.round((height * maxDimension) / width);
+    width = maxDimension;
+  } else if (height > maxDimension) {
+    width = Math.round((width * maxDimension) / height);
+    height = maxDimension;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality));
 }
 
 // --- PDF-rapport ---
