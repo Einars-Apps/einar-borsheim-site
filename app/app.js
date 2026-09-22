@@ -94,7 +94,8 @@ loginForm.addEventListener("submit", async (e) => {
     await signInWithEmailAndPassword(auth, email, password);
     loginForm.reset();
   } catch (err) {
-    loginError.textContent = "Kunne ikke logge inn. Sjekk e-post og passord.";
+    console.error("Innlogging feilet:", err.code, err.message);
+    loginError.textContent = `Kunne ikke logge inn (${err.code || "ukjent feil"}).`;
     loginError.classList.remove("hidden");
   }
 });
