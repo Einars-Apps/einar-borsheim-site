@@ -108,26 +108,33 @@ logoutLink.addEventListener("click", async (e) => {
 // --- Prosjekter ---
 function listenToProjects() {
   const q = query(collection(db, "projects"), orderBy("createdAt", "desc"));
-  unsubscribeProjects = onSnapshot(q, (snapshot) => {
-    projectListEl.innerHTML = "";
-    if (snapshot.empty) {
-      projectsEmptyEl.classList.remove("hidden");
-      return;
+  unsubscribeProjects = onSnapshot(
+    q,
+    (snapshot) => {
+      projectListEl.innerHTML = "";
+      if (snapshot.empty) {
+        projectsEmptyEl.classList.remove("hidden");
+        return;
+      }
+      projectsEmptyEl.classList.add("hidden");
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const li = document.createElement("li");
+        li.innerHTML = `
+          <span class="project-name"></span>
+          <span class="project-desc"></span>
+        `;
+        li.querySelector(".project-name").textContent = data.name;
+        li.querySelector(".project-desc").textContent = data.description || "";
+        li.addEventListener("click", () => openProject(docSnap.id, data));
+        projectListEl.appendChild(li);
+      });
+    },
+    (err) => {
+      console.error("Kunne ikke hente prosjekter:", err.code, err.message);
+      alert(`Kunne ikke hente prosjekter (${err.code || err.message}).`);
     }
-    projectsEmptyEl.classList.add("hidden");
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      const li = document.createElement("li");
-      li.innerHTML = `
-        <span class="project-name"></span>
-        <span class="project-desc"></span>
-      `;
-      li.querySelector(".project-name").textContent = data.name;
-      li.querySelector(".project-desc").textContent = data.description || "";
-      li.addEventListener("click", () => openProject(docSnap.id, data));
-      projectListEl.appendChild(li);
-    });
-  });
+  );
 }
 
 newProjectBtn.addEventListener("click", () => {
@@ -143,15 +150,20 @@ cancelProjectBtn.addEventListener("click", () => {
 saveProjectBtn.addEventListener("click", async () => {
   const name = projectNameInput.value.trim();
   if (!name) return;
-  await addDoc(collection(db, "projects"), {
-    name,
-    description: projectDescInput.value.trim(),
-    createdAt: serverTimestamp(),
-    createdBy: auth.currentUser?.email || "ukjent",
-  });
-  projectNameInput.value = "";
-  projectDescInput.value = "";
-  newProjectForm.classList.add("hidden");
+  try {
+    await addDoc(collection(db, "projects"), {
+      name,
+      description: projectDescInput.value.trim(),
+      createdAt: serverTimestamp(),
+      createdBy: auth.currentUser?.email || "ukjent",
+    });
+    projectNameInput.value = "";
+    projectDescInput.value = "";
+    newProjectForm.classList.add("hidden");
+  } catch (err) {
+    console.error("Kunne ikke opprette prosjekt:", err.code, err.message);
+    alert(`Kunne ikke opprette prosjekt (${err.code || err.message}).`);
+  }
 });
 
 // --- Prosjektdetalj ---
