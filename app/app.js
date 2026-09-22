@@ -31,6 +31,15 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
+const COMPANY = {
+  name: "Einar A Børsheim",
+  tagline: "Gravefirma",
+  address: "Eriksvei 13, 1386 Asker",
+  phone: "905 52 065",
+  email: "e.bors@hotmail.com",
+  orgNr: "962 091 504",
+};
+
 // --- DOM ---
 const viewLogin = document.getElementById("view-login");
 const viewProjects = document.getElementById("view-projects");
@@ -463,36 +472,82 @@ async function generatePdfReport(project, photos) {
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const margin = 15;
+  const accent = [0, 105, 92];
 
-  // Forside
-  pdf.setFontSize(22);
-  pdf.text("Internkontroll-rapport", margin, 30);
+  // Forside med firma-header
+  pdf.setFillColor(...accent);
+  pdf.rect(0, 0, pageWidth, 28, "F");
+  pdf.setTextColor(255, 255, 255);
+  pdf.setFont("helvetica", "bold");
   pdf.setFontSize(16);
-  pdf.text(project.name, margin, 42);
+  pdf.text(COMPANY.name, margin, 12);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(10);
+  pdf.text(COMPANY.tagline, margin, 19);
+
+  pdf.setTextColor(20, 20, 20);
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(24);
+  pdf.text("Internkontroll-rapport", margin, 50);
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(16);
+  pdf.text(project.name, margin, 62);
   pdf.setFontSize(11);
   if (project.description) {
-    pdf.text(project.description, margin, 50, { maxWidth: pageWidth - margin * 2 });
+    pdf.text(project.description, margin, 70, { maxWidth: pageWidth - margin * 2 });
   }
-  pdf.setFontSize(10);
-  pdf.text(`Generert: ${new Date().toLocaleString("no-NO")}`, margin, pageHeight - 15);
-  pdf.text(`Antall bilder: ${photos.length}`, margin, pageHeight - 10);
 
+  pdf.setDrawColor(...accent);
+  pdf.setLineWidth(0.5);
+  pdf.line(margin, 80, pageWidth - margin, 80);
+
+  pdf.setFontSize(10);
+  pdf.text(`Generert: ${new Date().toLocaleString("no-NO")}`, margin, 90);
+  pdf.text(`Antall bilder: ${photos.length}`, margin, 96);
+
+  pdf.setFontSize(9);
+  pdf.setTextColor(100, 100, 100);
+  [
+    COMPANY.name,
+    COMPANY.address,
+    `Tlf: ${COMPANY.phone}  ·  E-post: ${COMPANY.email}`,
+    `Org.nr: ${COMPANY.orgNr}`,
+  ].forEach((line, i) => pdf.text(line, margin, pageHeight - 25 + i * 5));
+  pdf.setTextColor(20, 20, 20);
+
+  let pageNumber = 1;
   for (const photo of photos) {
     pdf.addPage();
+    pageNumber++;
     const dataUrl = photo.dataUrl || (await urlToDataUrl(photo.url));
     const dims = await getImageDimensions(dataUrl);
+    const headerHeight = 12;
+
+    pdf.setFontSize(9);
+    pdf.setTextColor(120, 120, 120);
+    pdf.text(`${project.name} — ${COMPANY.name}`, margin, headerHeight);
+    pdf.setTextColor(20, 20, 20);
+
     const maxWidth = pageWidth - margin * 2;
-    const maxHeight = pageHeight - margin * 2 - 20;
+    const maxHeight = pageHeight - margin * 2 - headerHeight - 15;
     let { width, height } = fitDimensions(dims.width, dims.height, maxWidth, maxHeight);
     const x = (pageWidth - width) / 2;
-    pdf.addImage(dataUrl, "JPEG", x, margin, width, height);
+    const y = margin + headerHeight;
+    pdf.addImage(dataUrl, "JPEG", x, y, width, height);
     if (photo.caption) {
       pdf.setFontSize(11);
-      pdf.text(photo.caption, margin, margin + height + 8, { maxWidth });
+      pdf.text(photo.caption, margin, y + height + 8, { maxWidth });
     }
-    const date = photo.createdAt?.toDate ? photo.createdAt.toDate().toLocaleDateString("no-NO") : "";
+    const date = photo.createdAt?.toDate
+      ? photo.createdAt.toDate().toLocaleDateString("no-NO")
+      : photo.dataUrl
+      ? "Lagt til fra PC"
+      : "";
     pdf.setFontSize(9);
+    pdf.setTextColor(120, 120, 120);
     pdf.text(date, margin, pageHeight - 10);
+    pdf.text(`Side ${pageNumber}`, pageWidth - margin - 15, pageHeight - 10);
+    pdf.setTextColor(20, 20, 20);
   }
 
   const filename = `internkontroll-${project.name.replace(/\s+/g, "_")}.pdf`;
