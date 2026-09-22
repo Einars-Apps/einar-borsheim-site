@@ -288,55 +288,67 @@ function withTimeout(promise, ms, message) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+async function uploadOnePhoto(file, index, total) {
+  uploadStatusEl.textContent = `Komprimerer bilde ${index + 1} av ${total}...`;
+  const compressed = await withTimeout(compressImage(file), 20000, "Komprimering tok for lang tid");
+  const filename = `${Date.now()}-${index}.jpg`;
+  const storagePath = `projects/${currentProject.id}/${filename}`;
+  const storageRef = ref(storage, storagePath);
+  const uploadTask = uploadBytesResumable(storageRef, compressed, { contentType: "image/jpeg" });
+  await withTimeout(
+    new Promise((resolve, reject) => {
+      uploadTask.on(
+        "state_changed",
+        (snapshot) => {
+          const percent = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+          uploadStatusEl.textContent = `Laster opp bilde ${index + 1} av ${total} (${percent}%)...`;
+        },
+        reject,
+        resolve
+      );
+    }),
+    60000,
+    "Opplasting tok for lang tid - sjekk nettforbindelsen (Wi-Fi/mobildata)"
+  );
+  const url = await getDownloadURL(storageRef);
+  await addDoc(collection(db, "projects", currentProject.id, "photos"), {
+    url,
+    storagePath,
+    caption: "",
+    createdAt: serverTimestamp(),
+    uploadedBy: auth.currentUser?.email || "ukjent",
+  });
+}
+
 async function handlePhotoFiles(files, inputEl) {
   if (!files.length || !currentProject) return;
   uploadInProgress = true;
   await requestWakeLock();
   uploadStatusEl.classList.remove("hidden");
+  const failed = [];
   for (let i = 0; i < files.length; i++) {
     try {
-      uploadStatusEl.textContent = `Komprimerer bilde ${i + 1} av ${files.length}...`;
-      const compressed = await withTimeout(
-        compressImage(files[i]),
-        20000,
-        "Komprimering tok for lang tid"
-      );
-      const filename = `${Date.now()}-${i}.jpg`;
-      const storagePath = `projects/${currentProject.id}/${filename}`;
-      const storageRef = ref(storage, storagePath);
-      const uploadTask = uploadBytesResumable(storageRef, compressed, { contentType: "image/jpeg" });
-      await withTimeout(
-        new Promise((resolve, reject) => {
-          uploadTask.on(
-            "state_changed",
-            (snapshot) => {
-              const percent = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-              uploadStatusEl.textContent = `Laster opp bilde ${i + 1} av ${files.length} (${percent}%)...`;
-            },
-            reject,
-            resolve
-          );
-        }),
-        60000,
-        "Opplasting tok for lang tid - sjekk nettforbindelsen (Wi-Fi/mobildata)"
-      );
-      const url = await getDownloadURL(storageRef);
-      await addDoc(collection(db, "projects", currentProject.id, "photos"), {
-        url,
-        storagePath,
-        caption: "",
-        createdAt: serverTimestamp(),
-        uploadedBy: auth.currentUser?.email || "ukjent",
-      });
-    } catch (err) {
-      console.error("Opplasting feilet", err.code, err.message);
-      alert(`Opplasting av bilde ${i + 1} feilet: ${err.message || err.code}. Sjekk nettforbindelsen og prøv igjen.`);
+      await uploadOnePhoto(files[i], i, files.length);
+    } catch (firstErr) {
+      // ett automatisk nytt forsøk ved forbigående nettverksfeil
+      try {
+        uploadStatusEl.textContent = `Prøver bilde ${i + 1} av ${files.length} på nytt...`;
+        await uploadOnePhoto(files[i], i, files.length);
+      } catch (err) {
+        console.error("Opplasting feilet", err.code, err.message);
+        failed.push(i + 1);
+      }
     }
   }
   uploadInProgress = false;
   await releaseWakeLock();
   uploadStatusEl.classList.add("hidden");
   inputEl.value = "";
+  if (failed.length) {
+    alert(
+      `${failed.length} av ${files.length} bilder ble ikke lastet opp (nr. ${failed.join(", ")}). Sjekk nettforbindelsen og velg dem på nytt.`
+    );
+  }
 }
 
 
