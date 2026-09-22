@@ -112,6 +112,12 @@
   border: 1px solid var(--line);
 }
 
+.section-divider {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 2rem 0 1rem;
+}
+
 .photo-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));

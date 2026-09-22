@@ -59,9 +59,12 @@ const galleryInput = document.getElementById("gallery-input");
 const uploadStatusEl = document.getElementById("upload-status");
 const photoGridEl = document.getElementById("photo-grid");
 const photosEmptyEl = document.getElementById("photos-empty");
+const localPhotoInput = document.getElementById("local-photo-input");
+const localPhotoGridEl = document.getElementById("local-photo-grid");
 
 let unsubscribeProjects = null;
 let unsubscribePhotos = null;
+let localPhotos = []; // { id, dataUrl, caption } - kun i denne PDF-en, ikke synkronisert til skyen
 let currentProject = null; // { id, name, description }
 let currentPhotos = [];
 
@@ -172,6 +175,8 @@ function openProject(id, data) {
   currentProject = { id, name: data.name, description: data.description || "" };
   projectTitleEl.textContent = currentProject.name;
   projectDescViewEl.textContent = currentProject.description;
+  localPhotos = [];
+  localPhotoGridEl.innerHTML = "";
   showView(viewProject);
   listenToPhotos(id);
 }
@@ -179,6 +184,8 @@ function openProject(id, data) {
 backToProjectsBtn.addEventListener("click", () => {
   if (unsubscribePhotos) unsubscribePhotos();
   currentProject = null;
+  localPhotos = [];
+  localPhotoGridEl.innerHTML = "";
   showView(viewProjects);
 });
 
@@ -381,7 +388,7 @@ exportPdfBtn.addEventListener("click", async () => {
   exportPdfBtn.disabled = true;
   exportPdfBtn.textContent = "Genererer PDF...";
   try {
-    await generatePdfReport(currentProject, currentPhotos);
+    await generatePdfReport(currentProject, [...currentPhotos, ...localPhotos]);
   } catch (err) {
     console.error("PDF-generering feilet", err);
     alert("Klarte ikke å lage PDF-rapport. Prøv igjen.");
@@ -390,6 +397,54 @@ exportPdfBtn.addEventListener("click", async () => {
     exportPdfBtn.textContent = "Lag PDF-rapport";
   }
 });
+
+// --- Lokale bilder (fra harddisk, kun for PDF-rapport) ---
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+localPhotoInput.addEventListener("change", async (e) => {
+  const files = Array.from(e.target.files || []);
+  for (const file of files) {
+    try {
+      const compressed = await compressImage(file);
+      const dataUrl = await blobToDataUrl(compressed);
+      const id = `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      localPhotos.push({ id, dataUrl, caption: "" });
+      renderLocalPhotoCard(id, dataUrl);
+    } catch (err) {
+      console.error("Kunne ikke legge til lokalt bilde", err);
+    }
+  }
+  localPhotoInput.value = "";
+});
+
+function renderLocalPhotoCard(id, dataUrl) {
+  const card = document.createElement("div");
+  card.className = "photo-card";
+  card.innerHTML = `
+    <img src="${dataUrl}" alt="Lokalt bilde" />
+    <textarea class="photo-caption" rows="2" placeholder="Kommentar / avvik..."></textarea>
+    <div class="photo-actions">
+      <span class="photo-date">Kun i rapporten</span>
+      <button class="delete-photo">Fjern</button>
+    </div>
+  `;
+  card.querySelector(".photo-caption").addEventListener("input", (e) => {
+    const p = localPhotos.find((p) => p.id === id);
+    if (p) p.caption = e.target.value;
+  });
+  card.querySelector(".delete-photo").addEventListener("click", () => {
+    localPhotos = localPhotos.filter((p) => p.id !== id);
+    card.remove();
+  });
+  localPhotoGridEl.appendChild(card);
+}
 
 async function urlToDataUrl(url) {
   const response = await fetch(url);
@@ -424,7 +479,7 @@ async function generatePdfReport(project, photos) {
 
   for (const photo of photos) {
     pdf.addPage();
-    const dataUrl = await urlToDataUrl(photo.url);
+    const dataUrl = photo.dataUrl || (await urlToDataUrl(photo.url));
     const dims = await getImageDimensions(dataUrl);
     const maxWidth = pageWidth - margin * 2;
     const maxHeight = pageHeight - margin * 2 - 20;
