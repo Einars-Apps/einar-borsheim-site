@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="no">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Internkontroll | Einar Borsheim</title>
+    <meta name="description" content="Internkontroll-app: last opp bilder til prosjekter og lag PDF-rapporter." />
+    <meta name="theme-color" content="#00695c" />
+    <link rel="manifest" href="manifest.json" />
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/icon.svg" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../styles.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../index.html">Einar Borsheim</a>
+      <nav>
+        <span id="user-email" class="user-email"></span>
+        <a href="#" id="logout-link" class="hidden">Logg ut</a>
+      </nav>
+    </header>
+
+    <main class="app-main">
+      <!-- Innlogging -->
+      <section id="view-login" class="panel app-panel">
+        <h1>Internkontroll</h1>
+        <p class="muted">Logg inn for å administrere prosjekter og bilder.</p>
+        <form id="login-form" class="stack-form">
+          <label for="email">E-post</label>
+          <input type="email" id="email" name="email" autocomplete="username" required />
+          <label for="password">Passord</label>
+          <input type="password" id="password" name="password" autocomplete="current-password" required />
+          <button type="submit" class="btn btn-primary">Logg inn</button>
+          <p id="login-error" class="error-text hidden"></p>
+        </form>
+      </section>
+
+      <!-- Prosjektliste -->
+      <section id="view-projects" class="panel app-panel hidden">
+        <div class="view-header">
+          <h1>Prosjekter</h1>
+          <button id="new-project-btn" class="btn btn-primary">+ Nytt prosjekt</button>
+        </div>
+        <div id="new-project-form" class="stack-form hidden">
+          <label for="project-name">Prosjektnavn</label>
+          <input type="text" id="project-name" placeholder="F.eks. Byggeplass Sentrum" />
+          <label for="project-desc">Beskrivelse (valgfritt)</label>
+          <input type="text" id="project-desc" placeholder="Kort beskrivelse" />
+          <div class="btn-row">
+            <button id="save-project-btn" class="btn btn-primary">Opprett</button>
+            <button id="cancel-project-btn" class="btn btn-ghost">Avbryt</button>
+          </div>
+        </div>
+        <ul id="project-list" class="project-list"></ul>
+        <p id="projects-empty" class="muted hidden">Ingen prosjekter ennå. Opprett ditt første prosjekt over.</p>
+      </section>
+
+      <!-- Prosjektdetalj -->
+      <section id="view-project" class="panel app-panel hidden">
+        <button id="back-to-projects" class="btn btn-ghost">&larr; Alle prosjekter</button>
+        <div class="view-header">
+          <h1 id="project-title">Prosjekt</h1>
+          <button id="export-pdf-btn" class="btn btn-primary">Lag PDF-rapport</button>
+        </div>
+        <p id="project-desc-view" class="muted"></p>
+
+        <label class="upload-btn">
+          📷 Legg til bilde
+          <input type="file" id="photo-input" accept="image/*" capture="environment" multiple hidden />
+        </label>
+        <p id="upload-status" class="muted hidden"></p>
+
+        <div id="photo-grid" class="photo-grid"></div>
+        <p id="photos-empty" class="muted hidden">Ingen bilder lagt til ennå.</p>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
