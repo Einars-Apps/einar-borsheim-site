@@ -245,6 +245,7 @@ function renderPhotoCard(photoId, data) {
 
 // --- Opplasting av bilder (kamera eller eksisterende bilder) ---
 let uploadInProgress = false;
+let wakeLock = null;
 
 window.addEventListener("beforeunload", (e) => {
   if (uploadInProgress) {
@@ -253,29 +254,72 @@ window.addEventListener("beforeunload", (e) => {
   }
 });
 
+async function requestWakeLock() {
+  try {
+    if ("wakeLock" in navigator) {
+      wakeLock = await navigator.wakeLock.request("screen");
+    }
+  } catch (err) {
+    // ikke støttet / feilet - fortsett uten, bruker må da selv holde skjermen på
+  }
+}
+
+async function releaseWakeLock() {
+  try {
+    await wakeLock?.release();
+  } catch (err) {
+    // ignorer
+  }
+  wakeLock = null;
+}
+
+// Nettleseren slipper wake lock automatisk hvis fanen skjules - hent den på nytt når man kommer tilbake
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && uploadInProgress && !wakeLock) {
+    requestWakeLock();
+  }
+});
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function handlePhotoFiles(files, inputEl) {
   if (!files.length || !currentProject) return;
   uploadInProgress = true;
+  await requestWakeLock();
   uploadStatusEl.classList.remove("hidden");
   for (let i = 0; i < files.length; i++) {
     try {
       uploadStatusEl.textContent = `Komprimerer bilde ${i + 1} av ${files.length}...`;
-      const compressed = await compressImage(files[i]);
+      const compressed = await withTimeout(
+        compressImage(files[i]),
+        20000,
+        "Komprimering tok for lang tid"
+      );
       const filename = `${Date.now()}-${i}.jpg`;
       const storagePath = `projects/${currentProject.id}/${filename}`;
       const storageRef = ref(storage, storagePath);
       const uploadTask = uploadBytesResumable(storageRef, compressed, { contentType: "image/jpeg" });
-      await new Promise((resolve, reject) => {
-        uploadTask.on(
-          "state_changed",
-          (snapshot) => {
-            const percent = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
-            uploadStatusEl.textContent = `Laster opp bilde ${i + 1} av ${files.length} (${percent}%)...`;
-          },
-          reject,
-          resolve
-        );
-      });
+      await withTimeout(
+        new Promise((resolve, reject) => {
+          uploadTask.on(
+            "state_changed",
+            (snapshot) => {
+              const percent = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+              uploadStatusEl.textContent = `Laster opp bilde ${i + 1} av ${files.length} (${percent}%)...`;
+            },
+            reject,
+            resolve
+          );
+        }),
+        60000,
+        "Opplasting tok for lang tid - sjekk nettforbindelsen (Wi-Fi/mobildata)"
+      );
       const url = await getDownloadURL(storageRef);
       await addDoc(collection(db, "projects", currentProject.id, "photos"), {
         url,
@@ -286,13 +330,15 @@ async function handlePhotoFiles(files, inputEl) {
       });
     } catch (err) {
       console.error("Opplasting feilet", err.code, err.message);
-      alert(`Opplasting feilet (${err.code || err.message}). Prøv på nytt uten å bytte app eller låse skjermen mens det laster.`);
+      alert(`Opplasting av bilde ${i + 1} feilet: ${err.message || err.code}. Sjekk nettforbindelsen og prøv igjen.`);
     }
   }
   uploadInProgress = false;
+  await releaseWakeLock();
   uploadStatusEl.classList.add("hidden");
   inputEl.value = "";
 }
+
 
 cameraInput.addEventListener("change", (e) => handlePhotoFiles(Array.from(e.target.files || []), cameraInput));
 galleryInput.addEventListener("change", (e) => handlePhotoFiles(Array.from(e.target.files || []), galleryInput));
