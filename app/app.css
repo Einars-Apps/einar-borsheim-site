@@ -97,13 +97,19 @@
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  margin: 1rem 0;
+  margin: 1rem 0.6rem 1rem 0;
   padding: 0.7rem 1.1rem;
   background: var(--accent);
   color: #fff;
   border-radius: 8px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.upload-btn-alt {
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
 }
 
 .photo-grid {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "internkontroll-v1";
+const CACHE_NAME = "internkontroll-v2";
 const APP_SHELL = [
   "./index.html",
   "./app.css",

@@ -54,7 +54,8 @@ const backToProjectsBtn = document.getElementById("back-to-projects");
 const projectTitleEl = document.getElementById("project-title");
 const projectDescViewEl = document.getElementById("project-desc-view");
 const exportPdfBtn = document.getElementById("export-pdf-btn");
-const photoInput = document.getElementById("photo-input");
+const cameraInput = document.getElementById("camera-input");
+const galleryInput = document.getElementById("gallery-input");
 const uploadStatusEl = document.getElementById("upload-status");
 const photoGridEl = document.getElementById("photo-grid");
 const photosEmptyEl = document.getElementById("photos-empty");
@@ -242,9 +243,8 @@ function renderPhotoCard(photoId, data) {
   photoGridEl.appendChild(card);
 }
 
-// --- Opplasting av bilder ---
-photoInput.addEventListener("change", async (e) => {
-  const files = Array.from(e.target.files || []);
+// --- Opplasting av bilder (kamera eller eksisterende bilder) ---
+async function handlePhotoFiles(files, inputEl) {
   if (!files.length || !currentProject) return;
   uploadStatusEl.classList.remove("hidden");
   for (let i = 0; i < files.length; i++) {
@@ -264,12 +264,16 @@ photoInput.addEventListener("change", async (e) => {
         uploadedBy: auth.currentUser?.email || "ukjent",
       });
     } catch (err) {
-      console.error("Opplasting feilet", err);
+      console.error("Opplasting feilet", err.code, err.message);
+      alert(`Opplasting feilet (${err.code || err.message}).`);
     }
   }
   uploadStatusEl.classList.add("hidden");
-  photoInput.value = "";
-});
+  inputEl.value = "";
+}
+
+cameraInput.addEventListener("change", (e) => handlePhotoFiles(Array.from(e.target.files || []), cameraInput));
+galleryInput.addEventListener("change", (e) => handlePhotoFiles(Array.from(e.target.files || []), galleryInput));
 
 // Skalerer ned og komprimerer bildet før opplasting for å spare data/lagring
 function compressImage(file, maxDimension = 1600, quality = 0.8) {
