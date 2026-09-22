@@ -33,7 +33,7 @@ const storage = getStorage(app);
 
 const COMPANY = {
   name: "Einar A Børsheim",
-  tagline: "Gravefirma",
+  tagline: "Entreprenør",
   address: "Eriksvei 13, 1386 Asker",
   phone: "905 52 065",
   email: "e.bors@hotmail.com",
