@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /projects/{projectId} {
+      // Alle innloggede (admin med e-post, eller kunde anonymt via lenke) kan lese
+      allow read: if request.auth != null;
+      // Kun admin (e-post-innlogging) kan opprette/endre/slette selve prosjektet
+      allow create, update, delete: if request.auth != null && request.auth.token.email != null;
+
+      match /photos/{photoId} {
+        allow read: if request.auth != null;
+        // Både admin og kunde kan legge til bilder
+        allow create: if request.auth != null;
+        // Kun admin kan godkjenne, redigere kommentar eller slette
+        allow update, delete: if request.auth != null && request.auth.token.email != null;
+      }
+    }
+  }
+}

@@ -1,0 +1,80 @@
+.kunde-main {
+  max-width: 700px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+.hidden {
+  display: none !important;
+}
+
+#report-box {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.8rem 1rem;
+  margin: 1rem 0;
+}
+
+.photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.photo-card {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.photo-card img {
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+  display: block;
+}
+
+.photo-card .caption {
+  padding: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.section-divider {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 2rem 0 1rem;
+}
+
+.upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.6rem 0;
+  padding: 0.7rem 1.1rem;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#comment-input {
+  display: block;
+  width: 100%;
+  max-width: 400px;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 1rem;
+  margin: 0.6rem 0;
+}
+
+#submit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
