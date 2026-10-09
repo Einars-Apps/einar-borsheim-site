@@ -1,0 +1,8 @@
+{
+  "appId": "no.einarborsheim.internkontroll",
+  "appName": "Internkontroll",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}
