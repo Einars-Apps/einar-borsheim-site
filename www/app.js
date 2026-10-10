@@ -557,6 +557,16 @@ async function urlToDataUrl(url) {
   });
 }
 
+// Prøver å laste ned bildet to ganger før det gis opp (forbigående nettverksglipp)
+async function fetchWithRetry(url) {
+  try {
+    return await urlToDataUrl(url);
+  } catch (err) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return await urlToDataUrl(url);
+  }
+}
+
 async function generatePdfReport(project, reportText, photos) {
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({ unit: "mm", format: "a4" });
@@ -611,10 +621,18 @@ async function generatePdfReport(project, reportText, photos) {
   pdf.setTextColor(20, 20, 20);
 
   let pageNumber = 1;
+  let skipped = 0;
   for (const photo of photos) {
+    let dataUrl;
+    try {
+      dataUrl = await fetchWithRetry(photo.url);
+    } catch (err) {
+      console.error("Hopper over bilde i PDF (kunne ikke laste ned):", err);
+      skipped++;
+      continue;
+    }
     pdf.addPage();
     pageNumber++;
-    const dataUrl = await urlToDataUrl(photo.url);
     const dims = await getImageDimensions(dataUrl);
     const headerHeight = 12;
 
@@ -639,6 +657,10 @@ async function generatePdfReport(project, reportText, photos) {
     pdf.text(date, margin, pageHeight - 10);
     pdf.text(`Side ${pageNumber}`, pageWidth - margin - 15, pageHeight - 10);
     pdf.setTextColor(20, 20, 20);
+  }
+
+  if (skipped > 0) {
+    alert(`${skipped} av ${photos.length} bilder kunne ikke lastes ned og ble utelatt fra PDF-en (nettverksproblem). Resten av rapporten ble generert.`);
   }
 
   const filename = `internkontroll-${project.name.replace(/\s+/g, "_")}.pdf`;
