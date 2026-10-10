@@ -320,6 +320,15 @@ function renderPhotoCard(container, data, isPending) {
       <button class="delete-photo">${isPending ? "Avvis" : "Slett"}</button>
     </div>
   `;
+  const imgEl = card.querySelector("img");
+  let imgAttempts = 0;
+  imgEl.addEventListener("error", () => {
+    if (imgAttempts >= 3) return;
+    imgAttempts++;
+    setTimeout(() => {
+      imgEl.src = `${data.url}${data.url.includes("?") ? "&" : "?"}retry=${imgAttempts}`;
+    }, 1000 * imgAttempts);
+  });
   const dateEl = card.querySelector(".photo-date");
   if (data.createdAt?.toDate) {
     dateEl.textContent = data.createdAt.toDate().toLocaleDateString("no-NO");
@@ -567,6 +576,14 @@ async function fetchWithRetry(url) {
   }
 }
 
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function generatePdfReport(project, reportText, photos) {
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({ unit: "mm", format: "a4" });
@@ -668,13 +685,21 @@ async function generatePdfReport(project, reportText, photos) {
   if (Filesystem) {
     // Native app: skriv PDF-en til enheten og åpne del/lagre-menyen (nettleser-nedlasting fungerer ikke i WebView)
     const base64 = pdf.output("datauristring").split(",")[1];
-    const writeResult = await Filesystem.writeFile({
-      path: filename,
-      data: base64,
-      directory: "CACHE",
-    });
+    console.log(`PDF klar, ${base64.length} tegn base64. Skriver til fil...`);
+    const writeResult = await withTimeout(
+      Filesystem.writeFile({ path: filename, data: base64, directory: "CACHE" }),
+      20000,
+      "Tidsavbrudd ved skriving av PDF-fil"
+    );
+    console.log("PDF skrevet til:", writeResult.uri);
     if (Share) {
-      await Share.share({ title: filename, url: writeResult.uri });
+      console.log("Åpner delemeny...");
+      await withTimeout(
+        Share.share({ title: filename, url: writeResult.uri }),
+        20000,
+        "Tidsavbrudd ved åpning av delemeny"
+      );
+      console.log("Delemeny lukket.");
     } else {
       alert(`PDF lagret: ${writeResult.uri}`);
     }
