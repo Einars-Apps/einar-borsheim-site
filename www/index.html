@@ -2,146 +2,45 @@
 <html lang="no">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#12382f" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>Internkontroll</title>
+    <link rel="icon" href="assets/favicon-32.png" type="image/png" />
+    <link rel="apple-touch-icon" href="assets/logo-256.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="app.css" />
   </head>
-  <body>
-    <header class="site-header">
-      <span class="brand">Einar A Børsheim</span>
-      <nav>
-        <span id="user-email" class="user-email"></span>
-        <a href="#" id="logout-link" class="hidden">Logg ut</a>
-      </nav>
+  <body class="no-top no-tab">
+    <header class="topbar" id="topbar" hidden>
+      <button type="button" class="icon-btn" id="back-btn" aria-label="Tilbake" hidden></button>
+      <img class="topbar-logo" src="assets/logo-256.png" alt="" />
+      <div class="topbar-text">
+        <p id="top-kicker" class="kicker" hidden></p>
+        <h1 id="top-title">Internkontroll</h1>
+      </div>
+      <button type="button" class="icon-btn" id="top-action" hidden></button>
     </header>
-
-    <main class="app-main">
-      <!-- Innlogging -->
-      <section id="view-login" class="panel app-panel">
-        <h1>Internkontroll</h1>
-        <p class="muted">Logg inn for å administrere prosjekter og bilder.</p>
-        <form id="login-form" class="stack-form">
-          <label for="email">E-post</label>
-          <input type="email" id="email" name="email" autocomplete="username" required />
-          <label for="password">Passord</label>
-          <input type="password" id="password" name="password" autocomplete="current-password" required />
-          <button type="submit" class="btn btn-primary">Logg inn</button>
-          <p id="login-error" class="error-text hidden"></p>
-        </form>
-      </section>
-
-      <!-- Prosjektliste -->
-      <section id="view-projects" class="panel app-panel hidden">
-        <div class="view-header">
-          <h1>Prosjekter</h1>
-          <button id="new-project-btn" class="btn btn-primary">+ Nytt prosjekt</button>
-        </div>
-        <div id="new-project-form" class="stack-form hidden">
-          <label for="project-name">Prosjektnavn</label>
-          <input type="text" id="project-name" placeholder="F.eks. Byggeplass Sentrum" />
-          <label for="project-desc">Beskrivelse (valgfritt)</label>
-          <input type="text" id="project-desc" placeholder="Kort beskrivelse" />
-          <div class="btn-row">
-            <button id="save-project-btn" class="btn btn-primary">Opprett</button>
-            <button id="cancel-project-btn" class="btn btn-ghost">Avbryt</button>
-          </div>
-        </div>
-        <ul id="project-list" class="project-list"></ul>
-        <p id="projects-empty" class="muted hidden">Ingen prosjekter ennå. Opprett ditt første prosjekt over.</p>
-        <div class="btn-row">
-          <button id="open-done-btn" class="btn btn-ghost trash-link-btn">✅ Fullførte prosjekter</button>
-          <button id="open-trash-btn" class="btn btn-ghost trash-link-btn">🗑️ Papirkurv</button>
-        </div>
-      </section>
-
-      <!-- Fullforte prosjekter -->
-      <section id="view-done" class="panel app-panel hidden">
-        <button id="back-from-done" class="btn btn-ghost">&larr; Alle prosjekter</button>
-        <h1>Fullførte prosjekter</h1>
-        <ul id="done-list" class="project-list"></ul>
-        <p id="done-empty" class="muted hidden">Ingen fullførte prosjekter ennå.</p>
-      </section>
-
-      <!-- Papirkurv -->
-      <section id="view-trash" class="panel app-panel hidden">
-        <button id="back-from-trash" class="btn btn-ghost">&larr; Alle prosjekter</button>
-        <h1>Papirkurv</h1>
-        <p class="muted">Slettede prosjekter fjernes automatisk permanent etter 3 måneder.</p>
-        <ul id="trash-list" class="project-list"></ul>
-        <p id="trash-empty" class="muted hidden">Papirkurven er tom.</p>
-      </section>
-
-      <!-- Prosjektdetalj -->
-      <section id="view-project" class="panel app-panel hidden">
-        <button id="back-to-projects" class="btn btn-ghost">&larr; Alle prosjekter</button>
-        <div class="view-header">
-          <h1 id="project-title">Prosjekt</h1>
-          <div class="btn-row">
-            <button id="export-pdf-btn" class="btn btn-primary">Lag PDF-rapport</button>
-            <button id="delete-project-btn" class="btn btn-ghost delete-project-btn">🗑️ Flytt til papirkurv</button>
-          </div>
-        </div>
-        <p id="project-desc-view" class="muted"></p>
-        <p id="project-status-badge" class="status-badge hidden">✅ Ferdig</p>
-        <button id="toggle-done-btn" class="btn btn-primary mark-done-btn">✅ Merk prosjekt som ferdig</button>
-
-        <div class="customer-box">
-          <h2>Kunde / innsyn</h2>
-          <label for="customer-name">Kundenavn (valgfritt)</label>
-          <input type="text" id="customer-name" placeholder="F.eks. Kari Nordmann" />
-          <label for="customer-link">Lenke kunden kan åpne</label>
-          <div class="customer-link-row">
-            <input type="text" id="customer-link" readonly />
-            <button id="copy-link-btn" class="btn btn-ghost">Kopier</button>
-            <button id="share-btn" class="btn btn-ghost">🔗 Del</button>
-          </div>
-        </div>
-
-        <label for="report-text">Rapporttekst (valgfritt, tas med i PDF)</label>
-        <textarea id="report-text" rows="3" placeholder="Beskriv status, funn, avvik..."></textarea>
-
-        <button id="camera-btn" class="upload-btn">📷 Ta nytt bilde</button>
-        <button id="gallery-btn" class="upload-btn upload-btn-alt">🖼️ Velg fra bilder</button>
-        <p id="upload-status" class="muted hidden"></p>
-        <p id="offline-status" class="muted hidden">📴 Ingen nettforbindelse - bilder lagres lokalt og synkroniseres automatisk når du er online igjen.</p>
-
-        <div id="pending-section" class="hidden">
-          <h2>Venter godkjenning (fra kunde)</h2>
-          <div id="pending-grid" class="photo-grid"></div>
-        </div>
-
-        <h2>Bilder</h2>
-        <div id="photo-grid" class="photo-grid"></div>
-        <p id="photos-empty" class="muted hidden">Ingen bilder lagt til ennå.</p>
-
-        <hr class="section-divider" />
-        <h2>Dokumenter / tegninger</h2>
-        <label class="upload-btn upload-btn-alt" for="document-input">📎 Last opp dokument</label>
-        <input type="file" id="document-input" hidden multiple />
-        <p id="document-status" class="muted hidden"></p>
-        <div id="pending-documents-section" class="hidden">
-          <h3>Venter godkjenning</h3>
-          <ul id="pending-document-list" class="document-list"></ul>
-        </div>
-        <ul id="document-list" class="document-list"></ul>
-        <p id="documents-empty" class="muted hidden">Ingen dokumenter lagt til ennå.</p>
-
-        <hr class="section-divider" />
-        <h2>Meldinger med kunde</h2>
-        <div id="message-list" class="message-list"></div>
-        <div class="message-input-row">
-          <textarea id="message-input" rows="2" placeholder="Skriv en melding til kunden..."></textarea>
-          <button id="send-message-btn" class="btn btn-primary">Send</button>
-        </div>
-      </section>
+    <button type="button" id="net-banner" class="net-banner" hidden></button>
+    <main id="main">
+      <p class="boot">Starter…</p>
     </main>
-
-    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+    <nav id="tabbar" class="tabbar" hidden>
+      <button type="button" class="tab" data-tab="projects">Prosjekter</button>
+      <button type="button" class="tab tab-cam" data-tab="capture" aria-label="Ta bilde"></button>
+      <button type="button" class="tab" data-tab="reminders">Påminnelser</button>
+    </nav>
+    <script src="vendor/firebase-app-compat.js"></script>
+    <script src="vendor/firebase-auth-compat.js"></script>
+    <script src="vendor/firebase-firestore-compat.js"></script>
+    <script src="vendor/firebase-storage-compat.js"></script>
+    <script src="vendor/jspdf.umd.min.js"></script>
     <script type="module" src="app.js"></script>
   </body>
 </html>

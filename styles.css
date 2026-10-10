@@ -59,10 +59,21 @@ body {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
   text-decoration: none;
   color: var(--ink);
   font-weight: 700;
   letter-spacing: 0.04em;
+}
+
+.brand img {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: block;
+  object-fit: cover;
 }
 
 nav a {
@@ -161,6 +172,21 @@ h1 {
   padding: 1rem;
 }
 
+.card-kicker {
+  margin: 0 0 0.2rem;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.card-specialty {
+  border-color: var(--accent);
+  background: linear-gradient(180deg, #f3faf7 0%, #ffffff 72%);
+  box-shadow: 0 12px 28px #00695c18;
+}
+
 .site-footer {
   max-width: 1000px;
   margin: 0 auto;
@@ -191,6 +217,59 @@ h1 {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+.ref-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1rem;
+  margin-top: 0.8rem;
+}
+
+.ref-card h3 {
+  margin: 0 0 0.3rem;
+  font-family: "Instrument Serif", serif;
+  font-size: 1.7rem;
+}
+
+.ref-meta,
+.ref-rating {
+  color: var(--muted);
+  margin: 0 0 0.6rem;
+}
+
+.ref-photos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.6rem;
+  margin: 0.8rem 0;
+}
+
+.ref-photos img {
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+}
+
+.ref-photos figcaption {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 0.25rem;
+}
+
+.ref-tasks {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.ref-card blockquote {
+  margin: 0.8rem 0 0;
+  padding-left: 0.8rem;
+  border-left: 3px solid var(--accent);
+  color: var(--ink);
 }
 
 @media (max-width: 800px) {

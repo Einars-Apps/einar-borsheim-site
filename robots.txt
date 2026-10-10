@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /www/
+Disallow: /kunde/
+
+Sitemap: https://einar-borsheim.com/sitemap.xml

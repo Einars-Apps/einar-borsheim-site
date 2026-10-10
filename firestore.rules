@@ -5,7 +5,7 @@ service cloud.firestore {
     // Kun Einar (e-postinnlogging med denne adressen) er admin.
     function isAdmin() {
       return request.auth != null
-        && request.auth.token.email == 'e.bors@hotmail.com';
+        && request.auth.token.get('email', '') == 'e.bors@hotmail.com';
     }
 
     // Kunden har aapnet riktig delingslenke for dette prosjektet.
@@ -14,18 +14,236 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/projects/$(projectId)/access/$(request.auth.uid));
     }
 
-    // Prosjektet er merket som offentlig referanse (public: true).
+    // Prosjektet er merket som offentlig referanse (brukes for eldre bilder).
     function isPublic(projectId) {
       return get(/databases/$(database)/documents/projects/$(projectId)).data.get('public', false) == true;
     }
 
+    function itemPath(projectId, itemId) {
+      return /databases/$(database)/documents/projects/$(projectId)/items/$(itemId);
+    }
+
+    function itemData(projectId, itemId) {
+      return get(itemPath(projectId, itemId)).data;
+    }
+
+    function customerCanSeeItem(projectId, itemId) {
+      return itemData(projectId, itemId).approved == true
+        || itemData(projectId, itemId).createdBy == request.auth.uid;
+    }
+
+    function customerBase(data) {
+      return data.approved == false
+        && data.source == 'kunde'
+        && data.createdBy == request.auth.uid
+        && data.authorName is string
+        && data.authorName.size() > 0
+        && data.authorName.size() < 80
+        && data.title is string
+        && data.title.size() < 200
+        && data.text is string
+        && data.text.size() < 5000
+        && data.createdAt == request.time;
+    }
+
+    function validCustomerPost() {
+      return request.resource.data.keys().hasOnly([
+          'kind', 'title', 'text', 'approved', 'source', 'createdBy', 'authorName', 'createdAt'
+        ])
+        && customerBase(request.resource.data)
+        && request.resource.data.kind == 'kunde';
+    }
+
+    function validCustomerRating() {
+      return request.resource.data.keys().hasOnly([
+          'kind', 'title', 'text', 'stars', 'approved', 'source', 'createdBy', 'authorName', 'createdAt'
+        ])
+        && customerBase(request.resource.data)
+        && request.resource.data.kind == 'vurdering'
+        && request.resource.data.stars is int
+        && request.resource.data.stars >= 1
+        && request.resource.data.stars <= 5;
+    }
+
+    function alternativeIdOk(alts, id) {
+      return id is string && id.size() > 0 && id.size() < 40 && (
+        (alts.size() > 0 && alts[0].id == id)
+        || (alts.size() > 1 && alts[1].id == id)
+        || (alts.size() > 2 && alts[2].id == id)
+        || (alts.size() > 3 && alts[3].id == id)
+        || (alts.size() > 4 && alts[4].id == id)
+        || (alts.size() > 5 && alts[5].id == id)
+        || (alts.size() > 6 && alts[6].id == id)
+        || (alts.size() > 7 && alts[7].id == id)
+      );
+    }
+
+    // Kunden kan bare sette valg og godkjenning. Pris, tekst og alternativer blir stående.
+    function validCustomerDecision() {
+      let keys = request.resource.data.diff(resource.data).affectedKeys();
+      let alts = resource.data.get('alternatives', []);
+      let chosen = request.resource.data.get('selectedAlternativeId', '');
+      let picked = keys.hasAny(['selectedAlternativeId']);
+      return resource.data.approved == true
+        && resource.data.kind in ['tilbud', 'endring', 'tillegg']
+        && resource.data.approvalRequested == true
+        && resource.data.get('approvalStatus', 'venter') == 'venter'
+        && request.resource.data.approvalStatus in ['godkjent', 'avslatt']
+        && request.resource.data.approvedAt == request.time
+        && request.resource.data.approvedBy == request.auth.uid
+        && request.resource.data.approvedByName is string
+        && request.resource.data.approvedByName.size() > 0
+        && request.resource.data.approvedByName.size() < 80
+        && keys.hasOnly(['approvalStatus', 'approvedAt', 'approvedBy', 'approvedByName', 'selectedAlternativeId'])
+        && (
+          (request.resource.data.approvalStatus == 'avslatt' && (!picked || chosen == ''))
+          || (request.resource.data.approvalStatus == 'godkjent' && alts.size() == 0 && !picked)
+          || (request.resource.data.approvalStatus == 'godkjent' && alternativeIdOk(alts, chosen))
+        );
+    }
+
+    // Produksjon bruker https-lenker fra Storage.
+    // Emulatoren svarer med http på 127.0.0.1:9199 eller localhost:9199.
+    // Andre http-lenker avvises. Offentlig nettside viser bare https.
+    function storedMediaUrl(url) {
+      return url is string
+        && url.size() < 2000
+        && (
+          url.matches('^https://.+')
+          || url.matches('^http://127\\.0\\.0\\.1:9199/.+')
+          || url.matches('^http://localhost:9199/.+')
+        );
+    }
+
+    function validCustomerPhoto(projectId) {
+      return request.resource.data.keys().hasOnly([
+          'url', 'storagePath', 'caption', 'approved', 'source', 'createdBy', 'createdAt'
+        ])
+        && request.resource.data.approved == false
+        && request.resource.data.source == 'kunde'
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.caption is string
+        && request.resource.data.caption.size() < 500
+        && storedMediaUrl(request.resource.data.url)
+        && request.resource.data.storagePath is string
+        && request.resource.data.storagePath.split('/').size() == 4
+        && request.resource.data.storagePath.split('/')[0] == 'projects'
+        && request.resource.data.storagePath.split('/')[1] == projectId
+        && request.resource.data.storagePath.split('/')[2] == 'media'
+        && request.resource.data.storagePath.split('/')[3].matches('^[A-Za-z0-9_.-]+$')
+        && request.resource.data.createdAt == request.time;
+    }
+
+    function validCustomerComment() {
+      return request.resource.data.keys().hasOnly([
+          'text', 'source', 'authorName', 'approved', 'createdBy', 'createdAt'
+        ])
+        && request.resource.data.approved == false
+        && request.resource.data.source == 'kunde'
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.authorName is string
+        && request.resource.data.authorName.size() > 0
+        && request.resource.data.authorName.size() < 80
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() < 2000
+        && request.resource.data.createdAt == request.time;
+    }
+
+    function parentIsOpenCustomerItem(projectId, itemId) {
+      return itemData(projectId, itemId).source == 'kunde'
+        && itemData(projectId, itemId).createdBy == request.auth.uid
+        && itemData(projectId, itemId).approved == false
+        && itemData(projectId, itemId).kind in ['kunde', 'vurdering'];
+    }
+
+    function messageShapeOk() {
+      return request.resource.data.keys().hasOnly(['text', 'sender', 'createdAt'])
+        || request.resource.data.keys().hasOnly(['text', 'sender', 'createdAt', 'imageUrl', 'imagePath']);
+    }
+
+    function messageImageOk(projectId) {
+      return !request.resource.data.keys().hasAny(['imageUrl'])
+        || (
+          storedMediaUrl(request.resource.data.imageUrl)
+          && request.resource.data.imagePath is string
+          && request.resource.data.imagePath.matches('^projects/' + projectId + '/media/[A-Za-z0-9_.-]+$')
+        );
+    }
+
+    function validMessage(projectId, sender) {
+      return messageShapeOk()
+        && request.resource.data.sender == sender
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.text is string
+        && request.resource.data.text.size() < 4000
+        && (
+          request.resource.data.text.size() > 0
+          || request.resource.data.keys().hasAll(['imageUrl', 'imagePath'])
+        )
+        && messageImageOk(projectId);
+    }
+
+    // Gjelder nye opplastinger. Eldre dokumenter kan ha uploadedBy "kunde" og leses likevel.
+    function validCustomerDocument(projectId) {
+      return request.resource.data.keys().hasOnly([
+          'name', 'url', 'storagePath', 'approved', 'source', 'uploadedBy', 'createdAt'
+        ])
+        && request.resource.data.approved == false
+        && request.resource.data.source == 'customer'
+        && request.resource.data.uploadedBy is string
+        && request.resource.data.uploadedBy.size() > 0
+        && request.resource.data.uploadedBy.size() < 120
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() < 200
+        && storedMediaUrl(request.resource.data.url)
+        && request.resource.data.storagePath is string
+        && request.resource.data.storagePath.matches('^projects/' + projectId + '/documents/[^/]+$')
+        && request.resource.data.createdAt == request.time;
+    }
+
+    // Offentlig nettside leser bare denne samlingen.
+    // Admin skriver den fra appen, og bare med godkjent referanseinnhold.
+    // Ingen delingskode, kundekontakt eller PDF-lenke skal ligge her.
+    match /references/{projectId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /photoTemplates/{templateId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    match /adminDevices/{deviceId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    // Valgfri overstyring av Frost-klient. Hemmeligheter skal ikke ligge her.
+    match /settings/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Firebase-utvidelsen Trigger Email leser denne med admin-SDK, som ikke styres av reglene.
+    // Ingen SMTP-hemmelighet ligger i appen. Bare admin kan legge en e-post i køen.
+    match /mail/{mailId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly(['to', 'message', 'createdAt'])
+        && request.resource.data.to is string
+        && request.resource.data.to.size() > 3
+        && request.resource.data.to.size() < 200
+        && request.resource.data.message is map
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
     match /projects/{projectId} {
-      allow read: if isAdmin()
-        || hasAccess(projectId)
-        || resource.data.get('public', false) == true;
+      // Hele prosjektdokumentet inneholder delingskode, kundekontakt og PDF-lenke.
+      // Derfor ingen offentlig lesing her, selv om public er true.
+      allow read: if isAdmin() || hasAccess(projectId);
       allow create, update, delete: if isAdmin();
 
-      // Kunden registrerer tilgang ved aa oppgi riktig token fra lenken.
       match /access/{uid} {
         allow create: if request.auth != null
           && request.auth.uid == uid
@@ -36,32 +254,81 @@ service cloud.firestore {
         allow delete: if isAdmin();
       }
 
+      // Eldre bilder (foer feltnotat-modellen). Beholdes saa eksisterende prosjekter virker.
       match /photos/{photoId} {
         allow read: if isAdmin()
           || (hasAccess(projectId) && resource.data.approved == true)
           || (isPublic(projectId) && resource.data.approved == true);
-        // Admin kan alltid legge til. Kunden kan bare legge til ikke-godkjente bilder.
         allow create: if isAdmin()
           || (hasAccess(projectId) && request.resource.data.approved == false);
         allow update, delete: if isAdmin();
+
+        match /comments/{commentId} {
+          allow read: if isAdmin()
+            || (hasAccess(projectId) && resource.data.approved == true)
+            || (hasAccess(projectId) && resource.data.createdBy == request.auth.uid);
+          allow create: if isAdmin()
+            || (hasAccess(projectId)
+                && validCustomerComment()
+                && get(/databases/$(database)/documents/projects/$(projectId)/photos/$(photoId)).data.approved == true);
+          allow update, delete: if isAdmin();
+        }
       }
 
-      // Dokumenter/tegninger/oppdateringer - samme godkjenningsmonster som bilder.
+      match /items/{itemId} {
+        allow read: if isAdmin()
+          || (hasAccess(projectId) && resource.data.approved == true)
+          || (hasAccess(projectId) && resource.data.createdBy == request.auth.uid);
+        allow create: if isAdmin()
+          || (hasAccess(projectId) && (validCustomerPost() || validCustomerRating()));
+        allow update: if isAdmin()
+          || (hasAccess(projectId) && validCustomerDecision());
+        allow delete: if isAdmin();
+
+        match /photos/{photoId} {
+          allow read: if isAdmin()
+            || (hasAccess(projectId) && resource.data.approved == true)
+            || (hasAccess(projectId) && resource.data.createdBy == request.auth.uid);
+          allow create: if isAdmin()
+            || (hasAccess(projectId)
+                && validCustomerPhoto(projectId)
+                && parentIsOpenCustomerItem(projectId, itemId));
+          allow update, delete: if isAdmin();
+        }
+
+        match /comments/{commentId} {
+          allow read: if isAdmin()
+            || (hasAccess(projectId) && resource.data.approved == true)
+            || (hasAccess(projectId) && resource.data.createdBy == request.auth.uid);
+          allow create: if isAdmin()
+            || (hasAccess(projectId)
+                && validCustomerComment()
+                && customerCanSeeItem(projectId, itemId));
+          allow update, delete: if isAdmin();
+        }
+      }
+
+      // Dokumenter, tegninger, oppdateringer og tilbud. Ikke synlig for hele internett.
       match /documents/{docId} {
         allow read: if isAdmin()
           || (hasAccess(projectId) && resource.data.approved == true)
-          || (isPublic(projectId) && resource.data.approved == true);
+          || (hasAccess(projectId) && resource.data.source == 'customer');
         allow create: if isAdmin()
-          || (hasAccess(projectId) && request.resource.data.approved == false);
+          || (hasAccess(projectId) && validCustomerDocument(projectId));
         allow update, delete: if isAdmin();
       }
 
-      // Toveis meldinger (innboks/utboks) mellom admin og kunde - ingen godkjenning nodvendig.
-      match /messages/{messageId} {
+      // Dreneringsstrekk. Admin skriver. Kunde med tilgang leser. Offentlig bare hvis prosjektet er en referanse.
+      match /drainage/{docId} {
         allow read: if isAdmin() || hasAccess(projectId) || isPublic(projectId);
-        allow create: if (isAdmin() || hasAccess(projectId))
-          && request.resource.data.keys().hasAll(['text', 'sender', 'createdAt'])
-          && request.resource.data.sender in ['admin', 'customer'];
+        allow create, update, delete: if isAdmin();
+      }
+
+      // Toveis meldinger mellom admin og kunde. Ikke offentlig, selv om prosjektet er en referanse.
+      match /messages/{messageId} {
+        allow read: if isAdmin() || hasAccess(projectId);
+        allow create: if (isAdmin() && validMessage(projectId, 'admin'))
+          || (hasAccess(projectId) && validMessage(projectId, 'customer'));
         allow update, delete: if isAdmin();
       }
     }
