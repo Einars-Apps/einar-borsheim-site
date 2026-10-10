@@ -54,6 +54,7 @@ const viewLogin = document.getElementById("view-login");
 const viewProjects = document.getElementById("view-projects");
 const viewProject = document.getElementById("view-project");
 const viewTrash = document.getElementById("view-trash");
+const viewDone = document.getElementById("view-done");
 const userEmailEl = document.getElementById("user-email");
 const logoutLink = document.getElementById("logout-link");
 
@@ -72,6 +73,10 @@ const openTrashBtn = document.getElementById("open-trash-btn");
 const backFromTrashBtn = document.getElementById("back-from-trash");
 const trashListEl = document.getElementById("trash-list");
 const trashEmptyEl = document.getElementById("trash-empty");
+const openDoneBtn = document.getElementById("open-done-btn");
+const backFromDoneBtn = document.getElementById("back-from-done");
+const doneListEl = document.getElementById("done-list");
+const doneEmptyEl = document.getElementById("done-empty");
 
 const backToProjectsBtn = document.getElementById("back-to-projects");
 const projectTitleEl = document.getElementById("project-title");
@@ -88,6 +93,12 @@ const reportTextEl = document.getElementById("report-text");
 const cameraBtn = document.getElementById("camera-btn");
 const galleryBtn = document.getElementById("gallery-btn");
 const uploadStatusEl = document.getElementById("upload-status");
+const documentInput = document.getElementById("document-input");
+const documentStatusEl = document.getElementById("document-status");
+const pendingDocumentsSectionEl = document.getElementById("pending-documents-section");
+const pendingDocumentListEl = document.getElementById("pending-document-list");
+const documentListEl = document.getElementById("document-list");
+const documentsEmptyEl = document.getElementById("documents-empty");
 const offlineStatusEl = document.getElementById("offline-status");
 const pendingSectionEl = document.getElementById("pending-section");
 const pendingGridEl = document.getElementById("pending-grid");
@@ -100,12 +111,13 @@ const sendMessageBtn = document.getElementById("send-message-btn");
 let unsubscribeProjects = null;
 let unsubscribePhotos = null;
 let unsubscribeMessages = null;
+let unsubscribeDocuments = null;
 let currentProject = null; // { id, name, description, shareToken }
 let currentPhotos = [];
 let reportSaveTimeout;
 
 function showView(view) {
-  [viewLogin, viewProjects, viewProject, viewTrash].forEach((v) => v.classList.add("hidden"));
+  [viewLogin, viewProjects, viewProject, viewTrash, viewDone].forEach((v) => v.classList.add("hidden"));
   view.classList.remove("hidden");
 }
 
@@ -164,6 +176,7 @@ function listenToProjects() {
     (snapshot) => {
       allProjects = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       renderProjectList();
+      renderDoneList();
       renderTrashList();
       purgeOldTrash();
     },
@@ -175,22 +188,41 @@ function listenToProjects() {
 }
 
 function renderProjectList() {
-  const active = allProjects.filter((p) => !p.trashed);
+  const active = allProjects.filter((p) => !p.trashed && p.status !== "done");
   projectListEl.innerHTML = "";
   projectsEmptyEl.classList.toggle("hidden", active.length > 0);
   active.forEach((data) => {
     const li = document.createElement("li");
-    li.className = data.status === "done" ? "done-project" : "";
     li.innerHTML = `
       <span class="project-name"></span>
       <span class="project-desc"></span>
     `;
-    li.querySelector(".project-name").textContent = (data.status === "done" ? "✅ " : "") + data.name;
+    li.querySelector(".project-name").textContent = data.name;
     li.querySelector(".project-desc").textContent = data.description || "";
     li.addEventListener("click", () => openProject(data.id, data));
     projectListEl.appendChild(li);
   });
 }
+
+function renderDoneList() {
+  const done = allProjects.filter((p) => !p.trashed && p.status === "done");
+  doneListEl.innerHTML = "";
+  doneEmptyEl.classList.toggle("hidden", done.length > 0);
+  done.forEach((data) => {
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <span class="project-name"></span>
+      <span class="project-desc"></span>
+    `;
+    li.querySelector(".project-name").textContent = data.name;
+    li.querySelector(".project-desc").textContent = data.description || "";
+    li.addEventListener("click", () => openProject(data.id, data));
+    doneListEl.appendChild(li);
+  });
+}
+
+openDoneBtn.addEventListener("click", () => showView(viewDone));
+backFromDoneBtn.addEventListener("click", () => showView(viewProjects));
 
 function daysSince(timestamp) {
   if (!timestamp?.toDate) return 0;
@@ -246,6 +278,14 @@ async function permanentlyDeleteProject(projectId) {
   const messagesSnap = await getDocs(collection(db, "projects", projectId, "messages"));
   for (const msgDoc of messagesSnap.docs) {
     await deleteDoc(msgDoc.ref);
+  }
+  const documentsSnap = await getDocs(collection(db, "projects", projectId, "documents"));
+  for (const docDoc of documentsSnap.docs) {
+    const data = docDoc.data();
+    if (data.storagePath) {
+      await deleteObject(ref(storage, data.storagePath)).catch(() => {});
+    }
+    await deleteDoc(docDoc.ref);
   }
   const accessSnap = await getDocs(collection(db, "projects", projectId, "access"));
   for (const accessDoc of accessSnap.docs) {
@@ -314,13 +354,14 @@ function openProject(id, data) {
   showView(viewProject);
   listenToPhotos(id);
   listenToMessages(id);
+  listenToDocuments(id);
   renderPendingQueue();
 }
 
 function updateDoneUi() {
   const isDone = currentProject?.status === "done";
   projectStatusBadge.classList.toggle("hidden", !isDone);
-  toggleDoneBtn.textContent = isDone ? "↩️ Merk som aktiv" : "✅ Merk som ferdig";
+  toggleDoneBtn.textContent = isDone ? "↩️ Merk som aktiv igjen" : "✅ Merk prosjekt som ferdig";
 }
 
 toggleDoneBtn.addEventListener("click", async () => {
@@ -357,6 +398,7 @@ copyLinkBtn.addEventListener("click", async () => {
 backToProjectsBtn.addEventListener("click", () => {
   if (unsubscribePhotos) unsubscribePhotos();
   if (unsubscribeMessages) unsubscribeMessages();
+  if (unsubscribeDocuments) unsubscribeDocuments();
   currentProject = null;
   showView(viewProjects);
 });
@@ -404,6 +446,92 @@ messageInputEl.addEventListener("keydown", (e) => {
     e.preventDefault();
     sendAdminMessage();
   }
+});
+
+// --- Dokumenter / tegninger ---
+function listenToDocuments(projectId) {
+  if (unsubscribeDocuments) unsubscribeDocuments();
+  const q = query(collection(db, "projects", projectId, "documents"), orderBy("createdAt", "desc"));
+  unsubscribeDocuments = onSnapshot(q, (snapshot) => {
+    const approved = [];
+    const pending = [];
+    snapshot.forEach((docSnap) => {
+      const data = { id: docSnap.id, ...docSnap.data() };
+      if (data.approved === false) pending.push(data);
+      else approved.push(data);
+    });
+
+    documentsEmptyEl.classList.toggle("hidden", approved.length > 0);
+    documentListEl.innerHTML = "";
+    approved.forEach((data) => documentListEl.appendChild(renderDocumentItem(data, false)));
+
+    pendingDocumentsSectionEl.classList.toggle("hidden", pending.length === 0);
+    pendingDocumentListEl.innerHTML = "";
+    pending.forEach((data) => pendingDocumentListEl.appendChild(renderDocumentItem(data, true)));
+  });
+}
+
+function renderDocumentItem(data, isPending) {
+  const li = document.createElement("li");
+  const date = data.createdAt?.toDate ? data.createdAt.toDate().toLocaleDateString("no-NO") : "";
+  li.innerHTML = `
+    <div>
+      <a href="${data.url}" target="_blank" rel="noopener"></a>
+      <div class="doc-meta"></div>
+    </div>
+    <div class="doc-actions">
+      ${isPending ? '<button class="approve-doc">Godkjenn</button>' : ""}
+      <button class="delete-doc">${isPending ? "Avvis" : "Slett"}</button>
+    </div>
+  `;
+  li.querySelector("a").textContent = data.name;
+  li.querySelector(".doc-meta").textContent = `${data.source === "customer" ? "Kunde" : "Deg"} · ${date}`;
+  const approveBtn = li.querySelector(".approve-doc");
+  if (approveBtn) {
+    approveBtn.addEventListener("click", () => {
+      updateDoc(doc(db, "projects", currentProject.id, "documents", data.id), { approved: true });
+    });
+  }
+  li.querySelector(".delete-doc").addEventListener("click", async () => {
+    if (!confirm(isPending ? "Avvise dette dokumentet?" : "Slette dette dokumentet?")) return;
+    try {
+      if (data.storagePath) await deleteObject(ref(storage, data.storagePath));
+    } catch (err) {
+      // fortsett selv om filen mangler i storage
+    }
+    await deleteDoc(doc(db, "projects", currentProject.id, "documents", data.id));
+  });
+  return li;
+}
+
+documentInput.addEventListener("change", async (e) => {
+  const files = Array.from(e.target.files || []);
+  if (!files.length || !currentProject) return;
+  documentStatusEl.classList.remove("hidden");
+  for (let i = 0; i < files.length; i++) {
+    documentStatusEl.textContent = `Laster opp ${i + 1} av ${files.length}...`;
+    try {
+      const filename = `${Date.now()}-${files[i].name}`;
+      const storagePath = `projects/${currentProject.id}/documents/${filename}`;
+      const storageRef = ref(storage, storagePath);
+      await uploadBytesResumable(storageRef, files[i], { contentType: files[i].type || "application/octet-stream" });
+      const url = await getDownloadURL(storageRef);
+      await addDoc(collection(db, "projects", currentProject.id, "documents"), {
+        name: files[i].name,
+        url,
+        storagePath,
+        approved: true,
+        source: "admin",
+        uploadedBy: auth.currentUser?.email || "ukjent",
+        createdAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error("Dokumentopplasting feilet", err.code, err.message);
+      alert(`Kunne ikke laste opp "${files[i].name}" (${err.code || err.message}).`);
+    }
+  }
+  documentStatusEl.classList.add("hidden");
+  documentInput.value = "";
 });
 
 reportTextEl.addEventListener("input", () => {

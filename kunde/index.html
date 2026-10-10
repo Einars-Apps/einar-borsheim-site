@@ -29,11 +29,13 @@
 
       <section id="view-project" class="panel hidden">
         <h1 id="project-title">Prosjekt</h1>
+        <p id="project-status-badge" class="status-badge hidden">✅ Ferdig</p>
         <p id="project-desc" class="muted"></p>
         <div id="report-box" class="hidden">
           <h2>Status / rapport</h2>
           <p id="report-text"></p>
         </div>
+        <button id="download-pdf-btn" class="btn btn-primary hidden">📄 Last ned ferdig rapport (PDF)</button>
 
         <h2>Bilder</h2>
         <div id="photo-grid" class="photo-grid"></div>
@@ -55,9 +57,18 @@
           <textarea id="message-input" rows="2" placeholder="Skriv en melding..."></textarea>
           <button id="send-message-btn" class="btn btn-primary">Send</button>
         </div>
+
+        <hr class="section-divider" />
+        <h2>Dokumenter / tegninger</h2>
+        <label class="upload-btn upload-btn-alt" for="document-input">📎 Last opp dokument</label>
+        <input type="file" id="document-input" hidden multiple />
+        <p id="document-status" class="muted hidden"></p>
+        <ul id="document-list" class="document-list"></ul>
+        <p id="documents-empty" class="muted hidden">Ingen dokumenter lagt til ennå.</p>
       </section>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
     <script type="module" src="kunde.js"></script>
   </body>
 </html>

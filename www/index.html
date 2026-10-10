@@ -53,7 +53,18 @@
         </div>
         <ul id="project-list" class="project-list"></ul>
         <p id="projects-empty" class="muted hidden">Ingen prosjekter ennå. Opprett ditt første prosjekt over.</p>
-        <button id="open-trash-btn" class="btn btn-ghost trash-link-btn">🗑️ Papirkurv</button>
+        <div class="btn-row">
+          <button id="open-done-btn" class="btn btn-ghost trash-link-btn">✅ Fullførte prosjekter</button>
+          <button id="open-trash-btn" class="btn btn-ghost trash-link-btn">🗑️ Papirkurv</button>
+        </div>
+      </section>
+
+      <!-- Fullforte prosjekter -->
+      <section id="view-done" class="panel app-panel hidden">
+        <button id="back-from-done" class="btn btn-ghost">&larr; Alle prosjekter</button>
+        <h1>Fullførte prosjekter</h1>
+        <ul id="done-list" class="project-list"></ul>
+        <p id="done-empty" class="muted hidden">Ingen fullførte prosjekter ennå.</p>
       </section>
 
       <!-- Papirkurv -->
@@ -71,13 +82,13 @@
         <div class="view-header">
           <h1 id="project-title">Prosjekt</h1>
           <div class="btn-row">
-            <button id="toggle-done-btn" class="btn btn-ghost">✅ Merk som ferdig</button>
             <button id="export-pdf-btn" class="btn btn-primary">Lag PDF-rapport</button>
             <button id="delete-project-btn" class="btn btn-ghost delete-project-btn">🗑️ Flytt til papirkurv</button>
           </div>
         </div>
         <p id="project-desc-view" class="muted"></p>
         <p id="project-status-badge" class="status-badge hidden">✅ Ferdig</p>
+        <button id="toggle-done-btn" class="btn btn-primary mark-done-btn">✅ Merk prosjekt som ferdig</button>
 
         <div class="customer-box">
           <h2>Kunde / innsyn</h2>
@@ -107,6 +118,18 @@
         <h2>Bilder</h2>
         <div id="photo-grid" class="photo-grid"></div>
         <p id="photos-empty" class="muted hidden">Ingen bilder lagt til ennå.</p>
+
+        <hr class="section-divider" />
+        <h2>Dokumenter / tegninger</h2>
+        <label class="upload-btn upload-btn-alt" for="document-input">📎 Last opp dokument</label>
+        <input type="file" id="document-input" hidden multiple />
+        <p id="document-status" class="muted hidden"></p>
+        <div id="pending-documents-section" class="hidden">
+          <h3>Venter godkjenning</h3>
+          <ul id="pending-document-list" class="document-list"></ul>
+        </div>
+        <ul id="document-list" class="document-list"></ul>
+        <p id="documents-empty" class="muted hidden">Ingen dokumenter lagt til ennå.</p>
 
         <hr class="section-divider" />
         <h2>Meldinger med kunde</h2>

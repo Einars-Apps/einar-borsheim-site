@@ -46,6 +46,16 @@ service cloud.firestore {
         allow update, delete: if isAdmin();
       }
 
+      // Dokumenter/tegninger/oppdateringer - samme godkjenningsmonster som bilder.
+      match /documents/{docId} {
+        allow read: if isAdmin()
+          || (hasAccess(projectId) && resource.data.approved == true)
+          || (isPublic(projectId) && resource.data.approved == true);
+        allow create: if isAdmin()
+          || (hasAccess(projectId) && request.resource.data.approved == false);
+        allow update, delete: if isAdmin();
+      }
+
       // Toveis meldinger (innboks/utboks) mellom admin og kunde - ingen godkjenning nodvendig.
       match /messages/{messageId} {
         allow read: if isAdmin() || hasAccess(projectId) || isPublic(projectId);

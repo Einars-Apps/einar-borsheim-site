@@ -8,6 +8,43 @@
   display: none !important;
 }
 
+.status-badge {
+  display: inline-block;
+  background: #e6f4ea;
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 0.2rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.document-list {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.document-list li {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+}
+
+.document-list a {
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.document-list .doc-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
 .message-list {
   display: flex;
   flex-direction: column;
