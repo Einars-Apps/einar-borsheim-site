@@ -198,6 +198,11 @@ service cloud.firestore {
       allow read, create, update, delete: if isAdmin();
     }
 
+    // Valgfri overstyring av Frost-klient. Hemmeligheter skal ikke ligge her.
+    match /settings/{docId} {
+      allow read, write: if isAdmin();
+    }
+
     // Firebase-utvidelsen Trigger Email leser denne med admin-SDK, som ikke styres av reglene.
     // Ingen SMTP-hemmelighet ligger i appen. Bare admin kan legge en e-post i køen.
     match /mail/{mailId} {
@@ -290,6 +295,12 @@ service cloud.firestore {
         allow create: if isAdmin()
           || (hasAccess(projectId) && validCustomerDocument(projectId));
         allow update, delete: if isAdmin();
+      }
+
+      // Dreneringsstrekk. Admin skriver. Kunde med tilgang leser. Offentlig bare hvis prosjektet er en referanse.
+      match /drainage/{docId} {
+        allow read: if isAdmin() || hasAccess(projectId) || isPublic(projectId);
+        allow create, update, delete: if isAdmin();
       }
 
       // Toveis meldinger mellom admin og kunde. Ikke offentlig, selv om prosjektet er en referanse.

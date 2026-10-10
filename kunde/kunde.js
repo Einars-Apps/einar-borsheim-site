@@ -23,6 +23,7 @@ import {
   getDownloadURL,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-storage.js";
 import { approvalLine, formatDay, formatWhen, isCompleted } from "../www/js/logic.js";
+import { reportIsPublished, verdictLabel } from "../www/js/drainage.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
 
 const app = initializeApp(firebaseConfig);
@@ -46,6 +47,7 @@ let legacyPhotos = [];
 let approvedDocs = [];
 let ownDocs = [];
 let thread = [];
+let drainagePoints = [];
 
 function show(view) {
   for (const node of [viewLoading, viewError, viewProject]) node.classList.add("hidden");
@@ -157,6 +159,21 @@ function render() {
       el("h2", {}, "Arbeid utført"),
       el("p", { class: "pre" }, project.reportText.trim()),
     ]));
+  }
+
+  if (reportIsPublished(project) && drainagePoints.length) {
+    const drainage = el("section", { class: "k-card k-stack" }, [
+      el("h2", {}, "Drenering – dokumentasjon og vurdering"),
+      el("p", { class: "muted" }, "Det samme ligger i sluttrapporten."),
+    ]);
+    for (const point of drainagePoints) {
+      drainage.append(el("article", {}, [
+        el("h3", {}, point.name || "Strekk"),
+        el("p", { class: "muted" }, verdictLabel(point.verdict)),
+        point.summary ? el("p", { class: "pre" }, point.summary) : null,
+      ]));
+    }
+    viewProject.append(drainage);
   }
 
   const pendingDecisions = items.filter((item) =>
@@ -690,6 +707,11 @@ async function init() {
       ownDocs = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       render();
     });
+    onSnapshot(collection(db, "projects", projectId, "drainage"), (snap) => {
+      drainagePoints = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      drainagePoints.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+      render();
+    }, (error) => console.error(error));
     onSnapshot(query(collection(db, "projects", projectId, "messages"), orderBy("createdAt", "asc")), (snap) => {
       thread = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       render();

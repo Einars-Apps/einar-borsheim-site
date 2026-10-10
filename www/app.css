@@ -281,6 +281,7 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .tile-kunde .tile-ico { background: #f8ece4; color: var(--clay); }
 .tile-endring .tile-ico { background: #e7eef8; color: #24507a; }
 .tile-avvik .tile-ico { background: #f8eee4; color: var(--warn); }
+.tile-drenering .tile-ico { background: #e5f3f8; color: #1a5f78; }
 .tile-rapport { grid-column: 1 / -1; min-height: 92px; flex-direction: row; align-items: center; gap: 12px; }
 .tile-rapport .tile-copy { display: flex; flex-direction: column; gap: 2px; }
 .tile-label { font-size: 1.05rem; font-weight: 700; }
@@ -299,6 +300,15 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 }
 .pill-warn { background: #f8e7cf; color: var(--warn); }
 .pill-danger { background: #f8e4e2; color: var(--danger); }
+.verdict { border-radius: 14px; padding: 12px 14px; }
+.verdict-title { margin: 0 0 6px; font-weight: 700; }
+.verdict-gronn { background: #e7f2ec; }
+.verdict-gul { background: #f8e7cf; }
+.verdict-rod { background: #f8e4e2; }
+.verdict-tom { background: #f6f3ee; }
+.drainage-thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; }
+.drainage-row { padding: 14px; align-items: center; }
+.pre { white-space: pre-wrap; margin: 0; }
 .pill-muted { background: #eeeae3; color: var(--muted); }
 
 .note { padding: 14px; box-shadow: none; }

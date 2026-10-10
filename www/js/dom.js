@@ -18,6 +18,7 @@ const ICONS = {
   plus: '<path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
   account:
     '<circle cx="12" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 19.5c1.1-3 3.2-4.5 6.5-4.5s5.4 1.5 6.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  drop: '<path d="M12 3.2c2.6 3.3 5.6 6.4 5.6 10a5.6 5.6 0 0 1-11.2 0c0-3.6 3-6.7 5.6-10Z" fill="none" stroke="currentColor" stroke-width="1.8"/>',
 };
 
 export function el(tag, attrs = {}, children = []) {

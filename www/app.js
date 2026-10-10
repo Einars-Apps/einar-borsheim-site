@@ -1,4 +1,4 @@
-import { firebaseConfig } from "./firebase-config.js";
+import { firebaseConfig, FROST_CLIENT_ID } from "./firebase-config.js";
 import { COMPANY } from "./js/company.js";
 import {
   DEFAULT_TEMPLATES,
@@ -30,9 +30,12 @@ import { AI_DRAFT_URL, requestAiDraft } from "./js/ai.js";
 import { compressImage, blobToDataUrl } from "./js/image.js";
 import { addToQueue, getQueueItem, listQueue, removeQueue, updateQueue } from "./js/queue.js";
 import { generatePdfBlob } from "./js/pdf.js";
+import { documentFromForm, emptyDrainageForm, formFromDoc, resolveFrostClientId } from "./js/drainage.js";
+import { renderDrainageForm, renderDrainageList } from "./js/drainage-view.js";
+import { fetchFrostRain } from "./js/frost.js";
 import { button, el, field, icon, sheet, toast } from "./js/dom.js";
 
-const ROUTES = new Set(["projects", "reminders", "capture", "project", "section", "item", "review", "form", "report", "done", "trash", "messages", "documents", "templates"]);
+const ROUTES = new Set(["projects", "reminders", "capture", "project", "section", "item", "review", "form", "report", "done", "trash", "messages", "documents", "templates", "drainage"]);
 
 const main = document.getElementById("main");
 const topbar = document.getElementById("topbar");
@@ -167,6 +170,7 @@ function updateChrome() {
     messages: ["Meldinger", projectName(route.projectId)],
     documents: ["Dokumenter", projectName(route.projectId)],
     templates: ["Bildemaler", ""],
+    drainage: [route.docId ? "Strekk" : "Drenering", projectName(route.projectId)],
   };
   const [title, kicker] = titles[route.name] || ["Internkontroll", ""];
   topTitle.textContent = title || "Internkontroll";
@@ -242,6 +246,7 @@ function render() {
     messages: mountMessages,
     documents: mountDocuments,
     templates: mountTemplates,
+    drainage: mountDrainage,
   };
   (mounts[route.name] || mountProjects)(route);
 }
@@ -627,6 +632,32 @@ async function saveReportPdf(project, reportText) {
           : { title: "Mangler", text: "Alle trinn i malen er fotografert.", photos: [], comments: [] },
       ],
     });
+  }
+  const drainageSnap = await db.collection("projects").doc(project.id).collection("drainage").get();
+  if (!drainageSnap.empty) {
+    const drainageItems = [];
+    for (const doc of drainageSnap.docs) {
+      const data = doc.data();
+      const photos = [];
+      for (const photo of data.photos || []) {
+        if (!photo.url) continue;
+        try {
+          photos.push({ dataUrl: await fetchWithRetry(photo.url), caption: photo.caption || "" });
+        } catch (error) {
+          console.error(error);
+          skipped += 1;
+          photos.push({ caption: photo.caption ? `${photo.caption} (bildet mangler)` : "Bildet kunne ikke hentes inn i PDF-en." });
+        }
+      }
+      drainageItems.push({
+        title: data.name || "Strekk",
+        text: data.summary || "",
+        createdAt: data.updatedAt || data.createdAt,
+        photos,
+        comments: [],
+      });
+    }
+    sections.push({ title: "Drenering – dokumentasjon og vurdering", items: drainageItems });
   }
   for (const [kind, title] of groups) {
     const group = [];
@@ -1168,6 +1199,7 @@ function mountProject(route) {
   main.append(root);
   let items = [];
   let legacy = [];
+  let drainageCount = 0;
   const draw = () => {
     const active = document.activeElement;
     if (active && root.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
@@ -1214,6 +1246,14 @@ function mountProject(route) {
       el("div", { class: "action-row" }, actions),
     ]);
     const tiles = el("div", { class: "dash" });
+    const drainageTile = el("button", { type: "button", class: "tile tile-drenering" }, [
+      el("span", { class: "tile-ico" }, [icon("drop")]),
+      el("span", {}, [
+        el("span", { class: "tile-label" }, "Drenering"),
+        el("span", { class: "tile-count" }, `${drainageCount} strekk`),
+      ]),
+    ]);
+    drainageTile.addEventListener("click", () => push({ name: "drainage", projectId: project.id }));
     const tileSpec = [
       ["bilde", "camera", "Bilder", count("bilde") + queued],
       ["kunde", "user", "Fra kunde", count("kunde")],
@@ -1232,6 +1272,7 @@ function mountProject(route) {
       tile.addEventListener("click", () => push({ name: "section", projectId: project.id, kind }));
       tiles.append(tile);
     }
+    tiles.append(drainageTile);
     const report = el("button", { type: "button", class: "tile tile-rapport" }, [
       el("span", { class: "tile-ico" }, [icon("file")]),
       el("span", { class: "tile-copy" }, [
@@ -1257,6 +1298,131 @@ function mountProject(route) {
     legacy = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     draw();
   }));
+  subs.push(db.collection("projects").doc(route.projectId).collection("drainage").onSnapshot((snap) => {
+    drainageCount = snap.size;
+    draw();
+  }, (error) => console.error(error)));
+  draw();
+}
+
+async function loadDrainagePhotos(projectId) {
+  const photos = [];
+  const items = await db.collection("projects").doc(projectId).collection("items").where("kind", "==", "bilde").get();
+  for (const item of items.docs) {
+    const sub = await item.ref.collection("photos").get();
+    for (const photo of sub.docs) {
+      const data = photo.data();
+      if (!data.url) continue;
+      photos.push({
+        id: `${item.id}/${photo.id}`,
+        url: data.url,
+        caption: data.caption || item.data().title || item.data().text || "",
+      });
+    }
+  }
+  const legacy = await db.collection("projects").doc(projectId).collection("photos").get();
+  for (const doc of legacy.docs) {
+    const data = doc.data();
+    if (!data.url) continue;
+    photos.push({ id: `legacy/${doc.id}`, url: data.url, caption: data.caption || "" });
+  }
+  return photos;
+}
+
+async function readFrostClientId() {
+  let settingsId = "";
+  try {
+    const snap = await db.collection("settings").doc("app").get();
+    settingsId = snap.data()?.frostClientId || "";
+  } catch (error) {
+    console.warn("Frost-innstilling", error);
+  }
+  return resolveFrostClientId(FROST_CLIENT_ID, settingsId);
+}
+
+function mountDrainage(route) {
+  const root = el("div", { class: "screen" });
+  main.append(root);
+  let points = [];
+  let photos = [];
+  let clientId = FROST_CLIENT_ID || "";
+  const draw = () => {
+    const active = document.activeElement;
+    if (active && root.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) {
+      return;
+    }
+    const project = projectById(route.projectId);
+    root.replaceChildren();
+    if (!project) {
+      root.append(el("p", { class: "empty" }, "Fant ikke prosjektet."));
+      return;
+    }
+    if (!route.docId) {
+      root.append(renderDrainageList({
+        points,
+        onOpen: (docId) => push({ name: "drainage", projectId: project.id, docId }),
+        onNew: () => push({ name: "drainage", projectId: project.id, docId: "ny" }),
+      }));
+      return;
+    }
+    const existing = route.docId === "ny" ? null : points.find((point) => point.id === route.docId);
+    if (route.docId !== "ny" && !existing) {
+      root.append(el("p", { class: "empty" }, "Henter strekk…"));
+      return;
+    }
+    root.append(renderDrainageForm({
+      model: existing ? formFromDoc(existing) : emptyDrainageForm(),
+      photos,
+      hasClient: !!clientId,
+      onSave: async (form, assessment) => {
+        try {
+          const ref = existing
+            ? db.collection("projects").doc(project.id).collection("drainage").doc(existing.id)
+            : db.collection("projects").doc(project.id).collection("drainage").doc();
+          const payload = documentFromForm(form, assessment, photos);
+          payload.updatedAt = stamp();
+          if (!existing) payload.createdAt = stamp();
+          await ref.set(payload, { merge: true });
+          toast("Strekket er lagret");
+          history.back();
+        } catch (error) {
+          console.error(error);
+          toast("Kunne ikke lagre strekket");
+        }
+      },
+      onDelete: existing ? async () => {
+        if (!window.confirm("Slette dette strekket?")) return;
+        try {
+          await db.collection("projects").doc(project.id).collection("drainage").doc(existing.id).delete();
+          toast("Strekket er slettet");
+          history.back();
+        } catch (error) {
+          console.error(error);
+          toast("Kunne ikke slette strekket");
+        }
+      } : null,
+      onRain: (query) => fetchFrostRain({
+        clientId,
+        latitude: Number(String(query.latitude).replace(",", ".")),
+        longitude: Number(String(query.longitude).replace(",", ".")),
+        date: query.date,
+      }),
+    }));
+  };
+  refresh = () => draw();
+  readFrostClientId().then((id) => {
+    clientId = id;
+    if (route.docId) draw();
+  });
+  loadDrainagePhotos(route.projectId).then((list) => {
+    photos = list;
+    if (route.docId) draw();
+  }).catch((error) => console.error(error));
+  subs.push(db.collection("projects").doc(route.projectId).collection("drainage").onSnapshot((snap) => {
+    points = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    points.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+    draw();
+  }, (error) => console.error(error)));
   draw();
 }
 

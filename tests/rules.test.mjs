@@ -356,6 +356,23 @@ test("kunde kan godkjenne et tilbud, ikke et skjult punkt", async () => {
   await assertFails(updateDoc(doc(db, "projects/p1/items/tilbud1"), { text: "Endret tekst" }));
 });
 
+test("drenering leses av admin, kunde og offentlig prosjekt", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(db, "projects/p1/drainage/s1"), { name: "Nordvegg", verdict: "gronn" });
+    await setDoc(doc(db, "projects/p2"), { name: "Skjult", shareToken: "TOK999999", public: false });
+    await setDoc(doc(db, "projects/p2/drainage/s1"), { name: "Hemmelig" });
+  });
+  await assertSucceeds(getDoc(doc(customerDb(), "projects/p1/drainage/s1")));
+  await assertSucceeds(getDoc(doc(strangerDb(), "projects/p1/drainage/s1")));
+  await assertFails(setDoc(doc(customerDb(), "projects/p1/drainage/s2"), { name: "Kunde" }));
+  await assertSucceeds(setDoc(doc(adminDb(), "projects/p1/drainage/s2"), { name: "Sørvegg" }));
+  await assertFails(getDoc(doc(strangerDb(), "projects/p2/drainage/s1")));
+  await assertFails(getDoc(doc(customerDb(), "settings/app")));
+});
+
 test("e-postkø og maler er bare for admin", async () => {
   await assertFails(getDoc(doc(strangerDb(), "mail/x")));
   await assertFails(addDoc(collection(customerDb(), "mail"), {
