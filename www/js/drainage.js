@@ -583,7 +583,7 @@ export const WELL_TYPES = [
 export const VAT_RATE = 0.25;
 
 export const DEFAULT_PRICES = {
-  groftM: 350,
+  groftM: 1000,
   gravingM3: 450,
   drensrorM: 180,
   bronnStk: 4500,
