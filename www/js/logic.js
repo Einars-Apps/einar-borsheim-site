@@ -1,4 +1,5 @@
 import { PORTAL_BASE } from "./company.js";
+import { isOfferItem, offerDecisionText } from "./offers.js";
 
 export const KIND_META = {
   bilde: {
@@ -25,6 +26,11 @@ export const KIND_META = {
     label: "Tilbud",
     singular: "Tilbud",
     empty: "Ingen tilbud eller endringsforslag ennå.",
+  },
+  tillegg: {
+    label: "Tillegg",
+    singular: "Tillegg",
+    empty: "Ingen tillegg registrert.",
   },
 };
 
@@ -242,7 +248,7 @@ export function buildReferenceDoc(project, items, photosByItem = {}) {
       continue;
     }
     if (title || text) {
-      if (["bilde", "endring", "avvik", "kunde", "tilbud"].includes(item.kind)) {
+      if (["bilde", "endring", "avvik", "kunde", "tilbud", "tillegg"].includes(item.kind)) {
         tasks.push({ kind: item.kind, title, text, createdAt: toIso(item.createdAt) });
       }
     }
@@ -292,6 +298,7 @@ export function buildLocalDraft(project, items, extras = {}) {
   const groups = [
     ["bilde", "Dokumentasjon"],
     ["endring", "Endringer"],
+    ["tillegg", "Tillegg"],
     ["avvik", "Avvik"],
     ["kunde", "Grunnlag fra kunde"],
     ["tilbud", "Tilbud"],
@@ -310,6 +317,9 @@ export function buildLocalDraft(project, items, extras = {}) {
       if (text) lines.push(`  ${text}`);
       const approval = approvalLine(item);
       if (approval) lines.push(`  ${approval}`);
+      if (isOfferItem(item)) {
+        for (const line of offerDecisionText(item).split("\n")) lines.push(`  ${line}`);
+      }
       const photos = photosByItem[item.id] || [];
       if (photos.length) {
         const captions = photos.map((photo) => clip(photo.caption, 180)).filter(Boolean);

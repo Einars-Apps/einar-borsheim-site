@@ -86,8 +86,11 @@ textarea { min-height: 96px; }
 .comment { margin: 0.6rem 0 0; padding-top: 0.5rem; border-top: 1px solid var(--line); }
 .comment small { color: var(--muted); font-weight: 700; }
 
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 14px; }
+.choice input { width: 22px; min-width: 22px; min-height: 22px; margin-top: 4px; }
+.choice span { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
 .k-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.k-actions .btn { flex: 1 1 140px; }
+.k-actions .btn { flex: 1 1 140px; white-space: normal; }
 .thread { display: flex; flex-direction: column; gap: 0.6rem; }
 .bubble { max-width: 88%; padding: 0.7rem 0.8rem; border-radius: 16px; }
 .bubble p { margin: 0; }

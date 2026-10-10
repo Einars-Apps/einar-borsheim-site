@@ -184,6 +184,10 @@ export function emptyDrainageForm() {
     rain: null,
     deviates: false,
     deviationReason: "",
+    why: null,
+    whyEdited: false,
+    wells: [],
+    costLines: null,
   };
 }
 
@@ -223,6 +227,10 @@ export function formFromDoc(data = {}) {
   form.rain = data.rain?.source === "frost" ? data.rain : null;
   form.deviates = data.deviatesFromByggforsk === true;
   form.deviationReason = data.deviationReason || "";
+  form.why = data.why || null;
+  form.whyEdited = !!data.why;
+  form.wells = (data.wells || []).map(wellFromDoc);
+  form.costLines = data.cost?.lines || null;
   return form;
 }
 
@@ -470,6 +478,9 @@ export function documentFromForm(form, assessment, photos = []) {
     deviatesFromByggforsk: form.deviates === true,
     deviationReason: form.deviates ? String(form.deviationReason || "").trim() : "",
     rain: assessment.rain,
+    why: form.whyEdited && form.why ? normalizeWhy(form.why) : buildWhy(form, assessment, form.defaultReference || ""),
+    wells: (form.wells || []).map((well) => storedWell(well, form, assessment)),
+    cost: storedCost(form.costLines || suggestStretchLines(form, form.prices)),
   };
 }
 
@@ -557,4 +568,505 @@ export function resolveFrostClientId(configId, settingsId) {
   const fromSettings = String(settingsId || "").trim();
   const fromConfig = String(configId || "").trim();
   return fromSettings || fromConfig || "";
+}
+
+export const DEFAULT_BYGGFORSK_REFERENCE = "Generell beskrivelse, ikke et sitert blad: SINTEF Byggforsk anbefaler vanligvis at vann ledes bort fra bygningen, at drensrør legges med fall, og at det brukes drenerende masser der stedlige masser er tette. Bytt teksten hvis du vil vise til et bestemt blad.";
+
+export const FALL_GUIDE_PER_MILLE = 10;
+
+export const WELL_TYPES = [
+  { id: "betongring", label: "Betongring", pore: 1 },
+  { id: "plastkassett", label: "Plastkassett", pore: 0.95 },
+  { id: "pukkmagasin", label: "Pukkmagasin", pore: 0.3 },
+];
+
+export const VAT_RATE = 0.25;
+
+export const DEFAULT_PRICES = {
+  gravingM3: 450,
+  drensrorM: 180,
+  bronnStk: 4500,
+  pukkM3: 550,
+  fiberdukM2: 35,
+  tilbakefyllingM3: 150,
+  maskinTime: 1100,
+  mannTime: 750,
+  transportTur: 1500,
+};
+
+const PRICE_LINES = [
+  ["graving", "Graving", "m³", "gravingM3"],
+  ["drensror", "Drensrør", "m", "drensrorM"],
+  ["bronn", "Brønn eller kassett", "stk", "bronnStk"],
+  ["pukk", "Pukk", "m³", "pukkM3"],
+  ["fiberduk", "Fiberduk", "m²", "fiberdukM2"],
+  ["tilbakefylling", "Tilbakefylling med stedlige masser", "m³", "tilbakefyllingM3"],
+  ["maskin", "Maskin", "time", "maskinTime"],
+  ["mann", "Mann", "time", "mannTime"],
+  ["transport", "Transport", "tur", "transportTur"],
+];
+
+export function pricesFromSettings(data) {
+  const saved = data?.prices || {};
+  const prices = { ...DEFAULT_PRICES };
+  for (const key of Object.keys(DEFAULT_PRICES)) {
+    const value = parseNumber(saved[key]);
+    if (value != null && value >= 0) prices[key] = value;
+  }
+  return prices;
+}
+
+export function pricesFromLines(lines, base = DEFAULT_PRICES) {
+  const prices = { ...(base || DEFAULT_PRICES) };
+  const keys = Object.fromEntries(PRICE_LINES.map(([id, , , key]) => [id, key]));
+  for (const line of lines || []) {
+    const key = keys[line.id];
+    const value = parseNumber(line.unitPrice);
+    if (key && value != null && value >= 0) prices[key] = value;
+  }
+  return prices;
+}
+
+export function emptyWell() {
+  return {
+    id: `bronn-${Date.now()}`,
+    name: "Fordrøyningsbrønn",
+    shape: "sirkel",
+    depthM: "0.7",
+    diameterM: "1",
+    lengthM: "",
+    widthM: "",
+    kind: "betongring",
+    pore: "1",
+    soilK: "",
+    measuredLph: "",
+    roofM2: "",
+    plotM2: "",
+    mmPerHour: "",
+    stormHours: "1",
+    costLines: null,
+  };
+}
+
+function wellFromDoc(data) {
+  const well = emptyWell();
+  well.id = data.id || well.id;
+  well.name = data.name || well.name;
+  well.shape = data.shape || well.shape;
+  well.depthM = data.depthM ?? well.depthM;
+  well.diameterM = data.diameterM ?? "";
+  well.lengthM = data.lengthM ?? "";
+  well.widthM = data.widthM ?? "";
+  well.kind = data.kind || well.kind;
+  well.pore = data.pore ?? well.pore;
+  well.soilK = data.soilK ?? "";
+  well.measuredLph = data.measuredLph ?? "";
+  well.roofM2 = data.roofM2 ?? "";
+  well.plotM2 = data.plotM2 ?? "";
+  well.mmPerHour = data.mmPerHour ?? "";
+  well.stormHours = data.stormHours ?? "1";
+  well.costLines = data.cost?.lines || null;
+  return well;
+}
+
+export function wellType(id) {
+  return WELL_TYPES.find((type) => type.id === id) || WELL_TYPES[0];
+}
+
+export function magazineGrossCubicMeters({ shape, diameterM, lengthM, widthM, depthM } = {}) {
+  if (!(depthM > 0)) return null;
+  if (shape === "rektangel") {
+    if (!(lengthM > 0) || !(widthM > 0)) return null;
+    return lengthM * widthM * depthM;
+  }
+  if (!(diameterM > 0)) return null;
+  return Math.PI * (diameterM / 2) ** 2 * depthM;
+}
+
+export function infiltrationAreaM2({ shape, diameterM, lengthM, widthM, depthM } = {}) {
+  if (!(depthM > 0)) return null;
+  if (shape === "rektangel") {
+    if (!(lengthM > 0) || !(widthM > 0)) return null;
+    return lengthM * widthM + 2 * (lengthM + widthM) * depthM;
+  }
+  if (!(diameterM > 0)) return null;
+  const radius = diameterM / 2;
+  return Math.PI * radius ** 2 + Math.PI * diameterM * depthM;
+}
+
+export function infiltrationLitersPerHour({ kMs, areaM2, measuredLph } = {}) {
+  if (measuredLph > 0) return measuredLph;
+  if (!(kMs > 0) || !(areaM2 > 0)) return null;
+  return kMs * areaM2 * 1000 * 3600;
+}
+
+export function assessWell(well, context = {}) {
+  const type = wellType(well.kind);
+  const pore = parseNumber(well.pore);
+  const poreVolume = pore != null && pore > 0 && pore <= 1 ? pore : type.pore;
+  const shape = well.shape === "rektangel" ? "rektangel" : "sirkel";
+  const size = {
+    shape,
+    depthM: parseNumber(well.depthM),
+    diameterM: parseNumber(well.diameterM),
+    lengthM: parseNumber(well.lengthM),
+    widthM: parseNumber(well.widthM),
+  };
+  const grossM3 = magazineGrossCubicMeters(size);
+  const volumeLiters = grossM3 == null ? null : grossM3 * poreVolume * 1000;
+  const areaM2 = infiltrationAreaM2(size);
+  const soilK = parseNumber(well.soilK) || context.soilK || null;
+  const measuredLph = parseNumber(well.measuredLph);
+  const perHour = infiltrationLitersPerHour({ kMs: soilK, areaM2, measuredLph });
+  const perDay = perHour == null ? null : perHour * 24;
+  const hoursToEmpty = volumeLiters > 0 && perHour > 0 ? volumeLiters / perHour : null;
+  const mmPerHour = parseNumber(well.mmPerHour) || context.mmPerHour || null;
+  const roofM2 = parseNumber(well.roofM2);
+  const plotM2 = parseNumber(well.plotM2);
+  const roof = roofM2 == null ? (context.roofM2 || 0) : roofM2;
+  const plot = plotM2 == null ? (context.plotM2 || 0) : plotM2;
+  const roofC = context.roofC ?? DRAINAGE_DEFAULTS.roofCoefficient;
+  const plotC = context.plotC ?? DRAINAGE_DEFAULTS.plotCoefficient;
+  const inflowLph = mmPerHour > 0 ? (roof * roofC + plot * plotC) * mmPerHour : null;
+  const stormHours = parseNumber(well.stormHours) > 0 ? parseNumber(well.stormHours) : 1;
+  const stormLiters = inflowLph > 0 ? inflowLph * stormHours : null;
+  const covers = volumeLiters != null && perHour != null && stormLiters > 0
+    ? volumeLiters + perHour * stormHours
+    : null;
+  const ratio = covers > 0 && stormLiters > 0 ? covers / stormLiters : null;
+  const verdict = verdictFromRatio(ratio);
+  const summary = wellSummary({
+    well, type, poreVolume, volumeLiters, areaM2, perHour, perDay, hoursToEmpty,
+    inflowLph, stormHours, stormLiters, ratio, verdict, measuredLph, soilK,
+  });
+  return {
+    grossM3: round(grossM3, 3),
+    poreVolume,
+    volumeLiters: round(volumeLiters, 1),
+    areaM2: round(areaM2, 2),
+    perHour: round(perHour, 1),
+    perDay: round(perDay, 1),
+    hoursToEmpty: round(hoursToEmpty, 1),
+    inflowLph: round(inflowLph, 1),
+    stormHours,
+    stormLiters: round(stormLiters, 1),
+    ratio: round(ratio, 2),
+    verdict,
+    usedMeasure: measuredLph > 0 ? "malt" : perHour != null ? "k-verdi" : "",
+    summary,
+  };
+}
+
+function wellSummary(calc) {
+  const lines = [];
+  if (calc.volumeLiters == null) {
+    return "Fyll inn dybde og diameter, eller lengde og bredde.";
+  }
+  lines.push(`${calc.type.label} med porevolum ${formatNumber(calc.poreVolume, 2)}. Magasinet rommer om lag ${formatNumber(calc.volumeLiters, 0)} liter.`);
+  if (calc.perHour != null) {
+    const how = calc.measuredLph > 0
+      ? "målt infiltrasjon"
+      : `k-verdi ${formatConductivity(calc.soilK)} ganget med bunn og sider (${formatNumber(calc.areaM2, 2)} m²), med enhetsgradient`;
+    lines.push(`Tømming til stedlige masser er om lag ${formatNumber(calc.perHour, 0)} liter i timen og ${formatNumber(calc.perDay, 0)} liter i døgnet (${how}).`);
+  }
+  if (calc.hoursToEmpty != null) {
+    lines.push(`Full brønn er tom etter om lag ${formatNumber(calc.hoursToEmpty, 1)} timer.`);
+  }
+  if (calc.stormLiters != null) {
+    lines.push(`Tilkoblet areal gir om lag ${formatNumber(calc.inflowLph, 0)} liter i timen ved ${formatNumber(calc.stormHours, 1)} timers regn, altså ${formatNumber(calc.stormLiters, 0)} liter i skuren.`);
+  }
+  if (calc.verdict) {
+    lines.push(`Vurdering: ${verdictLabel(calc.verdict)}. ${calc.verdict === "gronn" ? "Brønnen og bakken tar unna skuren med margin." : calc.verdict === "gul" ? "Det holder så vidt for denne skuren." : "Brønnen tar ikke unna den valgte skuren."}`);
+  }
+  return lines.join(" ");
+}
+
+function storedWell(well, form, assessment) {
+  const result = assessWell(well, {
+    soilK: assessment.soilK,
+    mmPerHour: assessment.mmPerHour,
+    roofM2: parseNumber(form.roofM2) || 0,
+    plotM2: parseNumber(form.plotM2) || 0,
+    roofC: parseNumber(form.roofC),
+    plotC: parseNumber(form.plotC),
+  });
+  const lines = well.costLines || suggestWellLines(well, result, form.prices);
+  return {
+    id: well.id,
+    name: String(well.name || "Fordrøyningsbrønn").trim(),
+    shape: well.shape === "rektangel" ? "rektangel" : "sirkel",
+    depthM: parseNumber(well.depthM),
+    diameterM: parseNumber(well.diameterM),
+    lengthM: parseNumber(well.lengthM),
+    widthM: parseNumber(well.widthM),
+    kind: well.kind,
+    pore: result.poreVolume,
+    soilK: parseNumber(well.soilK),
+    measuredLph: parseNumber(well.measuredLph),
+    roofM2: parseNumber(well.roofM2),
+    plotM2: parseNumber(well.plotM2),
+    mmPerHour: parseNumber(well.mmPerHour),
+    stormHours: result.stormHours,
+    volumeLiters: result.volumeLiters,
+    areaM2: result.areaM2,
+    perHour: result.perHour,
+    perDay: result.perDay,
+    hoursToEmpty: result.hoursToEmpty,
+    inflowLph: result.inflowLph,
+    stormLiters: result.stormLiters,
+    ratio: result.ratio,
+    verdict: result.verdict,
+    summary: result.summary,
+    cost: storedCost(lines),
+  };
+}
+
+export function buildWhy(form, assessment, referenceOverride = "") {
+  const reference = String(referenceOverride || DEFAULT_BYGGFORSK_REFERENCE).trim();
+  const rows = [soilWhy(form, assessment), waterWhy(assessment), rainWhy(assessment), fallWhy(form)];
+  return { reference, rows, conclusion: whyConclusion(rows) };
+}
+
+function soilWhy(form, assessment) {
+  const tight = ["leire", "silt", "morene"].includes(form.soilId) || assessment.soilK < 1e-6;
+  const documented = assessment.pipeLs != null || assessment.measuredLpm != null;
+  return {
+    id: "masser",
+    topic: "Stedlige masser",
+    einar: tight
+      ? `Stedlig masse er ${assessment.soil.label.toLowerCase()} med omtrentlig k ${formatConductivity(assessment.soilK)}. Løsningen er å drenere, ikke å stole på massen alene.`
+      : `Stedlig masse er ${assessment.soil.label.toLowerCase()} med omtrentlig k ${formatConductivity(assessment.soilK)}. Massen kan ta imot vann, og løsningen hviler på målingene.`,
+    byggforsk: tight
+      ? "Generelt anbefales drenering når massen er tett, slik at vann ikke blir stående mot grunnmuren. Dette er ikke et sitert krav."
+      : "Ved mer åpne masser kan en enklere løsning holde. Det bør likevel vises at vannet ikke blir stående.",
+    verdict: documented ? "gronn" : "gul",
+  };
+}
+
+function waterWhy(assessment) {
+  const byggforsk = "Anbefalingen er å kontrollere at vannet tas unna. Det finnes ikke ett tall for alle tomter. Målingen er dokumentasjonen.";
+  if (assessment.measuredLpm != null && assessment.testRatio != null) {
+    return {
+      id: "vann",
+      topic: "Vanntest og infiltrasjon",
+      einar: `Bøttetest ${formatNumber(assessment.usedLpm)} l/min mot tilrenning ${formatNumber(assessment.inflowLpm)} l/min (${formatNumber(assessment.testRatio, 1)} ganger).`,
+      byggforsk,
+      verdict: verdictFromRatio(assessment.testRatio) || "gul",
+    };
+  }
+  if (assessment.measuredLpm != null) {
+    return {
+      id: "vann",
+      topic: "Vanntest og infiltrasjon",
+      einar: `Bøttetest ${formatNumber(assessment.usedLpm)} l/min. Tilrenning er ikke fylt inn, så marginen er ikke regnet.`,
+      byggforsk,
+      verdict: "gul",
+    };
+  }
+  if (assessment.estimatedLpm != null) {
+    return {
+      id: "vann",
+      topic: "Vanntest og infiltrasjon",
+      einar: `Bare et slangeestimat på ${formatNumber(assessment.estimatedLpm)} l/min, ikke en bøttetest.`,
+      byggforsk,
+      verdict: "gul",
+    };
+  }
+  return {
+    id: "vann",
+    topic: "Vanntest og infiltrasjon",
+    einar: "Ingen vanntest er ført.",
+    byggforsk,
+    verdict: "gul",
+  };
+}
+
+function rainWhy(assessment) {
+  const rain = assessment.rain;
+  const byggforsk = "Lokal nedbør bør ligge til grunn. Intensiteten i sjekken er et valgt kontrolltall, ikke en observert døgnsum.";
+  if (rain?.source === "frost" && rain.stationName) {
+    const distance = formatDistance(rain.distanceKm);
+    const near = rain.distanceKm == null || rain.distanceKm <= 10;
+    return {
+      id: "nedbor",
+      topic: "Nedbør",
+      einar: `Observert nedbør fra ${rain.stationName}${distance ? ` (${distance} unna)` : ""}. Valgt dato ${formatNumber(rain.selectedMm)} mm, siste 7 døgn ${formatNumber(rain.last7Mm)} mm. Kontrollintensitet ${formatNumber(assessment.mmPerHour)} mm/t.`,
+      byggforsk,
+      verdict: near ? "gronn" : "gul",
+    };
+  }
+  if (rain) {
+    return {
+      id: "nedbor",
+      topic: "Nedbør",
+      einar: `Manuelt ført${rain.stationName ? ` fra ${rain.stationName}` : ""}: ${formatNumber(rain.selectedMm)} mm.`,
+      byggforsk,
+      verdict: "gul",
+    };
+  }
+  return {
+    id: "nedbor",
+    topic: "Nedbør",
+    einar: "Nedbør er ikke hentet eller ført.",
+    byggforsk,
+    verdict: "rod",
+  };
+}
+
+function fallWhy(form) {
+  const slope = parseNumber(form.slopePerMille);
+  const byggforsk = `Generelt anbefales jevnt fall bort fra bygningen. ${FALL_GUIDE_PER_MILLE} ‰ er bare et praktisk skille i tabellen, ikke et sitert minimum.`;
+  if (slope == null) {
+    return { id: "fall", topic: "Terreng og fall", einar: "Fall er ikke fylt inn.", byggforsk, verdict: "gul" };
+  }
+  if (slope >= FALL_GUIDE_PER_MILLE) {
+    return { id: "fall", topic: "Terreng og fall", einar: `Fall på ${formatNumber(slope)} ‰ er ført, så vann kan renne i røret.`, byggforsk, verdict: "gronn" };
+  }
+  if (slope > 0) {
+    return { id: "fall", topic: "Terreng og fall", einar: `Fall på ${formatNumber(slope)} ‰ er lavt. Sjekk at det likevel heller bort fra huset.`, byggforsk, verdict: "gul" };
+  }
+  return { id: "fall", topic: "Terreng og fall", einar: "Fall er 0. Vann blir stående i røret.", byggforsk, verdict: "rod" };
+}
+
+function whyConclusion(rows) {
+  if (rows.some((row) => row.verdict === "rod")) {
+    return "Minst én rad er rød. Løsningen bør endres, eller så skriver du begrunnelsen for avviket.";
+  }
+  if (rows.some((row) => row.verdict === "gul")) {
+    return "Løsningen kan brukes, med forbehold på de gule radene.";
+  }
+  return "Målingene støtter den valgte løsningen sammenlignet med en generell Byggforsk-praksis. Dette er ikke et sitat fra et blad.";
+}
+
+function normalizeWhy(why) {
+  return {
+    reference: String(why.reference || DEFAULT_BYGGFORSK_REFERENCE).trim(),
+    rows: (why.rows || []).map((row) => ({
+      id: row.id || "",
+      topic: String(row.topic || "").trim(),
+      einar: String(row.einar || "").trim(),
+      byggforsk: String(row.byggforsk || "").trim(),
+      verdict: ["gronn", "gul", "rod"].includes(row.verdict) ? row.verdict : "gul",
+    })),
+    conclusion: String(why.conclusion || "").trim(),
+  };
+}
+
+export function formatWhy(why) {
+  if (!why?.rows?.length && !why?.conclusion) return "";
+  const lines = ["Hvorfor denne løsningen", why.reference || ""];
+  for (const row of why.rows || []) {
+    lines.push(`${row.topic} (${verdictLabel(row.verdict)}). Einar: ${row.einar} Byggforsk, generelt: ${row.byggforsk}`);
+  }
+  if (why.conclusion) lines.push(`Konklusjon: ${why.conclusion}`);
+  return lines.filter(Boolean).join("\n");
+}
+
+function blankLine(id, label, unit, quantity, unitPrice) {
+  return {
+    id,
+    label,
+    unit,
+    quantity: quantity == null || quantity === "" ? "" : String(quantity),
+    unitPrice: unitPrice == null ? "" : String(unitPrice),
+  };
+}
+
+export function suggestStretchLines(form, prices = DEFAULT_PRICES) {
+  const rates = prices || DEFAULT_PRICES;
+  return PRICE_LINES.map(([id, label, unit, key]) => blankLine(
+    id,
+    label,
+    unit,
+    id === "drensror" ? (parseNumber(form?.pipeLengthM) || "") : "",
+    rates[key],
+  ));
+}
+
+export function suggestWellLines(well, result, prices = DEFAULT_PRICES) {
+  const rates = prices || DEFAULT_PRICES;
+  const gravel = well?.kind === "pukkmagasin" && result?.grossM3 ? result.grossM3 : "";
+  return PRICE_LINES.map(([id, label, unit, key]) => blankLine(
+    id,
+    label,
+    unit,
+    id === "bronn" ? 1 : id === "pukk" ? gravel : "",
+    rates[key],
+  ));
+}
+
+export function costTotals(lines, vatRate = VAT_RATE) {
+  const parsed = (lines || []).map((line) => ({
+    ...line,
+    quantity: parseNumber(line.quantity) || 0,
+    unitPrice: parseNumber(line.unitPrice) || 0,
+  }));
+  const exVat = round(parsed.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0), 2) || 0;
+  const vat = round(exVat * vatRate, 2) || 0;
+  return { exVat, vat, incVat: round(exVat + vat, 2) || 0 };
+}
+
+function storedCost(lines) {
+  const totals = costTotals(lines);
+  return {
+    lines: (lines || []).map((line) => ({
+      id: line.id,
+      label: line.label,
+      unit: line.unit,
+      quantity: parseNumber(line.quantity) || 0,
+      unitPrice: parseNumber(line.unitPrice) || 0,
+    })),
+    ...totals,
+  };
+}
+
+export function formatMoney(value) {
+  if (!Number.isFinite(value)) return "–";
+  return `${new Intl.NumberFormat("nb-NO", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)} kr`;
+}
+
+export function formatCost(cost, title = "Kostnad") {
+  if (!cost?.lines?.length) return "";
+  const rows = cost.lines
+    .filter((line) => line.quantity)
+    .map((line) => `${line.label}: ${formatNumber(line.quantity, 2)} ${line.unit} × ${formatMoney(line.unitPrice)} = ${formatMoney(line.quantity * line.unitPrice)}`);
+  if (!rows.length) return "";
+  return [
+    title,
+    ...rows,
+    `Sum eks. mva ${formatMoney(cost.exVat)}`,
+    `Mva ${formatMoney(cost.vat)}`,
+    `Sum inkl. mva ${formatMoney(cost.incVat)}`,
+  ].join("\n");
+}
+
+export function costCsv(lines) {
+  const header = "Beskrivelse;Antall;Enhet;Enhetspris eks. mva;Sum eks. mva";
+  const rows = (lines || []).filter((line) => parseNumber(line.quantity)).map((line) => {
+    const quantity = parseNumber(line.quantity) || 0;
+    const price = parseNumber(line.unitPrice) || 0;
+    const cell = (value) => String(value).replaceAll(";", ",");
+    const number = (value) => formatNumber(value, 2);
+    return [cell(line.label), number(quantity), cell(line.unit), number(price), number(quantity * price)].join(";");
+  });
+  return [header, ...rows].join("\n");
+}
+
+export function fikenDraftLines(lines) {
+  return (lines || []).filter((line) => parseNumber(line.quantity) > 0).map((line) => ({
+    description: `${line.label}${line.unit ? ` (${line.unit})` : ""}`,
+    quantity: parseNumber(line.quantity),
+    unitPrice: Math.round((parseNumber(line.unitPrice) || 0) * 100),
+    vatType: "HIGH",
+  }));
+}
+
+export function drainageReportText(data) {
+  const wells = (data?.wells || []).map((well) => [well.name || "Fordrøyningsbrønn", well.summary || "", formatCost(well.cost, "Kostnad for brønnen")].filter(Boolean).join("\n"));
+  return [
+    data?.summary || "",
+    formatWhy(data?.why),
+    wells.join("\n\n"),
+    formatCost(data?.cost, "Kostnad for strekket"),
+  ].filter(Boolean).join("\n\n");
 }

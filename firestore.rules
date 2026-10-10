@@ -65,10 +65,27 @@ service cloud.firestore {
         && request.resource.data.stars <= 5;
     }
 
-    // Kunden kan bare svare ja eller nei på et tilbud eller en endring som admin har bedt om svar på.
+    function alternativeIdOk(alts, id) {
+      return id is string && id.size() > 0 && id.size() < 40 && (
+        (alts.size() > 0 && alts[0].id == id)
+        || (alts.size() > 1 && alts[1].id == id)
+        || (alts.size() > 2 && alts[2].id == id)
+        || (alts.size() > 3 && alts[3].id == id)
+        || (alts.size() > 4 && alts[4].id == id)
+        || (alts.size() > 5 && alts[5].id == id)
+        || (alts.size() > 6 && alts[6].id == id)
+        || (alts.size() > 7 && alts[7].id == id)
+      );
+    }
+
+    // Kunden kan bare sette valg og godkjenning. Pris, tekst og alternativer blir stående.
     function validCustomerDecision() {
+      let keys = request.resource.data.diff(resource.data).affectedKeys();
+      let alts = resource.data.get('alternatives', []);
+      let chosen = request.resource.data.get('selectedAlternativeId', '');
+      let picked = keys.hasAny(['selectedAlternativeId']);
       return resource.data.approved == true
-        && resource.data.kind in ['tilbud', 'endring']
+        && resource.data.kind in ['tilbud', 'endring', 'tillegg']
         && resource.data.approvalRequested == true
         && resource.data.get('approvalStatus', 'venter') == 'venter'
         && request.resource.data.approvalStatus in ['godkjent', 'avslatt']
@@ -77,8 +94,12 @@ service cloud.firestore {
         && request.resource.data.approvedByName is string
         && request.resource.data.approvedByName.size() > 0
         && request.resource.data.approvedByName.size() < 80
-        && request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['approvalStatus', 'approvedAt', 'approvedBy', 'approvedByName']);
+        && keys.hasOnly(['approvalStatus', 'approvedAt', 'approvedBy', 'approvedByName', 'selectedAlternativeId'])
+        && (
+          (request.resource.data.approvalStatus == 'avslatt' && (!picked || chosen == ''))
+          || (request.resource.data.approvalStatus == 'godkjent' && alts.size() == 0 && !picked)
+          || (request.resource.data.approvalStatus == 'godkjent' && alternativeIdOk(alts, chosen))
+        );
     }
 
     // Produksjon bruker https-lenker fra Storage.

@@ -20,6 +20,7 @@
 html { touch-action: manipulation; }
 html, body { margin: 0; padding: 0; }
 body {
+  overflow-x: clip;
   min-height: 100dvh;
   font-family: "Space Grotesk", system-ui, sans-serif;
   color: var(--ink);
@@ -166,7 +167,7 @@ img { max-width: 100%; }
 }
 
 #main { max-width: 760px; margin: 0 auto; }
-.screen { padding: 16px 16px 28px; display: flex; flex-direction: column; gap: 14px; }
+.screen { padding: 16px 16px 28px; display: flex; flex-direction: column; gap: 14px; max-width: 100%; overflow-x: clip; }
 .boot, .empty { color: var(--muted); padding: 12px 2px; }
 .stack { display: flex; flex-direction: column; gap: 12px; }
 .h-app { font-size: 1.7rem; line-height: 1.15; margin: 0; }
@@ -211,7 +212,10 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .btn-block { width: 100%; }
 .btn:disabled { opacity: 0.55; }
 .action-row { display: flex; flex-wrap: wrap; gap: 8px; }
-.action-row .btn { flex: 1 1 140px; }
+.action-row .btn { flex: 1 1 100%; white-space: normal; text-align: center; }
+@media (min-width: 700px) {
+  .action-row .btn { flex-basis: 180px; }
+}
 
 .card, .row, .tile, .note, .comment {
   background: var(--card);
@@ -284,7 +288,8 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .tile-drenering .tile-ico { background: #e5f3f8; color: #1a5f78; }
 .tile-rapport { grid-column: 1 / -1; min-height: 92px; flex-direction: row; align-items: center; gap: 12px; }
 .tile-rapport .tile-copy { display: flex; flex-direction: column; gap: 2px; }
-.tile-label { font-size: 1.05rem; font-weight: 700; }
+.tile-label { font-size: 1.05rem; font-weight: 700; overflow-wrap: anywhere; }
+.tile-count, .row-title, .row-text, .pre, .why-row, .offer-alt { overflow-wrap: anywhere; }
 .tile-count { color: var(--muted); font-size: 0.88rem; font-weight: 600; }
 .pills { display: flex; flex-wrap: wrap; gap: 6px; }
 .pill {
@@ -309,6 +314,19 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .drainage-thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; }
 .drainage-row { padding: 14px; align-items: center; }
 .pre { white-space: pre-wrap; margin: 0; }
+.why-rows { display: flex; flex-direction: column; gap: 12px; }
+.why-row { border-radius: 14px; padding: 12px 14px; }
+.why-row h3 { margin: 0 0 8px; }
+.verdict-select, .cost-line input, .why-row textarea { width: 100%; }
+.verdict-select { min-height: 48px; margin: 8px 0 4px; font: inherit; }
+.cost-line { display: grid; gap: 8px; padding: 10px 0; border-top: 1px solid rgba(0, 0, 0, 0.08); }
+.choice { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: white; }
+.choice input { width: 22px; min-width: 22px; min-height: 22px; margin-top: 4px; }
+.choice span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.photo-strip { display: flex; flex-wrap: wrap; gap: 8px; }
+.photo-chip { margin: 0; width: 104px; }
+.photo-chip img { width: 104px; height: 104px; object-fit: cover; border-radius: 12px; display: block; }
+.cost-fallback { width: 100%; }
 .pill-muted { background: #eeeae3; color: var(--muted); }
 
 .note { padding: 14px; box-shadow: none; }

@@ -30,12 +30,39 @@ import { AI_DRAFT_URL, requestAiDraft } from "./js/ai.js";
 import { compressImage, blobToDataUrl } from "./js/image.js";
 import { addToQueue, getQueueItem, listQueue, removeQueue, updateQueue } from "./js/queue.js";
 import { generatePdfBlob } from "./js/pdf.js";
-import { documentFromForm, emptyDrainageForm, formFromDoc, resolveFrostClientId } from "./js/drainage.js";
+import {
+  DEFAULT_BYGGFORSK_REFERENCE,
+  assessDrainage,
+  documentFromForm,
+  drainageReportText,
+  emptyDrainageForm,
+  fikenDraftLines,
+  formFromDoc,
+  pricesFromLines,
+  pricesFromSettings,
+  resolveFrostClientId,
+} from "./js/drainage.js";
 import { renderDrainageForm, renderDrainageList } from "./js/drainage-view.js";
+import {
+  addressFromGeonorge,
+  approvedChoiceSum,
+  blankOfferFields,
+  drainageOfferFields,
+  formatOfferSum,
+  isOfferItem,
+  offerDecisionText,
+  offerShareText,
+  offerStatus,
+  offerTypeLabel,
+  quickOfferFields,
+  quickProjectName,
+  shareTargets,
+} from "./js/offers.js";
+import { renderOfferEditor, renderOfferList, renderQuickOrder } from "./js/offers-view.js";
 import { fetchFrostRain } from "./js/frost.js";
 import { button, el, field, icon, sheet, toast } from "./js/dom.js";
 
-const ROUTES = new Set(["projects", "reminders", "capture", "project", "section", "item", "review", "form", "report", "done", "trash", "messages", "documents", "templates", "drainage"]);
+const ROUTES = new Set(["projects", "reminders", "capture", "project", "section", "item", "review", "form", "report", "done", "trash", "messages", "documents", "templates", "drainage", "offers", "order"]);
 
 const main = document.getElementById("main");
 const topbar = document.getElementById("topbar");
@@ -171,6 +198,8 @@ function updateChrome() {
     documents: ["Dokumenter", projectName(route.projectId)],
     templates: ["Bildemaler", ""],
     drainage: [route.docId ? "Strekk" : "Drenering", projectName(route.projectId)],
+    offers: ["Tilbud og endringer", projectName(route.projectId)],
+    order: ["Ny bestilling", ""],
   };
   const [title, kicker] = titles[route.name] || ["Internkontroll", ""];
   topTitle.textContent = title || "Internkontroll";
@@ -247,6 +276,8 @@ function render() {
     documents: mountDocuments,
     templates: mountTemplates,
     drainage: mountDrainage,
+    offers: mountOffers,
+    order: mountOrder,
   };
   (mounts[route.name] || mountProjects)(route);
 }
@@ -281,22 +312,41 @@ function isCancel(error) {
 
 async function shareText(title, text, url) {
   const Share = window.Capacitor?.Plugins?.Share;
-  if (Share) {
+  if (Share?.share) {
     try {
       await Share.share({ title, text, url, dialogTitle: title });
-      return true;
+      return "shared";
     } catch (error) {
-      if (isCancel(error)) return false;
+      if (isCancel(error)) return "cancel";
     }
   }
+  if (typeof navigator.share === "function") {
+    try {
+      await navigator.share({ title, text: [text, url].filter(Boolean).join("\n"), url });
+      return "shared";
+    } catch (error) {
+      if (isCancel(error)) return "cancel";
+    }
+  }
+  return "fallback";
+}
+
+async function copyLink(url) {
   try {
     await navigator.clipboard.writeText(url);
     toast("Lenke kopiert");
-    return true;
   } catch {
     window.prompt("Kopier lenken:", url);
-    return true;
   }
+}
+
+function openShareSheet({ title, text, url, phone, email }) {
+  const targets = shareTargets({ phone, email, text, url, subject: title });
+  sheet(title, el("div", { class: "stack" }, [
+    el("p", { class: "meta" }, "Lenken er klar. Del den på SMS eller e-post, eller kopier den."),
+    ...targets.map((target) => el("a", { class: "btn btn-primary btn-block", href: target.href }, target.label)),
+    button("Kopier lenke", { class: "btn btn-ghost btn-block", onClick: () => copyLink(url) }),
+  ]));
 }
 
 async function ensureToken(project) {
@@ -312,7 +362,9 @@ async function shareProject(project, year) {
     const token = await ensureToken(project);
     const url = portalUrl(project.id, token);
     const text = year ? reminderShareText(project, year, url) : projectShareText(project, url);
-    return await shareText(year ? "Påminnelse til kunde" : "Del med kunde", text, url);
+    const result = await shareText(year ? "Påminnelse til kunde" : "Del med kunde", text, url);
+    if (result === "fallback") await copyLink(url);
+    return result !== "cancel";
   } catch (error) {
     console.error(error);
     toast("Kunne ikke dele lenken");
@@ -614,6 +666,7 @@ async function saveReportPdf(project, reportText) {
     ["bilde", "Bilder"],
     ["tilbud", "Tilbud"],
     ["endring", "Endringer"],
+    ["tillegg", "Tillegg"],
     ["avvik", "Avvik"],
     ["kunde", "Grunnlag fra kunde"],
   ];
@@ -651,7 +704,7 @@ async function saveReportPdf(project, reportText) {
       }
       drainageItems.push({
         title: data.name || "Strekk",
-        text: data.summary || "",
+        text: drainageReportText(data),
         createdAt: data.updatedAt || data.createdAt,
         photos,
         comments: [],
@@ -659,9 +712,39 @@ async function saveReportPdf(project, reportText) {
     }
     sections.push({ title: "Drenering – dokumentasjon og vurdering", items: drainageItems });
   }
+  const approvedOffers = approved.filter((item) => isOfferItem(item) && offerStatus(item) === "godkjent");
+  if (approvedOffers.length) {
+    const offerItems = [{
+      title: "Sum godkjent",
+      text: formatOfferSum(approvedChoiceSum(approvedOffers)),
+      photos: [],
+      comments: [],
+    }];
+    for (const item of approvedOffers) {
+      const photos = [];
+      for (const photo of photosByItem[item.id] || []) {
+        if (photo.approved === false || !photo.url) continue;
+        try {
+          photos.push({ dataUrl: await fetchWithRetry(photo.url), caption: photo.caption || "" });
+        } catch (error) {
+          console.error(error);
+          skipped += 1;
+          photos.push({ caption: photo.caption ? `${photo.caption} (bildet mangler)` : "Bildet kunne ikke hentes inn i PDF-en." });
+        }
+      }
+      offerItems.push({
+        title: `${offerTypeLabel(item.kind)}: ${item.title || "Post"}`,
+        text: [item.text || "", offerDecisionText(item), approvalLine(item)].filter(Boolean).join("\n"),
+        createdAt: item.approvedAt || item.createdAt,
+        photos,
+        comments: (commentsByItem[item.id] || []).filter((comment) => comment.approved !== false && comment.text),
+      });
+    }
+    sections.push({ title: "Tilbud og endringer", items: offerItems });
+  }
   for (const [kind, title] of groups) {
     const group = [];
-    for (const item of approved.filter((entry) => entry.kind === kind)) {
+    for (const item of approved.filter((entry) => entry.kind === kind && !(isOfferItem(entry) && offerStatus(entry) === "godkjent"))) {
       const photos = [];
       for (const photo of photosByItem[item.id] || []) {
         if (photo.approved === false || !photo.url) continue;
@@ -939,13 +1022,170 @@ function mountLogin() {
   ]));
 }
 
+async function createOfferItem(projectId, fields) {
+  const ref = await db.collection("projects").doc(projectId).collection("items").add({
+    kind: fields.kind || "tilbud",
+    title: fields.title || "",
+    text: fields.text || "",
+    alternatives: fields.alternatives || [],
+    selectedAlternativeId: "",
+    stars: null,
+    approved: true,
+    reference: false,
+    source: "admin",
+    createdBy: user?.uid || "",
+    authorName: "Einar",
+    coverUrl: "",
+    approvalRequested: fields.approvalRequested === true,
+    approvalStatus: fields.approvalStatus || "",
+    createdAt: stamp(),
+    updatedAt: stamp(),
+  });
+  return ref.id;
+}
+
+async function sendOfferToFiken(project, item, kind) {
+  const settings = await readAppSettings();
+  return createFikenDraft({
+    kind,
+    lines: [{
+      label: `${item.title || "Post"}: ${item.alternatives?.find((alternative) => alternative.id === item.selectedAlternativeId)?.name || "Løsning"}`,
+      unit: "stk",
+      quantity: 1,
+      unitPrice: item.alternatives?.find((alternative) => alternative.id === item.selectedAlternativeId)?.priceExVat || 0,
+    }],
+    title: item.title || "Tilbud",
+    project,
+    incomeAccount: settings.fikenIncomeAccount,
+  });
+}
+
+async function createDrainageOffer(project, form) {
+  const stored = documentFromForm(form, assessDrainage(form), []);
+  const wellExVat = (stored.wells || []).reduce((sum, well) => sum + (well.cost?.exVat || 0), 0);
+  const fields = drainageOfferFields({
+    name: stored.name || "Drenering",
+    description: drainageReportText(stored),
+    stretchExVat: stored.cost?.exVat || 0,
+    wellExVat,
+  });
+  const itemId = await createOfferItem(project.id, fields);
+  toast("Utkastet ligger i Tilbud og endringer");
+  push({ name: "item", projectId: project.id, itemId });
+}
+
+function locateAddress() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("Posisjon er ikke tilgjengelig i denne nettleseren."));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(async (position) => {
+      const { latitude, longitude } = position.coords;
+      const fallback = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+      try {
+        const response = await fetch(`https://ws.geonorge.no/adresser/v1/punktsok?lat=${latitude}&lon=${longitude}&radius=100&treffPerSide=1`);
+        if (!response.ok) throw new Error("adresse");
+        resolve(addressFromGeonorge(await response.json()) || fallback);
+      } catch (error) {
+        console.warn(error);
+        resolve(fallback);
+      }
+    }, () => reject(new Error("Fikk ikke posisjon. Skriv adressen selv.")), { enableHighAccuracy: true, timeout: 12000 });
+  });
+}
+
+function mountOffers(route) {
+  const root = el("div", { class: "screen" });
+  main.append(root);
+  let items = [];
+  const draw = () => {
+    root.replaceChildren(renderOfferList({
+      items,
+      onOpen: (itemId) => push({ name: "item", projectId: route.projectId, itemId }),
+      onNew: async () => {
+        try {
+          const itemId = await createOfferItem(route.projectId, blankOfferFields());
+          push({ name: "item", projectId: route.projectId, itemId });
+        } catch (error) {
+          console.error(error);
+          toast("Kunne ikke opprette posten");
+        }
+      },
+    }));
+  };
+  subs.push(db.collection("projects").doc(route.projectId).collection("items").onSnapshot((snap) => {
+    items = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    items.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    draw();
+  }, (error) => console.error(error)));
+  draw();
+}
+
+function mountOrder() {
+  main.append(renderQuickOrder({
+    onLocate: locateAddress,
+    onPhotos: (source) => blobsFromCamera(source),
+    onSubmit: async (input) => {
+      const projectRef = await db.collection("projects").add({
+        name: quickProjectName(input),
+        address: input.address,
+        customerName: input.customerName,
+        customerPhone: input.phone,
+        customerEmail: input.email,
+        description: input.description,
+        templateId: "",
+        publicLocation: "",
+        publicSummary: "",
+        reportText: "",
+        shareToken: randomToken(12),
+        public: false,
+        status: "tilbud",
+        completedAt: null,
+        pdfUrl: "",
+        pdfPath: "",
+        reminder1Done: false,
+        reminder2Done: false,
+        createdAt: stamp(),
+        updatedAt: stamp(),
+        createdBy: user?.email || "",
+      });
+      const project = { id: projectRef.id, ...(await projectRef.get()).data() };
+      const fields = quickOfferFields(input);
+      const itemId = await createOfferItem(project.id, fields);
+      if (input.blobs?.length) {
+        await ingestBlobs(project.id, "tilbud", input.blobs, { mode: "attach", itemId, title: fields.title, text: fields.text });
+      }
+      localStorage.setItem("lastProjectId", project.id);
+      const url = portalUrl(project.id, project.shareToken);
+      const text = offerShareText(project, url);
+      const shared = await shareText("Tilbud til kunde", text, url);
+      toast("Tilbudet er klart");
+      push({ name: "item", projectId: project.id, itemId });
+      if (shared === "fallback") {
+        openShareSheet({
+          title: "Del tilbudet",
+          text,
+          url,
+          phone: input.phone,
+          email: input.email,
+        });
+      }
+    },
+  }));
+}
+
 function mountProjects() {
   const root = el("div", { class: "screen" });
   const list = el("div", { class: "stack" });
   root.append(
-    button("Nytt prosjekt", {
+    button("Ny bestilling", {
       class: "btn btn-primary btn-block",
       icon: "plus",
+      onClick: () => push({ name: "order" }),
+    }),
+    button("Nytt prosjekt", {
+      class: "btn btn-ghost btn-block",
       onClick: () => push({ name: "form" }),
     }),
     el("div", { class: "action-row" }, [
@@ -1246,6 +1486,19 @@ function mountProject(route) {
       el("div", { class: "action-row" }, actions),
     ]);
     const tiles = el("div", { class: "dash" });
+    const offerItems = items.filter(isOfferItem);
+    const offerSum = approvedChoiceSum(offerItems);
+    const offersTile = el("button", { type: "button", class: "tile tile-tilbud" }, [
+      el("span", { class: "tile-ico" }, [icon("file")]),
+      el("span", {}, [
+        el("span", { class: "tile-label" }, "Tilbud og endringer"),
+        el("span", { class: "tile-count" }, offerSum.count
+          ? `${offerItems.length} poster · ${formatOfferSum(offerSum).split(".")[0]}`
+          : `${offerItems.length} poster`),
+      ]),
+    ]);
+    offersTile.addEventListener("click", () => push({ name: "offers", projectId: project.id }));
+    tiles.append(offersTile);
     const drainageTile = el("button", { type: "button", class: "tile tile-drenering" }, [
       el("span", { class: "tile-ico" }, [icon("drop")]),
       el("span", {}, [
@@ -1329,15 +1582,54 @@ async function loadDrainagePhotos(projectId) {
   return photos;
 }
 
-async function readFrostClientId() {
-  let settingsId = "";
+async function readAppSettings() {
   try {
     const snap = await db.collection("settings").doc("app").get();
-    settingsId = snap.data()?.frostClientId || "";
+    const data = snap.data() || {};
+    return {
+      frostClientId: resolveFrostClientId(FROST_CLIENT_ID, data.frostClientId || ""),
+      prices: pricesFromSettings(data),
+      byggforskReference: String(data.byggforskReference || "").trim() || DEFAULT_BYGGFORSK_REFERENCE,
+      fikenIncomeAccount: String(data.fikenIncomeAccount || "3000").trim() || "3000",
+    };
   } catch (error) {
-    console.warn("Frost-innstilling", error);
+    console.warn("Innstillinger", error);
+    return {
+      frostClientId: resolveFrostClientId(FROST_CLIENT_ID, ""),
+      prices: pricesFromSettings(null),
+      byggforskReference: DEFAULT_BYGGFORSK_REFERENCE,
+      fikenIncomeAccount: "3000",
+    };
   }
-  return resolveFrostClientId(FROST_CLIENT_ID, settingsId);
+}
+
+async function createFikenDraft({ kind, lines, title, project, incomeAccount }) {
+  const user = auth.currentUser;
+  if (!user) throw new Error("Ikke innlogget");
+  const token = await user.getIdToken();
+  const response = await fetch("https://europe-west1-einar-borsheim-internkon-ee8b6.cloudfunctions.net/createFikenDraft", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      data: {
+        kind,
+        customerName: project.customerName || "",
+        customerEmail: project.customerEmail || "",
+        address: project.address || "",
+        title: title || project.name || "Drenering",
+        lines: fikenDraftLines(lines),
+        incomeAccount: incomeAccount || "3000",
+      },
+    }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body?.error?.message || "Fiken-funksjonen er ikke tilgjengelig");
+  }
+  return body.result || body;
 }
 
 function mountDrainage(route) {
@@ -1346,6 +1638,9 @@ function mountDrainage(route) {
   let points = [];
   let photos = [];
   let clientId = FROST_CLIENT_ID || "";
+  let prices = pricesFromSettings(null);
+  let defaultReference = DEFAULT_BYGGFORSK_REFERENCE;
+  let incomeAccount = "3000";
   const draw = () => {
     const active = document.activeElement;
     if (active && root.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) {
@@ -1374,6 +1669,20 @@ function mountDrainage(route) {
       model: existing ? formFromDoc(existing) : emptyDrainageForm(),
       photos,
       hasClient: !!clientId,
+      prices,
+      defaultReference,
+      onCreateOffer: (form) => createDrainageOffer(project, form),
+      onSavePrices: async (lines) => {
+        const next = pricesFromLines(lines, prices);
+        await db.collection("settings").doc("app").set({
+          prices: next,
+          updatedAt: stamp(),
+        }, { merge: true });
+        prices = next;
+        toast("Standardprisene er lagret");
+        return next;
+      },
+      onFiken: (payload) => createFikenDraft({ ...payload, project, incomeAccount }),
       onSave: async (form, assessment) => {
         try {
           const ref = existing
@@ -1410,8 +1719,11 @@ function mountDrainage(route) {
     }));
   };
   refresh = () => draw();
-  readFrostClientId().then((id) => {
-    clientId = id;
+  readAppSettings().then((settings) => {
+    clientId = settings.frostClientId;
+    prices = settings.prices;
+    defaultReference = settings.byggforskReference;
+    incomeAccount = settings.fikenIncomeAccount;
     if (route.docId) draw();
   });
   loadDrainagePhotos(route.projectId).then((list) => {
@@ -1745,7 +2057,7 @@ function mountItem(route) {
     }
     const data = snap.data();
     const textValue = route.legacy ? data.caption || "" : data.text || "";
-    const nextShape = [data.approved, data.kind, data.reference, data.source, data.stars, route.legacy].join("|");
+    const nextShape = [data.approved, data.kind, data.reference, data.source, data.stars, data.approvalStatus, data.selectedAlternativeId, route.legacy].join("|");
     if (nextShape !== shape) {
       shape = nextShape;
       buildHead(data, textValue);
@@ -1791,26 +2103,24 @@ function mountItem(route) {
       });
     });
     head.append(field(route.legacy || data.kind === "bilde" ? "Kommentar" : "Tekst", textInput), micButton(textInput));
-    if (!route.legacy && (data.kind === "endring" || data.kind === "tilbud")) {
-      const ask = el("input", { type: "checkbox" });
-      ask.checked = data.approvalRequested === true;
-      ask.addEventListener("change", () => {
-        ref.update({
-          approvalRequested: ask.checked,
-          approvalStatus: ask.checked ? (data.approvalStatus && data.approvalStatus !== "" ? data.approvalStatus : "venter") : "",
-          updatedAt: stamp(),
-        }).catch((error) => {
-          console.error(error);
-          toast("Kunne ikke lagre godkjenningen");
-        });
-      });
-      head.append(el("label", { class: "checkline" }, [
-        ask,
-        el("span", {}, "Be kunden godkjenne dette"),
-      ]));
-      if (data.approvalRequested) {
-        head.append(el("p", { class: "meta" }, approvalLine(data) || "Venter på kunden"));
-      }
+    if (!route.legacy && isOfferItem(data)) {
+      head.append(renderOfferEditor({
+        item: data,
+        onSave: async ({ kind, alternatives }) => {
+          await ref.update({ kind, alternatives, updatedAt: stamp() });
+          toast("Alternativene er lagret");
+        },
+        onSend: async () => {
+          await ref.update({ approvalRequested: true, approvalStatus: "venter", updatedAt: stamp() });
+          toast("Sendt til kunden");
+        },
+        onWithdraw: async () => {
+          await ref.update({ approvalRequested: false, approvalStatus: "", updatedAt: stamp() });
+          toast("Posten er et utkast igjen");
+        },
+        onFiken: (fikenKind) => sendOfferToFiken(projectById(route.projectId), data, fikenKind),
+      }));
+      if (data.approvalRequested) head.append(el("p", { class: "meta" }, approvalLine(data) || "Venter på kunden"));
     }
     if (data.approved !== false) {
       const box = el("input", { type: "checkbox" });

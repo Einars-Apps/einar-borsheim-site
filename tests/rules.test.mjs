@@ -354,6 +354,48 @@ test("kunde kan godkjenne et tilbud, ikke et skjult punkt", async () => {
     approvedByName: "Kari",
   }));
   await assertFails(updateDoc(doc(db, "projects/p1/items/tilbud1"), { text: "Endret tekst" }));
+  await assertFails(updateDoc(doc(db, "projects/p1/items/tilbud1"), {
+    alternatives: [{ id: "a", name: "Dyrere", priceExVat: 99999 }],
+  }));
+});
+
+test("kunde kan velge alternativ, ikke endre prisen", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(db, "projects/p1/items/valg1"), {
+      kind: "tillegg",
+      title: "Brønn",
+      text: "To løsninger",
+      approved: true,
+      approvalRequested: true,
+      approvalStatus: "venter",
+      source: "admin",
+      alternatives: [
+        { id: "standard", name: "Standard", description: "Inkludert", priceExVat: 0 },
+        { id: "anbefalt", name: "Anbefalt løsning", description: "Med brønn", priceExVat: 4500 },
+      ],
+    });
+  });
+  const db = customerDb();
+  await assertFails(updateDoc(doc(db, "projects/p1/items/valg1"), {
+    alternatives: [{ id: "anbefalt", name: "Anbefalt løsning", priceExVat: 1 }],
+  }));
+  await assertFails(updateDoc(doc(db, "projects/p1/items/valg1"), {
+    approvalStatus: "godkjent",
+    approvedAt: serverTimestamp(),
+    approvedBy: "kunde1",
+    approvedByName: "Kari",
+    selectedAlternativeId: "finnes-ikke",
+  }));
+  await assertSucceeds(updateDoc(doc(db, "projects/p1/items/valg1"), {
+    approvalStatus: "godkjent",
+    approvedAt: serverTimestamp(),
+    approvedBy: "kunde1",
+    approvedByName: "Kari",
+    selectedAlternativeId: "anbefalt",
+  }));
 });
 
 test("drenering leses av admin, kunde og offentlig prosjekt", async () => {

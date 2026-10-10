@@ -23,7 +23,18 @@ import {
   getDownloadURL,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-storage.js";
 import { approvalLine, formatDay, formatWhen, isCompleted } from "../www/js/logic.js";
-import { reportIsPublished, verdictLabel } from "../www/js/drainage.js";
+import {
+  alternativeHeading,
+  alternativePriceText,
+  chosenAlternative,
+  customerDecisionError,
+  customerDecisionPatch,
+  isOfferItem,
+  offerStatus,
+  offerStatusLabel,
+  offerTypeLabel,
+} from "../www/js/offers.js";
+import { drainageReportText, reportIsPublished, verdictLabel } from "../www/js/drainage.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
 
 const app = initializeApp(firebaseConfig);
@@ -170,31 +181,19 @@ function render() {
       drainage.append(el("article", {}, [
         el("h3", {}, point.name || "Strekk"),
         el("p", { class: "muted" }, verdictLabel(point.verdict)),
-        point.summary ? el("p", { class: "pre" }, point.summary) : null,
+        drainageReportText(point) ? el("p", { class: "pre" }, drainageReportText(point)) : null,
       ]));
     }
     viewProject.append(drainage);
   }
 
-  const pendingDecisions = items.filter((item) =>
-    (item.kind === "tilbud" || item.kind === "endring")
-    && item.approvalRequested === true
-    && item.approved === true
-    && item.approvalStatus !== "godkjent"
-    && item.approvalStatus !== "avslatt"
-  );
-  if (pendingDecisions.length) {
+  const offerPosts = items.filter((item) => isOfferItem(item) && item.approved === true && item.approvalRequested === true);
+  if (offerPosts.length) {
     const box = el("section", { class: "k-card k-stack" }, [
-      el("h2", {}, "Til godkjenning"),
-      el("p", { class: "muted" }, "Ett trykk er nok. Tidspunkt og navn lagres i rapporten."),
+      el("h2", {}, "Tilbud og endringer"),
+      el("p", { class: "muted" }, "Velg ett alternativ og trykk Godkjenn valgt løsning. Tidspunkt og navn lagres. Pris kr 0,00 er inkludert."),
     ]);
-    for (const item of pendingDecisions) {
-      box.append(el("article", { class: "k-card" }, [
-        el("h3", {}, item.title || (item.kind === "tilbud" ? "Tilbud" : "Endring")),
-        item.text ? el("p", { class: "pre" }, item.text) : null,
-        decisionButtons(item),
-      ]));
-    }
+    for (const item of offerPosts) box.append(offerCard(item));
     viewProject.append(box);
   }
 
@@ -205,7 +204,7 @@ function render() {
     ["avvik", "Avvik"],
   ];
   for (const [kind, title] of groups) {
-    const rows = items.filter((item) => item.kind === kind && item.approved === true);
+    const rows = items.filter((item) => item.kind === kind && item.approved === true && !isOfferItem(item));
     const section = el("section", { class: "k-card k-stack" }, [el("h2", {}, title)]);
     if (!rows.length && !(kind === "bilde" && legacyPhotos.length)) section.append(el("p", { class: "muted" }, "Ingenting er lagt ut her ennå."));
     for (const item of rows) section.append(itemCard(item));
@@ -514,11 +513,72 @@ function decisionButtons(item) {
   ]);
 }
 
-async function decide(item, status) {
+function offerCard(item) {
+  const status = offerStatus(item);
+  const alternatives = item.alternatives || [];
+  const chosen = chosenAlternative(item);
+  let selected = "";
+  const body = [
+    el("h3", {}, item.title || offerTypeLabel(item.kind)),
+    el("p", { class: "muted" }, `${offerTypeLabel(item.kind)} · ${offerStatusLabel(status)}`),
+    item.text ? el("p", { class: "pre" }, item.text) : null,
+  ];
+  if (status === "sendt" && alternatives.length) {
+    const choices = el("div", { class: "choices" });
+    for (const alternative of alternatives) {
+      const input = el("input", { type: "radio", name: `alt-${item.id}`, value: alternative.id });
+      input.addEventListener("change", () => { selected = alternative.id; });
+      choices.append(el("label", { class: "choice" }, [
+        input,
+        el("span", {}, [
+          el("strong", {}, alternativeHeading(alternative)),
+          alternative.description ? el("span", { class: "muted" }, alternative.description) : null,
+          el("span", {}, alternativePriceText(alternative)),
+        ]),
+      ]));
+    }
+    body.push(choices, el("div", { class: "k-actions" }, [
+      el("button", {
+        type: "button",
+        class: "btn btn-primary",
+        onclick: () => {
+          const error = customerDecisionError(item, "godkjent", selected);
+          if (error) {
+            alert(error);
+            return;
+          }
+          decide(item, "godkjent", selected);
+        },
+      }, "Godkjenn valgt løsning"),
+      el("button", {
+        type: "button",
+        class: "btn btn-ghost",
+        onclick: () => decide(item, "avslatt"),
+      }, "Avslå"),
+    ]));
+  } else if (status === "sendt") {
+    body.push(decisionButtons(item));
+  } else if (chosen) {
+    body.push(el("p", {}, `Valgt løsning: ${alternativeHeading(chosen)}. ${alternativePriceText(chosen)}`));
+    body.push(approvalNote(item));
+  } else {
+    body.push(approvalNote(item));
+  }
+  const card = el("article", { class: "k-card", id: `item-${item.id}` }, body);
+  card.append(el("div", { class: "k-stack", id: `media-${item.id}` }), el("div", { id: `comments-${item.id}` }));
+  return card;
+}
+
+async function decide(item, status, alternativeId = "") {
   const name = String(project?.customerName || "Kunde").trim().slice(0, 79) || "Kunde";
+  const error = customerDecisionError(item, status, alternativeId);
+  if (error) {
+    alert(error);
+    return;
+  }
   try {
     await updateDoc(doc(db, "projects", projectId, "items", item.id), {
-      approvalStatus: status,
+      ...customerDecisionPatch(item, status, alternativeId),
       approvedAt: serverTimestamp(),
       approvedBy: uid,
       approvedByName: name,
