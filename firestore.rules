@@ -78,6 +78,36 @@ service cloud.firestore {
       );
     }
 
+    // Logg for kostnad. Mengde og pris kan bare skrives av admin, via quantities og denne loggen.
+    function validCostLog() {
+      return request.resource.data.keys().hasOnly([
+          'at', 'by', 'byName', 'lineId', 'label', 'field', 'from', 'to', 'unit', 'text'
+        ])
+        && request.resource.data.at == request.time
+        && request.resource.data.by == request.auth.uid
+        && request.resource.data.byName is string
+        && request.resource.data.byName.size() > 0
+        && request.resource.data.byName.size() < 80
+        && request.resource.data.lineId is string
+        && request.resource.data.lineId.size() > 0
+        && request.resource.data.lineId.size() < 40
+        && request.resource.data.label is string
+        && request.resource.data.label.size() > 0
+        && request.resource.data.label.size() < 80
+        && request.resource.data.field in ['planned', 'done', 'unitPrice', 'agreedExVat']
+        && request.resource.data.from is number
+        && request.resource.data.to is number
+        && request.resource.data.from >= 0
+        && request.resource.data.to >= 0
+        && request.resource.data.from < 100000000
+        && request.resource.data.to < 100000000
+        && request.resource.data.unit is string
+        && request.resource.data.unit.size() < 20
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() < 300;
+    }
+
     // Kunden kan bare sette valg og godkjenning. Pris, tekst og alternativer blir stående.
     function validCustomerDecision() {
       let keys = request.resource.data.diff(resource.data).affectedKeys();
@@ -322,6 +352,19 @@ service cloud.firestore {
       match /drainage/{docId} {
         allow read: if isAdmin() || hasAccess(projectId) || isPublic(projectId);
         allow create, update, delete: if isAdmin();
+      }
+
+      // Mengder og enhetspris i kostnadsoversikten. Kunden kan lese. Bare admin skriver.
+      match /quantities/{docId} {
+        allow read: if isAdmin() || hasAccess(projectId);
+        allow create, update, delete: if isAdmin();
+      }
+
+      // Historikk for mengder og avtalt pris. Kunden kan lese. Bare admin legger til, og posten endres ikke.
+      match /costLog/{entryId} {
+        allow read: if isAdmin() || hasAccess(projectId);
+        allow create: if isAdmin() && validCostLog();
+        allow update, delete: if false;
       }
 
       // Toveis meldinger mellom admin og kunde. Ikke offentlig, selv om prosjektet er en referanse.

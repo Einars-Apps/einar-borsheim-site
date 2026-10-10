@@ -35,6 +35,8 @@ import {
   offerTypeLabel,
 } from "../www/js/offers.js";
 import { drainageReportText, reportIsPublished, verdictLabel } from "../www/js/drainage.js";
+import { changeText, liveCost } from "../www/js/cost.js";
+import { renderCostOverview } from "../www/js/cost-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
 
 const app = initializeApp(firebaseConfig);
@@ -59,6 +61,9 @@ let approvedDocs = [];
 let ownDocs = [];
 let thread = [];
 let drainagePoints = [];
+let costState = null;
+let costHistory = [];
+let previewChoices = {};
 
 function show(view) {
   for (const node of [viewLoading, viewError, viewProject]) node.classList.add("hidden");
@@ -127,11 +132,37 @@ function mergedItems() {
 let renderAfterBlur = false;
 let notice = "";
 
+function paintCost() {
+  const slot = document.getElementById("cost-slot");
+  if (!slot) return;
+  const items = mergedItems();
+  for (const item of items) {
+    if (offerStatus(item) !== "sendt") delete previewChoices[item.id];
+  }
+  const summary = liveCost({
+    cost: costState,
+    prices: {},
+    items,
+    previewChoices,
+  });
+  slot.replaceChildren(renderCostOverview({
+    summary,
+    history: costHistory.map((entry) => ({
+      when: formatWhen(entry.at),
+      byName: entry.byName || "Einar",
+      text: entry.text || changeText(entry),
+    })),
+    editable: false,
+    showPreview: true,
+  }));
+}
+
 function render() {
   if (!project) return;
   const active = document.activeElement;
   const typing = active && viewProject.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
   if (typing) {
+    paintCost();
     if (!renderAfterBlur) {
       renderAfterBlur = true;
       active.addEventListener("blur", () => {
@@ -154,6 +185,7 @@ function render() {
     finished ? el("p", { class: "muted" }, `Ferdig ${formatDay(project.completedAt) || ""}`.trim()) : null,
     finished ? pdfSlot : el("p", { class: "muted" }, "Sluttrapporten kan lastes ned når oppdraget er ferdig og godkjent."),
   ]));
+  viewProject.append(el("div", { id: "cost-slot" }));
   const knownPdf = displayUrl(project.pdfUrl);
   if (finished && project.pdfPath === pdfPath) {
     getDownloadURL(ref(storage, pdfPath)).then((url) => {
@@ -242,6 +274,7 @@ function render() {
     rate.append(ratingForm());
   }
   viewProject.append(rate);
+  paintCost();
 
   for (const item of items) hydrate(item);
 }
@@ -525,9 +558,15 @@ function offerCard(item) {
   ];
   if (status === "sendt" && alternatives.length) {
     const choices = el("div", { class: "choices" });
+    selected = previewChoices[item.id] || "";
     for (const alternative of alternatives) {
       const input = el("input", { type: "radio", name: `alt-${item.id}`, value: alternative.id });
-      input.addEventListener("change", () => { selected = alternative.id; });
+      if (selected === alternative.id) input.checked = true;
+      input.addEventListener("change", () => {
+        selected = alternative.id;
+        previewChoices[item.id] = alternative.id;
+        paintCost();
+      });
       choices.append(el("label", { class: "choice" }, [
         input,
         el("span", {}, [
@@ -755,6 +794,14 @@ async function init() {
       project = { id: snap.id, ...snap.data() };
       render();
     });
+    onSnapshot(doc(db, "projects", projectId, "quantities", "live"), (snap) => {
+      costState = snap.exists() ? snap.data() : null;
+      if (document.getElementById("cost-slot")) paintCost();
+    }, (error) => console.error(error));
+    onSnapshot(query(collection(db, "projects", projectId, "costLog"), orderBy("at", "desc")), (snap) => {
+      costHistory = snap.docs.map((docSnap) => docSnap.data());
+      if (document.getElementById("cost-slot")) paintCost();
+    }, (error) => console.error(error));
     onSnapshot(query(collection(db, "projects", projectId, "photos"), where("approved", "==", true)), (snap) => {
       legacyPhotos = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       render();

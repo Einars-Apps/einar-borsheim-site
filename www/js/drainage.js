@@ -583,6 +583,7 @@ export const WELL_TYPES = [
 export const VAT_RATE = 0.25;
 
 export const DEFAULT_PRICES = {
+  groftM: 350,
   gravingM3: 450,
   drensrorM: 180,
   bronnStk: 4500,
@@ -594,7 +595,8 @@ export const DEFAULT_PRICES = {
   transportTur: 1500,
 };
 
-const PRICE_LINES = [
+export const PRICE_LINES = [
+  ["groft", "Grøft", "m", "groftM"],
   ["graving", "Graving", "m³", "gravingM3"],
   ["drensror", "Drensrør", "m", "drensrorM"],
   ["bronn", "Brønn eller kassett", "stk", "bronnStk"],

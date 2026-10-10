@@ -1,4 +1,4 @@
-import { VAT_RATE, fikenDraftLines } from "./drainage.js";
+import { VAT_RATE, costCsv, fikenDraftLines } from "./drainage.js";
 
 export const OFFER_KINDS = ["tilbud", "endring", "tillegg"];
 
@@ -147,6 +147,27 @@ export function fikenLinesFromOffer(item) {
 
 export function fikenDraftFromOffer(item) {
   return fikenDraftLines(fikenLinesFromOffer(item));
+}
+
+export function fikenProjectStatus(item, project) {
+  if (!item?.fikenSynced) return "";
+  const name = String(project?.fikenProjectName || "").replace(/\s+/g, " ").trim();
+  return name ? `Lagt til i Fiken-prosjekt ${name}` : "Lagt til i Fiken-prosjekt";
+}
+
+export function fikenProjectFallback(item, project) {
+  const alternative = chosenAlternative(item);
+  const lines = [
+    `${offerTypeLabel(item?.kind)}: ${item?.title || "Post"}`,
+    alternative?.name || "",
+    alternative?.description || "",
+    alternative ? alternativePriceText(alternative) : "",
+    item?.approvedByName ? `Godkjent av ${item.approvedByName}` : "",
+    project?.id ? `Internkontroll-prosjekt ${project.id}` : "",
+    project?.id ? `https://einar-borsheim.com/kunde/?p=${encodeURIComponent(project.id)}` : "",
+    costCsv(fikenLinesFromOffer(item)),
+  ];
+  return lines.map((line) => String(line || "").trim()).filter(Boolean).join("\n");
 }
 
 export function customerDecisionError(item, status, alternativeId) {

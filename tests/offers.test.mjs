@@ -9,6 +9,8 @@ import {
   customerDecisionPatch,
   drainageOfferFields,
   fikenDraftFromOffer,
+  fikenProjectFallback,
+  fikenProjectStatus,
   formatOfferSum,
   offerDecisionText,
   offerShareText,
@@ -118,4 +120,13 @@ test("Fiken-linje, deling og adresse", () => {
     adresser: [{ adressetekst: "Lensmannslia 60", postnummer: "1386", poststed: "ASKER" }],
   }), "Lensmannslia 60, 1386 ASKER");
   assert.equal(addressFromGeonorge({ adresser: [] }), "");
+  assert.equal(fikenProjectStatus({ ...item, fikenSynced: true }, { fikenProjectName: "Hagen" }), "Lagt til i Fiken-prosjekt Hagen");
+  assert.equal(fikenProjectStatus(item, { fikenProjectName: "Hagen" }), "");
+  const fallback = fikenProjectFallback({ ...item, approvedByName: "Kari" }, { id: "abc123" });
+  assert.match(fallback, /Tilbud: Nordvegg/);
+  assert.match(fallback, /Anbefalt løsning/);
+  assert.match(fallback, /inkl\. mva/);
+  assert.match(fallback, /Kari/);
+  assert.match(fallback, /abc123/);
+  assert.match(fallback, /Beskrivelse;Antall/);
 });

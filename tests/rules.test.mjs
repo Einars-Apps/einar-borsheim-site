@@ -415,6 +415,62 @@ test("drenering leses av admin, kunde og offentlig prosjekt", async () => {
   await assertFails(getDoc(doc(customerDb(), "settings/app")));
 });
 
+test("kunde kan lese mengder, men ikke skrive dem eller loggen", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(context.firestore(), "projects/p1/quantities/live"), {
+      agreedExVat: 10000,
+      lines: { groft: { planned: 40, done: 28, unitPrice: 350 } },
+    });
+  });
+  const customer = customerDb();
+  const snap = await assertSucceeds(getDoc(doc(customer, "projects/p1/quantities/live")));
+  assert.equal(snap.data().agreedExVat, 10000);
+  await assertFails(setDoc(doc(customer, "projects/p1/quantities/live"), { agreedExVat: 1 }));
+  await assertFails(updateDoc(doc(customer, "projects/p1"), { costOverview: { agreedExVat: 1 } }));
+  await assertFails(addDoc(collection(customer, "projects/p1/costLog"), {
+    at: serverTimestamp(),
+    by: "kunde1",
+    byName: "Kari",
+    lineId: "groft",
+    label: "Grøft",
+    field: "done",
+    from: 0,
+    to: 99,
+    unit: "m",
+    text: "Grøft, utført: 0 → 99 m",
+  }));
+  await assertSucceeds(setDoc(doc(adminDb(), "projects/p1/quantities/live"), {
+    agreedExVat: 12000,
+    lines: { groft: { planned: 40, done: 30, unitPrice: 350 } },
+  }));
+  await assertSucceeds(addDoc(collection(adminDb(), "projects/p1/costLog"), {
+    at: serverTimestamp(),
+    by: "admin-user",
+    byName: "Einar",
+    lineId: "groft",
+    label: "Grøft",
+    field: "done",
+    from: 28,
+    to: 30,
+    unit: "m",
+    text: "Grøft, utført: 28 → 30 m",
+  }));
+  await assertFails(addDoc(collection(adminDb(), "projects/p1/costLog"), {
+    at: serverTimestamp(),
+    by: "noen-annen",
+    byName: "Einar",
+    lineId: "groft",
+    label: "Grøft",
+    field: "done",
+    from: 1,
+    to: 2,
+    unit: "m",
+    text: "feil bruker",
+  }));
+});
+
 test("e-postkø og maler er bare for admin", async () => {
   await assertFails(getDoc(doc(strangerDb(), "mail/x")));
   await assertFails(addDoc(collection(customerDb(), "mail"), {
