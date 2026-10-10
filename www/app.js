@@ -13,6 +13,7 @@ import {
   doc,
   updateDoc,
   deleteDoc,
+  getDocs,
   onSnapshot,
   query,
   orderBy,
@@ -71,6 +72,7 @@ const projectTitleEl = document.getElementById("project-title");
 const projectDescViewEl = document.getElementById("project-desc-view");
 const shareBtn = document.getElementById("share-btn");
 const exportPdfBtn = document.getElementById("export-pdf-btn");
+const deleteProjectBtn = document.getElementById("delete-project-btn");
 const reportTextEl = document.getElementById("report-text");
 const cameraBtn = document.getElementById("camera-btn");
 const galleryBtn = document.getElementById("gallery-btn");
@@ -248,6 +250,36 @@ shareBtn.addEventListener("click", async () => {
     alert("Lenke kopiert til utklippstavlen:\n" + url);
   } catch {
     alert(url);
+  }
+});
+
+deleteProjectBtn.addEventListener("click", async () => {
+  if (!currentProject) return;
+  const sure = confirm(
+    `Slette prosjektet "${currentProject.name}" permanent, inkludert alle bilder? Dette kan ikke angres.`
+  );
+  if (!sure) return;
+  deleteProjectBtn.disabled = true;
+  deleteProjectBtn.textContent = "Sletter...";
+  try {
+    const photosSnap = await getDocs(collection(db, "projects", currentProject.id, "photos"));
+    for (const photoDoc of photosSnap.docs) {
+      const data = photoDoc.data();
+      if (data.storagePath) {
+        await deleteObject(ref(storage, data.storagePath)).catch(() => {});
+      }
+      await deleteDoc(photoDoc.ref);
+    }
+    await deleteDoc(doc(db, "projects", currentProject.id));
+    if (unsubscribePhotos) unsubscribePhotos();
+    currentProject = null;
+    showView(viewProjects);
+  } catch (err) {
+    console.error("Kunne ikke slette prosjekt", err.code, err.message);
+    alert(`Kunne ikke slette prosjekt (${err.code || err.message}).`);
+  } finally {
+    deleteProjectBtn.disabled = false;
+    deleteProjectBtn.textContent = "🗑️ Slett prosjekt";
   }
 });
 

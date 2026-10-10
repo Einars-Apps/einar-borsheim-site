@@ -8,6 +8,11 @@
   margin-bottom: 1.5rem;
 }
 
+.delete-project-btn {
+  color: #b3261e;
+  border-color: #b3261e55;
+}
+
 .hidden {
   display: none !important;
 }
