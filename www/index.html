@@ -53,6 +53,16 @@
         </div>
         <ul id="project-list" class="project-list"></ul>
         <p id="projects-empty" class="muted hidden">Ingen prosjekter ennå. Opprett ditt første prosjekt over.</p>
+        <button id="open-trash-btn" class="btn btn-ghost trash-link-btn">🗑️ Papirkurv</button>
+      </section>
+
+      <!-- Papirkurv -->
+      <section id="view-trash" class="panel app-panel hidden">
+        <button id="back-from-trash" class="btn btn-ghost">&larr; Alle prosjekter</button>
+        <h1>Papirkurv</h1>
+        <p class="muted">Slettede prosjekter fjernes automatisk permanent etter 3 måneder.</p>
+        <ul id="trash-list" class="project-list"></ul>
+        <p id="trash-empty" class="muted hidden">Papirkurven er tom.</p>
       </section>
 
       <!-- Prosjektdetalj -->
@@ -61,12 +71,25 @@
         <div class="view-header">
           <h1 id="project-title">Prosjekt</h1>
           <div class="btn-row">
-            <button id="share-btn" class="btn btn-ghost">🔗 Del med kunde</button>
+            <button id="toggle-done-btn" class="btn btn-ghost">✅ Merk som ferdig</button>
             <button id="export-pdf-btn" class="btn btn-primary">Lag PDF-rapport</button>
-            <button id="delete-project-btn" class="btn btn-ghost delete-project-btn">🗑️ Slett prosjekt</button>
+            <button id="delete-project-btn" class="btn btn-ghost delete-project-btn">🗑️ Flytt til papirkurv</button>
           </div>
         </div>
         <p id="project-desc-view" class="muted"></p>
+        <p id="project-status-badge" class="status-badge hidden">✅ Ferdig</p>
+
+        <div class="customer-box">
+          <h2>Kunde / innsyn</h2>
+          <label for="customer-name">Kundenavn (valgfritt)</label>
+          <input type="text" id="customer-name" placeholder="F.eks. Kari Nordmann" />
+          <label for="customer-link">Lenke kunden kan åpne</label>
+          <div class="customer-link-row">
+            <input type="text" id="customer-link" readonly />
+            <button id="copy-link-btn" class="btn btn-ghost">Kopier</button>
+            <button id="share-btn" class="btn btn-ghost">🔗 Del</button>
+          </div>
+        </div>
 
         <label for="report-text">Rapporttekst (valgfritt, tas med i PDF)</label>
         <textarea id="report-text" rows="3" placeholder="Beskriv status, funn, avvik..."></textarea>

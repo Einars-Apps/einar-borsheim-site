@@ -13,6 +13,63 @@
   border-color: #b3261e55;
 }
 
+.trash-link-btn {
+  margin-top: 1rem;
+}
+
+.status-badge {
+  display: inline-block;
+  background: #e6f4ea;
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 0.2rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.project-list li.done-project {
+  opacity: 0.65;
+}
+
+.project-list .trash-days {
+  font-size: 0.78rem;
+  color: var(--accent-2);
+}
+
+.customer-box {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  margin: 1rem 0;
+}
+
+.customer-box label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 0.4rem;
+}
+
+.customer-box input {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+.customer-link-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.customer-link-row input {
+  flex: 1;
+}
+
 .section-divider {
   border: none;
   border-top: 1px solid var(--line);

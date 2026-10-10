@@ -53,6 +53,7 @@ const Filesystem = window.Capacitor?.Plugins?.Filesystem;
 const viewLogin = document.getElementById("view-login");
 const viewProjects = document.getElementById("view-projects");
 const viewProject = document.getElementById("view-project");
+const viewTrash = document.getElementById("view-trash");
 const userEmailEl = document.getElementById("user-email");
 const logoutLink = document.getElementById("logout-link");
 
@@ -67,10 +68,19 @@ const saveProjectBtn = document.getElementById("save-project-btn");
 const cancelProjectBtn = document.getElementById("cancel-project-btn");
 const projectListEl = document.getElementById("project-list");
 const projectsEmptyEl = document.getElementById("projects-empty");
+const openTrashBtn = document.getElementById("open-trash-btn");
+const backFromTrashBtn = document.getElementById("back-from-trash");
+const trashListEl = document.getElementById("trash-list");
+const trashEmptyEl = document.getElementById("trash-empty");
 
 const backToProjectsBtn = document.getElementById("back-to-projects");
 const projectTitleEl = document.getElementById("project-title");
 const projectDescViewEl = document.getElementById("project-desc-view");
+const projectStatusBadge = document.getElementById("project-status-badge");
+const toggleDoneBtn = document.getElementById("toggle-done-btn");
+const customerNameInput = document.getElementById("customer-name");
+const customerLinkInput = document.getElementById("customer-link");
+const copyLinkBtn = document.getElementById("copy-link-btn");
 const shareBtn = document.getElementById("share-btn");
 const exportPdfBtn = document.getElementById("export-pdf-btn");
 const deleteProjectBtn = document.getElementById("delete-project-btn");
@@ -95,7 +105,7 @@ let currentPhotos = [];
 let reportSaveTimeout;
 
 function showView(view) {
-  [viewLogin, viewProjects, viewProject].forEach((v) => v.classList.add("hidden"));
+  [viewLogin, viewProjects, viewProject, viewTrash].forEach((v) => v.classList.add("hidden"));
   view.classList.remove("hidden");
 }
 
@@ -144,29 +154,18 @@ logoutLink.addEventListener("click", async (e) => {
 });
 
 // --- Prosjekter ---
+let allProjects = [];
+const TRASH_RETENTION_DAYS = 90;
+
 function listenToProjects() {
   const q = query(collection(db, "projects"), orderBy("createdAt", "desc"));
   unsubscribeProjects = onSnapshot(
     q,
     (snapshot) => {
-      projectListEl.innerHTML = "";
-      if (snapshot.empty) {
-        projectsEmptyEl.classList.remove("hidden");
-        return;
-      }
-      projectsEmptyEl.classList.add("hidden");
-      snapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        const li = document.createElement("li");
-        li.innerHTML = `
-          <span class="project-name"></span>
-          <span class="project-desc"></span>
-        `;
-        li.querySelector(".project-name").textContent = data.name;
-        li.querySelector(".project-desc").textContent = data.description || "";
-        li.addEventListener("click", () => openProject(docSnap.id, data));
-        projectListEl.appendChild(li);
-      });
+      allProjects = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      renderProjectList();
+      renderTrashList();
+      purgeOldTrash();
     },
     (err) => {
       console.error("Kunne ikke hente prosjekter:", err.code, err.message);
@@ -174,6 +173,94 @@ function listenToProjects() {
     }
   );
 }
+
+function renderProjectList() {
+  const active = allProjects.filter((p) => !p.trashed);
+  projectListEl.innerHTML = "";
+  projectsEmptyEl.classList.toggle("hidden", active.length > 0);
+  active.forEach((data) => {
+    const li = document.createElement("li");
+    li.className = data.status === "done" ? "done-project" : "";
+    li.innerHTML = `
+      <span class="project-name"></span>
+      <span class="project-desc"></span>
+    `;
+    li.querySelector(".project-name").textContent = (data.status === "done" ? "✅ " : "") + data.name;
+    li.querySelector(".project-desc").textContent = data.description || "";
+    li.addEventListener("click", () => openProject(data.id, data));
+    projectListEl.appendChild(li);
+  });
+}
+
+function daysSince(timestamp) {
+  if (!timestamp?.toDate) return 0;
+  return Math.floor((Date.now() - timestamp.toDate().getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function renderTrashList() {
+  const trashed = allProjects.filter((p) => p.trashed);
+  trashListEl.innerHTML = "";
+  trashEmptyEl.classList.toggle("hidden", trashed.length > 0);
+  trashed.forEach((data) => {
+    const daysLeft = Math.max(0, TRASH_RETENTION_DAYS - daysSince(data.trashedAt));
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <span class="project-name"></span>
+      <span class="project-desc trash-days"></span>
+      <div class="btn-row">
+        <button class="btn btn-ghost restore-btn">↩️ Gjenopprett</button>
+        <button class="btn btn-ghost delete-project-btn purge-btn">Slett permanent</button>
+      </div>
+    `;
+    li.querySelector(".project-name").textContent = data.name;
+    li.querySelector(".trash-days").textContent = `Slettes permanent om ${daysLeft} dager`;
+    li.querySelector(".restore-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      updateDoc(doc(db, "projects", data.id), { trashed: false, trashedAt: null });
+    });
+    li.querySelector(".purge-btn").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Slette "${data.name}" permanent med en gang? Dette kan ikke angres.`)) return;
+      await permanentlyDeleteProject(data.id);
+    });
+    trashListEl.appendChild(li);
+  });
+}
+
+async function purgeOldTrash() {
+  const toPurge = allProjects.filter((p) => p.trashed && daysSince(p.trashedAt) >= TRASH_RETENTION_DAYS);
+  for (const p of toPurge) {
+    await permanentlyDeleteProject(p.id).catch((err) => console.error("Auto-sletting feilet", err));
+  }
+}
+
+async function permanentlyDeleteProject(projectId) {
+  const photosSnap = await getDocs(collection(db, "projects", projectId, "photos"));
+  for (const photoDoc of photosSnap.docs) {
+    const data = photoDoc.data();
+    if (data.storagePath) {
+      await deleteObject(ref(storage, data.storagePath)).catch(() => {});
+    }
+    await deleteDoc(photoDoc.ref);
+  }
+  const messagesSnap = await getDocs(collection(db, "projects", projectId, "messages"));
+  for (const msgDoc of messagesSnap.docs) {
+    await deleteDoc(msgDoc.ref);
+  }
+  const accessSnap = await getDocs(collection(db, "projects", projectId, "access"));
+  for (const accessDoc of accessSnap.docs) {
+    await deleteDoc(accessDoc.ref);
+  }
+  await deleteDoc(doc(db, "projects", projectId));
+}
+
+openTrashBtn.addEventListener("click", () => {
+  showView(viewTrash);
+});
+
+backFromTrashBtn.addEventListener("click", () => {
+  showView(viewProjects);
+});
 
 newProjectBtn.addEventListener("click", () => {
   newProjectForm.classList.toggle("hidden");
@@ -193,6 +280,9 @@ saveProjectBtn.addEventListener("click", async () => {
       name,
       description: projectDescInput.value.trim(),
       reportText: "",
+      customerName: "",
+      status: "active",
+      trashed: false,
       shareToken: randomToken(),
       createdAt: serverTimestamp(),
       createdBy: auth.currentUser?.email || "ukjent",
@@ -213,15 +303,56 @@ function openProject(id, data) {
     name: data.name,
     description: data.description || "",
     shareToken: data.shareToken || "",
+    status: data.status || "active",
   };
   projectTitleEl.textContent = currentProject.name;
   projectDescViewEl.textContent = currentProject.description;
   reportTextEl.value = data.reportText || "";
+  customerNameInput.value = data.customerName || "";
+  customerLinkInput.value = `${CUSTOMER_PORTAL_URL}?p=${id}&t=${currentProject.shareToken}`;
+  updateDoneUi();
   showView(viewProject);
   listenToPhotos(id);
   listenToMessages(id);
   renderPendingQueue();
 }
+
+function updateDoneUi() {
+  const isDone = currentProject?.status === "done";
+  projectStatusBadge.classList.toggle("hidden", !isDone);
+  toggleDoneBtn.textContent = isDone ? "↩️ Merk som aktiv" : "✅ Merk som ferdig";
+}
+
+toggleDoneBtn.addEventListener("click", async () => {
+  if (!currentProject) return;
+  const newStatus = currentProject.status === "done" ? "active" : "done";
+  currentProject.status = newStatus;
+  updateDoneUi();
+  await updateDoc(doc(db, "projects", currentProject.id), { status: newStatus }).catch((err) =>
+    console.error("Kunne ikke oppdatere status", err)
+  );
+});
+
+let customerNameSaveTimeout;
+customerNameInput.addEventListener("input", () => {
+  clearTimeout(customerNameSaveTimeout);
+  customerNameSaveTimeout = setTimeout(() => {
+    if (!currentProject) return;
+    updateDoc(doc(db, "projects", currentProject.id), { customerName: customerNameInput.value.trim() }).catch(
+      (err) => console.error("Kunne ikke lagre kundenavn", err)
+    );
+  }, 600);
+});
+
+copyLinkBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(customerLinkInput.value);
+    copyLinkBtn.textContent = "Kopiert!";
+    setTimeout(() => (copyLinkBtn.textContent = "Kopier"), 1500);
+  } catch {
+    alert(customerLinkInput.value);
+  }
+});
 
 backToProjectsBtn.addEventListener("click", () => {
   if (unsubscribePhotos) unsubscribePhotos();
@@ -308,30 +439,24 @@ shareBtn.addEventListener("click", async () => {
 deleteProjectBtn.addEventListener("click", async () => {
   if (!currentProject) return;
   const sure = confirm(
-    `Slette prosjektet "${currentProject.name}" permanent, inkludert alle bilder? Dette kan ikke angres.`
+    `Flytte "${currentProject.name}" til papirkurven? Den slettes permanent automatisk etter 3 måneder, eller du kan gjenopprette den når som helst før det.`
   );
   if (!sure) return;
   deleteProjectBtn.disabled = true;
-  deleteProjectBtn.textContent = "Sletter...";
   try {
-    const photosSnap = await getDocs(collection(db, "projects", currentProject.id, "photos"));
-    for (const photoDoc of photosSnap.docs) {
-      const data = photoDoc.data();
-      if (data.storagePath) {
-        await deleteObject(ref(storage, data.storagePath)).catch(() => {});
-      }
-      await deleteDoc(photoDoc.ref);
-    }
-    await deleteDoc(doc(db, "projects", currentProject.id));
+    await updateDoc(doc(db, "projects", currentProject.id), {
+      trashed: true,
+      trashedAt: serverTimestamp(),
+    });
     if (unsubscribePhotos) unsubscribePhotos();
+    if (unsubscribeMessages) unsubscribeMessages();
     currentProject = null;
     showView(viewProjects);
   } catch (err) {
-    console.error("Kunne ikke slette prosjekt", err.code, err.message);
-    alert(`Kunne ikke slette prosjekt (${err.code || err.message}).`);
+    console.error("Kunne ikke flytte prosjekt til papirkurv", err.code, err.message);
+    alert(`Kunne ikke flytte prosjekt til papirkurv (${err.code || err.message}).`);
   } finally {
     deleteProjectBtn.disabled = false;
-    deleteProjectBtn.textContent = "🗑️ Slett prosjekt";
   }
 });
 
