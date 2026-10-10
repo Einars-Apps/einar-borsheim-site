@@ -1,12 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  DEFAULT_TEMPLATES,
+  approvalLine,
   buildLocalDraft,
   buildReferenceDoc,
   dueReminderCount,
+  isCompleted,
+  missingTemplateSteps,
+  phaseLabel,
   portalUrl,
   reminderPlan,
   reminderWhenLabel,
+  trashDaysLeft,
 } from "../www/js/logic.js";
 
 const secretProject = {
@@ -120,6 +126,48 @@ test("utkast fra notater tar med godkjente punkt og hopper over ventende", () =>
   assert.match(draft, /Trappen/);
   assert.match(draft, /Avklart med kunde/);
   assert.equal(draft.includes("Ventende beskjed"), false);
+});
+
+test("pågår, tilbud, fullført og papirkurv leser begge statusord", () => {
+  assert.equal(isCompleted({ status: "fullfort" }), true);
+  assert.equal(isCompleted({ status: "done" }), true);
+  assert.equal(isCompleted({ status: "active" }), false);
+  assert.equal(isCompleted({ status: "aktiv" }), false);
+  assert.equal(phaseLabel({ status: "tilbud" }), "Tilbud");
+  assert.equal(phaseLabel({ status: "active" }), "Pågår");
+  assert.equal(phaseLabel({ status: "done" }), "Fullført");
+  assert.equal(phaseLabel({ status: "aktiv", trashed: true }), "I papirkurven");
+  const trashedAt = new Date("2026-01-01T00:00:00Z");
+  assert.equal(trashDaysLeft({ trashed: true, trashedAt }, new Date("2026-01-11T00:00:00Z")), 80);
+  assert.equal(trashDaysLeft({ trashed: false }), null);
+});
+
+test("bildemal og godkjenning", () => {
+  const drenering = DEFAULT_TEMPLATES.find((template) => template.id === "drenering");
+  assert.deepEqual(drenering.steps, ["Før", "Grøft", "Rør/duk", "Tilbakefylling", "Ferdig"]);
+  const missing = missingTemplateSteps(drenering.steps, [
+    { kind: "bilde", step: "Før", approved: true },
+    { kind: "bilde", step: "Grøft", approved: false },
+  ]);
+  assert.deepEqual(missing, ["Grøft", "Rør/duk", "Tilbakefylling", "Ferdig"]);
+  const line = approvalLine({
+    approvalRequested: true,
+    approvalStatus: "godkjent",
+    approvedByName: "Kari",
+    approvedAt: "2026-03-02T10:00:00Z",
+  });
+  assert.match(line, /Godkjent av kunde \(Kari\)/);
+  assert.match(buildLocalDraft({ name: "Drenering" }, [{
+    id: "1",
+    kind: "tilbud",
+    title: "Ekstra kummer",
+    text: "To kummer til",
+    approved: true,
+    approvalRequested: true,
+    approvalStatus: "godkjent",
+    approvedByName: "Kari",
+    approvedAt: "2026-03-02T10:00:00Z",
+  }]), /Ekstra kummer/);
 });
 
 test("portallenke har prosjekt og token", () => {

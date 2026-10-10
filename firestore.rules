@@ -65,10 +65,26 @@ service cloud.firestore {
         && request.resource.data.stars <= 5;
     }
 
+    // Kunden kan bare svare ja eller nei på et tilbud eller en endring som admin har bedt om svar på.
+    function validCustomerDecision() {
+      return resource.data.approved == true
+        && resource.data.kind in ['tilbud', 'endring']
+        && resource.data.approvalRequested == true
+        && resource.data.get('approvalStatus', 'venter') == 'venter'
+        && request.resource.data.approvalStatus in ['godkjent', 'avslatt']
+        && request.resource.data.approvedAt == request.time
+        && request.resource.data.approvedBy == request.auth.uid
+        && request.resource.data.approvedByName is string
+        && request.resource.data.approvedByName.size() > 0
+        && request.resource.data.approvedByName.size() < 80
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['approvalStatus', 'approvedAt', 'approvedBy', 'approvedByName']);
+    }
+
     // Produksjon bruker https-lenker fra Storage.
     // Emulatoren svarer med http på 127.0.0.1:9199 eller localhost:9199.
     // Andre http-lenker avvises. Offentlig nettside viser bare https.
-    function isStoredMediaUrl(url) {
+    function storedMediaUrl(url) {
       return url is string
         && url.size() < 2000
         && (
@@ -87,7 +103,7 @@ service cloud.firestore {
         && request.resource.data.createdBy == request.auth.uid
         && request.resource.data.caption is string
         && request.resource.data.caption.size() < 500
-        && isStoredMediaUrl(request.resource.data.url)
+        && storedMediaUrl(request.resource.data.url)
         && request.resource.data.storagePath is string
         && request.resource.data.storagePath.split('/').size() == 4
         && request.resource.data.storagePath.split('/')[0] == 'projects'
@@ -120,12 +136,80 @@ service cloud.firestore {
         && itemData(projectId, itemId).kind in ['kunde', 'vurdering'];
     }
 
+    function messageShapeOk() {
+      return request.resource.data.keys().hasOnly(['text', 'sender', 'createdAt'])
+        || request.resource.data.keys().hasOnly(['text', 'sender', 'createdAt', 'imageUrl', 'imagePath']);
+    }
+
+    function messageImageOk(projectId) {
+      return !request.resource.data.keys().hasAny(['imageUrl'])
+        || (
+          storedMediaUrl(request.resource.data.imageUrl)
+          && request.resource.data.imagePath is string
+          && request.resource.data.imagePath.matches('^projects/' + projectId + '/media/[A-Za-z0-9_.-]+$')
+        );
+    }
+
+    function validMessage(projectId, sender) {
+      return messageShapeOk()
+        && request.resource.data.sender == sender
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.text is string
+        && request.resource.data.text.size() < 4000
+        && (
+          request.resource.data.text.size() > 0
+          || request.resource.data.keys().hasAll(['imageUrl', 'imagePath'])
+        )
+        && messageImageOk(projectId);
+    }
+
+    // Gjelder nye opplastinger. Eldre dokumenter kan ha uploadedBy "kunde" og leses likevel.
+    function validCustomerDocument(projectId) {
+      return request.resource.data.keys().hasOnly([
+          'name', 'url', 'storagePath', 'approved', 'source', 'uploadedBy', 'createdAt'
+        ])
+        && request.resource.data.approved == false
+        && request.resource.data.source == 'customer'
+        && request.resource.data.uploadedBy is string
+        && request.resource.data.uploadedBy.size() > 0
+        && request.resource.data.uploadedBy.size() < 120
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() < 200
+        && storedMediaUrl(request.resource.data.url)
+        && request.resource.data.storagePath is string
+        && request.resource.data.storagePath.matches('^projects/' + projectId + '/documents/[^/]+$')
+        && request.resource.data.createdAt == request.time;
+    }
+
     // Offentlig nettside leser bare denne samlingen.
     // Admin skriver den fra appen, og bare med godkjent referanseinnhold.
     // Ingen delingskode, kundekontakt eller PDF-lenke skal ligge her.
     match /references/{projectId} {
       allow read: if true;
       allow create, update, delete: if isAdmin();
+    }
+
+    match /photoTemplates/{templateId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    match /adminDevices/{deviceId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    // Firebase-utvidelsen Trigger Email leser denne med admin-SDK, som ikke styres av reglene.
+    // Ingen SMTP-hemmelighet ligger i appen. Bare admin kan legge en e-post i køen.
+    match /mail/{mailId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.keys().hasOnly(['to', 'message', 'createdAt'])
+        && request.resource.data.to is string
+        && request.resource.data.to.size() > 3
+        && request.resource.data.to.size() < 200
+        && request.resource.data.message is map
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
     }
 
     match /projects/{projectId} {
@@ -171,7 +255,9 @@ service cloud.firestore {
           || (hasAccess(projectId) && resource.data.createdBy == request.auth.uid);
         allow create: if isAdmin()
           || (hasAccess(projectId) && (validCustomerPost() || validCustomerRating()));
-        allow update, delete: if isAdmin();
+        allow update: if isAdmin()
+          || (hasAccess(projectId) && validCustomerDecision());
+        allow delete: if isAdmin();
 
         match /photos/{photoId} {
           allow read: if isAdmin()
@@ -194,6 +280,24 @@ service cloud.firestore {
                 && customerCanSeeItem(projectId, itemId));
           allow update, delete: if isAdmin();
         }
+      }
+
+      // Dokumenter, tegninger, oppdateringer og tilbud. Ikke synlig for hele internett.
+      match /documents/{docId} {
+        allow read: if isAdmin()
+          || (hasAccess(projectId) && resource.data.approved == true)
+          || (hasAccess(projectId) && resource.data.source == 'customer');
+        allow create: if isAdmin()
+          || (hasAccess(projectId) && validCustomerDocument(projectId));
+        allow update, delete: if isAdmin();
+      }
+
+      // Toveis meldinger mellom admin og kunde. Ikke offentlig, selv om prosjektet er en referanse.
+      match /messages/{messageId} {
+        allow read: if isAdmin() || hasAccess(projectId);
+        allow create: if (isAdmin() && validMessage(projectId, 'admin'))
+          || (hasAccess(projectId) && validMessage(projectId, 'customer'));
+        allow update, delete: if isAdmin();
       }
     }
   }

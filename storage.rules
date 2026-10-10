@@ -44,5 +44,14 @@ service firebase.storage {
         && fileName.matches('^[A-Za-z0-9_.-]+\\.pdf$');
       allow delete: if isAdmin();
     }
+
+    // Tegninger, tilbud og andre dokumenter. Ikke offentlig, selv om prosjektet er en referanse.
+    // Filnavn kan inneholde mellomrom og norske bokstaver, slik eksisterende opplastinger har.
+    match /projects/{projectId}/documents/{fileName} {
+      allow read: if isAdmin() || hasAccess(projectId);
+      allow create: if (isAdmin() || hasAccess(projectId))
+        && request.resource.size < 25 * 1024 * 1024;
+      allow update, delete: if isAdmin();
+    }
   }
 }

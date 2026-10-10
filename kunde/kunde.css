@@ -86,6 +86,15 @@ textarea { min-height: 96px; }
 .comment { margin: 0.6rem 0 0; padding-top: 0.5rem; border-top: 1px solid var(--line); }
 .comment small { color: var(--muted); font-weight: 700; }
 
+.k-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.k-actions .btn { flex: 1 1 140px; }
+.thread { display: flex; flex-direction: column; gap: 0.6rem; }
+.bubble { max-width: 88%; padding: 0.7rem 0.8rem; border-radius: 16px; }
+.bubble p { margin: 0; }
+.bubble img { width: 100%; border-radius: 12px; margin-bottom: 0.4rem; }
+.bubble-admin { align-self: flex-start; background: #fff; border: 1px solid var(--line); }
+.bubble-customer { align-self: flex-end; background: #e7f2ec; }
+
 .pdf-link {
   display: flex;
   min-height: 56px;

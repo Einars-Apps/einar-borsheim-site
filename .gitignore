@@ -7,3 +7,7 @@ android/captures/
 android/.idea/
 *.apk
 serve-apk.js
+.tmp-*
+backup/service-account.json
+backups/
+android/app/google-services.json

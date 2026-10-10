@@ -2,6 +2,20 @@ import { COMPANY } from "./company.js";
 import { formatDay } from "./logic.js";
 
 let fontCache;
+let logoCache;
+
+async function loadLogo() {
+  if (logoCache !== undefined) return logoCache;
+  try {
+    const response = await fetch(new URL("../assets/logo-256.png", import.meta.url));
+    if (!response.ok) throw new Error("logo");
+    logoCache = `data:image/png;base64,${bufferToBase64(await response.arrayBuffer())}`;
+  } catch (error) {
+    console.error("Kunne ikke laste logo", error);
+    logoCache = "";
+  }
+  return logoCache;
+}
 
 async function loadFonts() {
   if (fontCache) return fontCache;
@@ -67,6 +81,7 @@ export async function generatePdfBlob(model) {
   }
 
   const textOf = (value) => (useFont ? String(value || "") : fold(value));
+  const logo = await loadLogo();
   let y = 18;
 
   function setFont(size, bold = false, color = [20, 32, 28]) {
@@ -107,14 +122,17 @@ export async function generatePdfBlob(model) {
   }
 
   pdf.setFillColor(...accent);
-  pdf.rect(0, 0, pageW, 34, "F");
+  pdf.rect(0, 0, pageW, 48, "F");
   setFont(16, true, [255, 255, 255]);
-  pdf.text(textOf(COMPANY.name), margin, 14);
+  pdf.text(textOf(COMPANY.name), margin, 11);
   setFont(10, false, [232, 245, 239]);
-  pdf.text(textOf(`${COMPANY.tagline}  ·  ${COMPANY.address}`), margin, 21);
-  pdf.text(textOf(`Tlf ${COMPANY.phone}  ·  ${COMPANY.email}  ·  Org.nr ${COMPANY.orgNr}`), margin, 27);
+  pdf.text(textOf(COMPANY.tagline), margin, 17);
+  pdf.text(textOf(COMPANY.street || "Eriksvei 13"), margin, 23);
+  pdf.text(textOf(COMPANY.postal || "1386 Asker"), margin, 29);
+  pdf.text(textOf(`Tlf ${COMPANY.phone}  ·  ${COMPANY.email}  ·  Org.nr ${COMPANY.orgNr}`), margin, 37);
+  if (logo) pdf.addImage(logo, "PNG", pageW - margin - 30, 9, 30, 30);
 
-  y = 46;
+  y = 58;
   write("SLUTTRAPPORT", { size: 11, bold: true, color: accent, gap: 1 });
   write(model.project.name || "Prosjekt", { size: 20, bold: true, gap: 2 });
 

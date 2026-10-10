@@ -1,12 +1,20 @@
 import { firebaseConfig } from "./firebase-config.js";
 import { COMPANY } from "./js/company.js";
 import {
+  DEFAULT_TEMPLATES,
   KIND_META,
+  TRASH_DAYS,
+  approvalLine,
   buildLocalDraft,
   buildReferenceDoc,
+  daysSince,
   dueReminderCount,
   formatDay,
   formatWhen,
+  isCompleted,
+  isTrashed,
+  missingTemplateSteps,
+  phaseLabel,
   portalUrl,
   projectShareText,
   randomToken,
@@ -14,14 +22,16 @@ import {
   reminderShareText,
   reminderWhenLabel,
   toDate,
+  trashDaysLeft,
 } from "./js/logic.js";
+import { canSpeak, dictate } from "./js/speech.js";
 import { AI_DRAFT_URL, requestAiDraft } from "./js/ai.js";
 import { compressImage, blobToDataUrl } from "./js/image.js";
 import { addToQueue, getQueueItem, listQueue, removeQueue, updateQueue } from "./js/queue.js";
 import { generatePdfBlob } from "./js/pdf.js";
 import { button, el, field, icon, sheet, toast } from "./js/dom.js";
 
-const ROUTES = new Set(["projects", "reminders", "capture", "project", "section", "item", "review", "form", "report"]);
+const ROUTES = new Set(["projects", "reminders", "capture", "project", "section", "item", "review", "form", "report", "done", "trash", "messages", "documents", "templates"]);
 
 const main = document.getElementById("main");
 const topbar = document.getElementById("topbar");
@@ -42,7 +52,12 @@ let stack = [{ name: "login" }];
 let online = navigator.onLine;
 let syncing = false;
 let captureKind = "bilde";
+let captureStep = "";
+let templates = [];
 let stopProjects = null;
+let stopTemplates = null;
+let pushReady = false;
+const purging = new Set();
 let toldDenied = false;
 let skipReviewSave = false;
 const subs = [];
@@ -138,6 +153,11 @@ function updateChrome() {
     review: ["Kommentar", projectName(route.projectId)],
     form: [route.projectId ? "Rediger prosjekt" : "Nytt prosjekt", ""],
     report: ["Rapport", projectName(route.projectId)],
+    done: ["Fullførte", ""],
+    trash: ["Papirkurv", ""],
+    messages: ["Meldinger", projectName(route.projectId)],
+    documents: ["Dokumenter", projectName(route.projectId)],
+    templates: ["Bildemaler", ""],
   };
   const [title, kicker] = titles[route.name] || ["Internkontroll", ""];
   topTitle.textContent = title || "Internkontroll";
@@ -208,6 +228,11 @@ function render() {
     review: mountReview,
     form: mountForm,
     report: mountReport,
+    done: mountDone,
+    trash: mountTrash,
+    messages: mountMessages,
+    documents: mountDocuments,
+    templates: mountTemplates,
   };
   (mounts[route.name] || mountProjects)(route);
 }
@@ -281,11 +306,11 @@ async function shareProject(project, year) {
   }
 }
 
-function chooseFiles({ capture = false, multiple = false } = {}) {
+function chooseFiles({ capture = false, multiple = false, accept = "image/*" } = {}) {
   return new Promise((resolve, reject) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = "image/*";
+    input.accept = accept;
     if (capture) input.setAttribute("capture", "environment");
     if (multiple) input.multiple = true;
     const finish = (files) => {
@@ -317,7 +342,7 @@ async function blobsFromCamera(source) {
   return Promise.all(result.photos.map(async (photo) => (await fetch(photo.webPath)).blob()));
 }
 
-async function ingestBlobs(projectId, kind, blobs, { title = "", text = "", mode = "create", itemId = "" } = {}) {
+async function ingestBlobs(projectId, kind, blobs, { title = "", text = "", step = "", mode = "create", itemId = "" } = {}) {
   const limited = blobs.slice(0, 12);
   if (blobs.length > 12) toast("De 12 første bildene blir med");
   const ids = [];
@@ -331,8 +356,9 @@ async function ingestBlobs(projectId, kind, blobs, { title = "", text = "", mode
       mode,
       itemId: mode === "attach" ? itemId : crypto.randomUUID(),
       photoId: crypto.randomUUID(),
-      title,
+      title: title || step || "",
       text,
+      step: step || "",
       blob: compressed,
       filename: `${Date.now()}-${index}-${id.slice(0, 8)}.jpg`,
       createdAt: Date.now(),
@@ -359,7 +385,7 @@ async function startCapture(projectId, kind, source) {
   localStorage.setItem("lastProjectId", projectId);
   try {
     const blobs = await blobsFromCamera(source);
-    await ingestBlobs(projectId, captureKind, blobs);
+    await ingestBlobs(projectId, captureKind, blobs, { step: captureStep, title: captureStep || "" });
   } catch (error) {
     if (isCancel(error) || error?.code === "cancel") return;
     console.error(error);
@@ -389,8 +415,9 @@ async function uploadQueueItem(item) {
     if (!existing.exists) {
       await itemRef.set({
         kind: item.kind || "bilde",
-        title: item.title || "",
+        title: item.title || item.step || "",
         text: item.text || "",
+        step: item.step || "",
         stars: null,
         approved: true,
         reference: false,
@@ -571,11 +598,27 @@ async function saveReportPdf(project, reportText) {
   const ratings = items.filter((item) => item.kind === "vurdering" && item.approved === true);
   const groups = [
     ["bilde", "Bilder"],
+    ["tilbud", "Tilbud"],
     ["endring", "Endringer"],
     ["avvik", "Avvik"],
     ["kunde", "Grunnlag fra kunde"],
   ];
   const sections = [];
+  let skipped = 0;
+  const template = templateFor(project);
+  if (template?.steps?.length) {
+    const missing = missingTemplateSteps(template.steps, items);
+    const doneSteps = template.steps.filter((step) => !missing.includes(step));
+    sections.push({
+      title: `Bildemal: ${template.name}`,
+      items: [
+        { title: "Fotografert", text: doneSteps.join(", ") || "Ingen trinn er fotografert ennå.", photos: [], comments: [] },
+        missing.length
+          ? { title: "Mangler", text: missing.join(", "), photos: [], comments: [] }
+          : { title: "Mangler", text: "Alle trinn i malen er fotografert.", photos: [], comments: [] },
+      ],
+    });
+  }
   for (const [kind, title] of groups) {
     const group = [];
     for (const item of approved.filter((entry) => entry.kind === kind)) {
@@ -583,15 +626,17 @@ async function saveReportPdf(project, reportText) {
       for (const photo of photosByItem[item.id] || []) {
         if (photo.approved === false || !photo.url) continue;
         try {
-          photos.push({ dataUrl: await urlToDataUrl(photo.url), caption: photo.caption || "" });
+          photos.push({ dataUrl: await fetchWithRetry(photo.url), caption: photo.caption || "" });
         } catch (error) {
           console.error(error);
-          photos.push({ caption: "Bildet kunne ikke hentes inn i PDF-en." });
+          skipped += 1;
+          photos.push({ caption: photo.caption ? `${photo.caption} (bildet mangler)` : "Bildet kunne ikke hentes inn i PDF-en." });
         }
       }
+      const decision = approvalLine(item);
       group.push({
-        title: item.title || "",
-        text: item.text || "",
+        title: item.title || item.step || "",
+        text: [item.text || "", decision].filter(Boolean).join("\n"),
         createdAt: item.createdAt,
         photos,
         comments: (commentsByItem[item.id] || []).filter((comment) => comment.approved !== false && comment.text),
@@ -616,23 +661,159 @@ async function saveReportPdf(project, reportText) {
   const path = `projects/${project.id}/rapport/sluttrapport.pdf`;
   await storage.ref(path).put(result.blob, { contentType: "application/pdf" });
   const pdfUrl = await storage.ref(path).getDownloadURL();
+  const saved = { ...project, pdfUrl, pdfPath: path, reportText };
   await db.collection("projects").doc(project.id).update({
     pdfUrl,
     pdfPath: path,
     pdfUpdatedAt: stamp(),
     updatedAt: stamp(),
   });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(result.blob);
-  link.download = result.filename;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 4000);
+  await maybeQueueReportMail(saved);
+  try {
+    await deliverPdf(result.blob, result.filename);
+  } catch (error) {
+    if (!isCancel(error)) throw error;
+  }
+  return { skipped };
 }
 
 async function urlToDataUrl(url) {
   const response = await fetch(url);
   if (!response.ok) throw new Error("bilde");
   return blobToDataUrl(await response.blob());
+}
+
+async function fetchWithRetry(url) {
+  try {
+    return await urlToDataUrl(url);
+  } catch (error) {
+    console.warn("Bilde forsøkes på nytt", error);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return urlToDataUrl(url);
+  }
+}
+
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    Promise.resolve(promise).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+async function blobToBase64(blob) {
+  const dataUrl = await blobToDataUrl(blob);
+  const comma = String(dataUrl).indexOf(",");
+  return comma >= 0 ? String(dataUrl).slice(comma + 1) : String(dataUrl);
+}
+
+async function deliverPdf(blob, filename) {
+  const Filesystem = window.Capacitor?.Plugins?.Filesystem;
+  const Share = window.Capacitor?.Plugins?.Share;
+  const safe = String(filename || "sluttrapport.pdf").replace(/[^\w.\-]+/g, "_");
+  if (Filesystem && Share) {
+    await withTimeout(Filesystem.writeFile({
+      path: safe,
+      data: await blobToBase64(blob),
+      directory: "CACHE",
+    }), 20000);
+    const uri = await Filesystem.getUri({ path: safe, directory: "CACHE" });
+    await withTimeout(Share.share({
+      title: filename,
+      files: [uri.uri],
+      dialogTitle: "Del rapport",
+    }), 20000);
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 4000);
+}
+
+async function maybeQueueReportMail(project) {
+  const email = String(project?.customerEmail || "").trim();
+  if (!isCompleted(project) || !project?.pdfUrl || !email.includes("@")) return;
+  if (project.reportMailFor === project.pdfUrl) return;
+  await db.collection("mail").add({
+    to: email,
+    message: {
+      subject: `Sluttrapport klar: ${project.name || "Prosjekt"}`,
+      text: [
+        `Hei${project.customerName ? ` ${project.customerName}` : ""}!`,
+        "",
+        `Sluttrapporten for «${project.name || "prosjektet"}» er klar.`,
+        "Åpne prosjektlenken du fikk fra Einar A Børsheim for å laste den ned.",
+        "",
+        "Vennlig hilsen",
+        "Einar A Børsheim",
+        "Eriksvei 13",
+        "1386 Asker",
+      ].join("\n"),
+    },
+    createdAt: stamp(),
+  });
+  await db.collection("projects").doc(project.id).update({ reportMailFor: project.pdfUrl, updatedAt: stamp() });
+}
+
+function templateChoices() {
+  return templates.length ? templates : DEFAULT_TEMPLATES;
+}
+
+function templateFor(project) {
+  const id = project?.templateId;
+  if (!id) return null;
+  return templates.find((template) => template.id === id)
+    || DEFAULT_TEMPLATES.find((template) => template.id === id)
+    || null;
+}
+
+function stepsFor(project) {
+  const steps = templateFor(project)?.steps;
+  return Array.isArray(steps) ? steps.map((step) => String(step || "").trim()).filter(Boolean) : [];
+}
+
+function openProjects() {
+  return projects.filter((project) => !isTrashed(project) && !isCompleted(project));
+}
+
+async function runDictation(textarea) {
+  try {
+    toast("Lytter … snakk norsk");
+    await dictate((spoken) => {
+      const base = textarea.value || "";
+      const spacer = base && !/\s$/.test(base) ? " " : "";
+      textarea.value = `${base}${spacer}${spoken}`;
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  } catch (error) {
+    console.error(error);
+    toast("Tale til tekst virket ikke. Sjekk mikrofontillatelse.");
+  }
+}
+
+function micButton(textarea) {
+  if (!canSpeak()) return null;
+  return button("Tale", { class: "btn btn-ghost", onClick: () => runDictation(textarea) });
+}
+
+function bindImageRetry(image, url) {
+  image.addEventListener("error", () => {
+    const tries = Number(image.dataset.tries || 0);
+    if (!url || tries >= 3) return;
+    image.dataset.tries = String(tries + 1);
+    const join = String(url).includes("?") ? "&" : "?";
+    image.src = `${url}${join}retry=${tries + 1}`;
+  });
 }
 
 function pill(text, kind = "") {
@@ -653,6 +834,10 @@ function itemRow(projectId, item) {
   ]);
   const pills = el("span", { class: "pills" });
   if (item.approved === false) pills.append(pill("Venter", "pill-warn"));
+  if (item.step) pills.append(pill(item.step));
+  if (item.approvalRequested && item.approvalStatus === "godkjent") pills.append(pill("Godkjent", "pill-ok"));
+  else if (item.approvalRequested && item.approvalStatus === "avslatt") pills.append(pill("Avslått", "pill-warn"));
+  else if (item.approvalRequested) pills.append(pill("Venter på kunde", "pill-warn"));
   if (item.reference) pills.append(pill("Referanse", "pill-ok"));
   if (item.queued) pills.append(pill(item.error ? "Ikke sendt" : "På telefonen", "pill-warn"));
   body.append(pills);
@@ -705,6 +890,7 @@ function mountLogin() {
   });
   main.append(el("section", { class: "screen login-screen" }, [
     el("div", { class: "brand-lockup" }, [
+      el("img", { class: "login-logo", src: "assets/logo-256.png", alt: "Einar A Børsheim" }),
       el("strong", {}, COMPANY.name),
       el("h1", { class: "h-app" }, "Internkontroll"),
       el("p", { class: "lead" }, "Feltnotater for hage og anlegg. Ta bildet, skriv kommentaren, og legg til mer senere."),
@@ -722,17 +908,25 @@ function mountProjects() {
       icon: "plus",
       onClick: () => push({ name: "form" }),
     }),
+    el("div", { class: "action-row" }, [
+      button("Fullførte", { class: "btn btn-ghost", onClick: () => push({ name: "done" }) }),
+      button("Papirkurv", { class: "btn btn-ghost", onClick: () => push({ name: "trash" }) }),
+      button("Bildemaler", { class: "btn btn-ghost", onClick: () => push({ name: "templates" }) }),
+    ]),
     list
   );
   main.append(root);
   const draw = () => {
     list.replaceChildren();
-    if (!projects.length) {
-      list.append(el("p", { class: "empty" }, "Ingen prosjekter ennå. Opprett det første, så kan du ta bilder med en gang."));
+    const visible = openProjects();
+    if (!visible.length) {
+      list.append(el("p", { class: "empty" }, projects.length
+        ? "Ingen tilbud eller pågående prosjekter. Fullførte ligger under Fullførte."
+        : "Ingen prosjekter ennå. Opprett det første, så kan du ta bilder med en gang."));
       return;
     }
     const lastId = localStorage.getItem("lastProjectId");
-    const ordered = [...projects].sort((a, b) => (a.id === lastId ? -1 : b.id === lastId ? 1 : 0));
+    const ordered = [...visible].sort((a, b) => (a.id === lastId ? -1 : b.id === lastId ? 1 : 0));
     const first = ordered[0];
     if (first) {
       const hero = el("div", { class: "card continue" }, [
@@ -762,7 +956,7 @@ function mountProjects() {
           el("span", { class: "row-title" }, project.name || "Uten navn"),
           el("span", { class: "row-text" }, [project.customerName, project.address].filter(Boolean).join(" · ")),
           el("span", { class: "pills" }, [
-            pill(project.status === "fullfort" ? "Fullført" : "Aktiv", project.status === "fullfort" ? "pill-ok" : ""),
+            pill(phaseLabel(project), project.status === "tilbud" ? "pill-warn" : ""),
             project.public ? pill("Referanse") : null,
             waiting ? pill(`${waiting} venter`, "pill-warn") : null,
           ]),
@@ -868,7 +1062,11 @@ function mountCapture(route) {
       );
       return;
     }
-    const active = project || projects[0];
+    const active = project || openProjects()[0] || projects.find((item) => !isTrashed(item)) || projects[0];
+    if (!active) {
+      root.append(el("p", { class: "empty" }, "Ingen prosjekt ennå."));
+      return;
+    }
     if (route.projectId !== active.id) {
       route.projectId = active.id;
     }
@@ -886,6 +1084,28 @@ function mountCapture(route) {
       chip.dataset.kind = kind;
       chips.append(chip);
     }
+    const steps = stepsFor(active);
+    if (captureStep && !steps.includes(captureStep)) captureStep = "";
+    const stepRow = el("div", { class: "chip-row" });
+    if (steps.length && captureKind === "bilde") {
+      const none = button("Uten trinn", {
+        class: `chip ${captureStep ? "" : "chip-on"}`,
+        onClick: () => {
+          captureStep = "";
+          draw();
+        },
+      });
+      stepRow.append(none);
+      for (const step of steps) {
+        stepRow.append(button(step, {
+          class: `chip ${captureStep === step ? "chip-on" : ""}`,
+          onClick: () => {
+            captureStep = step;
+            draw();
+          },
+        }));
+      }
+    }
     const picker = el("div", { class: "stack" });
     let open = false;
     const toggle = button("Bytt prosjekt", {
@@ -896,7 +1116,7 @@ function mountCapture(route) {
       },
     });
     picker.hidden = true;
-    for (const item of projects) {
+    for (const item of projects.filter((entry) => !isTrashed(entry))) {
       picker.append(button(item.name, {
         class: `btn ${item.id === active.id ? "btn-primary" : "btn-ghost"} btn-block`,
         onClick: () => {
@@ -914,6 +1134,8 @@ function mountCapture(route) {
         el("p", {}, online ? "Bildet får en kommentar nå. Flere kommentarer kan legges til senere." : "Ingen nett. Bildet blir liggende på telefonen til det kan sendes."),
       ]),
       chips,
+      steps.length && captureKind === "bilde" ? el("p", { class: "meta" }, "Velg trinn i bildemalen, så blir rapporten komplett.") : null,
+      stepRow,
       button("Ta bilde", {
         class: "shutter",
         icon: "camera",
@@ -938,6 +1160,10 @@ function mountProject(route) {
   let items = [];
   let legacy = [];
   const draw = () => {
+    const active = document.activeElement;
+    if (active && root.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+      return;
+    }
     const project = projectById(route.projectId);
     root.replaceChildren();
     if (!project) {
@@ -948,24 +1174,35 @@ function mountProject(route) {
     const pendingKunde = items.filter((item) => item.kind === "kunde" && item.approved === false).length;
     const pendingRating = items.filter((item) => item.kind === "vurdering" && item.approved === false).length;
     const queued = queueItems.filter((item) => item.projectId === project.id && !item.held).length;
+    const finished = isCompleted(project);
+    const actions = [
+      button("Rediger", { class: "btn btn-ghost", onClick: () => push({ name: "form", projectId: project.id }) }),
+      button("Del med kunde", { class: "btn btn-ghost", icon: "share", onClick: () => shareProject(project) }),
+      button(finished ? "Sett aktiv" : "Meld ferdig", {
+        class: "btn btn-primary",
+        onClick: () => toggleComplete(project),
+      }),
+    ];
+    if (!finished && project.status !== "tilbud") {
+      actions.push(button("Merk som tilbud", { class: "btn btn-ghost", onClick: () => setProjectStatus(project, "tilbud") }));
+    }
+    if (!finished && project.status === "tilbud") {
+      actions.push(button("Sett pågår", { class: "btn btn-ghost", onClick: () => setProjectStatus(project, "aktiv") }));
+    }
+    if (!isTrashed(project)) {
+      actions.push(button("Flytt til papirkurv", { class: "btn btn-danger", onClick: () => moveToTrash(project) }));
+    }
     const info = el("section", { class: "card continue" }, [
       el("div", { class: "pills" }, [
-        pill(project.status === "fullfort" ? "Fullført" : "Aktiv"),
+        pill(phaseLabel(project), project.status === "tilbud" ? "pill-warn" : ""),
         project.public ? pill("Offentlig referanse") : null,
         pendingKunde ? pill(`${pendingKunde} fra kunde`, "pill-warn") : null,
         pendingRating ? pill(`${pendingRating} vurdering`, "pill-warn") : null,
       ]),
       el("h1", { class: "h-app" }, project.name),
       el("p", { class: "meta" }, [project.customerName, project.address].filter(Boolean).join(" · ") || "Legg inn kunde og adresse under Rediger"),
-      project.completedAt ? el("p", { class: "meta" }, `Ferdig ${formatDay(project.completedAt)}`) : null,
-      el("div", { class: "action-row" }, [
-        button("Rediger", { class: "btn btn-ghost", onClick: () => push({ name: "form", projectId: project.id }) }),
-        button("Del med kunde", { class: "btn btn-ghost", icon: "share", onClick: () => shareProject(project) }),
-        button(project.status === "fullfort" ? "Sett aktiv" : "Fullfør i dag", {
-          class: "btn btn-primary",
-          onClick: () => toggleComplete(project),
-        }),
-      ]),
+      project.completedAt && finished ? el("p", { class: "meta" }, `Ferdig ${formatDay(project.completedAt)}`) : null,
+      el("div", { class: "action-row" }, actions),
     ]);
     const tiles = el("div", { class: "dash" });
     const tileSpec = [
@@ -973,6 +1210,7 @@ function mountProject(route) {
       ["kunde", "user", "Fra kunde", count("kunde")],
       ["endring", "edit", "Endringer", count("endring")],
       ["avvik", "alert", "Avvik", count("avvik")],
+      ["tilbud", "file", "Tilbud", count("tilbud")],
     ];
     for (const [kind, ic, label, total] of tileSpec) {
       const tile = el("button", { type: "button", class: kind === "bilde" ? "tile" : `tile tile-${kind}` }, [
@@ -994,7 +1232,11 @@ function mountProject(route) {
     ]);
     report.addEventListener("click", () => push({ name: "report", projectId: project.id }));
     tiles.append(report);
-    root.append(info, tiles);
+    const extra = el("div", { class: "action-row" }, [
+      button("Meldinger", { class: "btn btn-ghost", onClick: () => push({ name: "messages", projectId: project.id }) }),
+      button("Dokumenter", { class: "btn btn-ghost", onClick: () => push({ name: "documents", projectId: project.id }) }),
+    ]);
+    root.append(info, customerBox(project), templateBox(project, () => setTimeout(draw, 0)), tiles, extra);
   };
   refresh = () => draw();
   watchQueue(draw);
@@ -1011,22 +1253,182 @@ function mountProject(route) {
 
 async function toggleComplete(project) {
   try {
-    if (project.status === "fullfort") {
+    if (isCompleted(project)) {
       await db.collection("projects").doc(project.id).update({ status: "aktiv", completedAt: null, updatedAt: stamp() });
       toast("Prosjektet er aktivt igjen");
     } else {
       await db.collection("projects").doc(project.id).update({
         status: "fullfort",
-        completedAt: stamp(),
+        completedAt: project.completedAt || stamp(),
         reminder1Done: false,
         reminder2Done: false,
         updatedAt: stamp(),
       });
-      toast("Markert som fullført. Påminnelse vises om ca. ett år.");
+      await maybeQueueReportMail({ ...project, status: "fullfort" });
+      toast("Markert som ferdig. Påminnelse vises om ca. ett år.");
     }
   } catch (error) {
     console.error(error);
     toast("Kunne ikke oppdatere status");
+  }
+}
+
+async function setProjectStatus(project, status) {
+  try {
+    const patch = { status, updatedAt: stamp() };
+    if (status !== "fullfort") patch.completedAt = null;
+    await db.collection("projects").doc(project.id).update(patch);
+    toast(status === "tilbud" ? "Vises som tilbud" : "Vises som pågående");
+  } catch (error) {
+    console.error(error);
+    toast("Kunne ikke oppdatere status");
+  }
+}
+
+function customerBox(project) {
+  const name = el("input", { type: "text", maxlength: "120", value: project.customerName || "", placeholder: "Kundens navn" });
+  let timer;
+  name.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      db.collection("projects").doc(project.id).update({
+        customerName: name.value.trim(),
+        updatedAt: stamp(),
+      }).catch((error) => {
+        console.error(error);
+        toast("Kunne ikke lagre kundenavnet");
+      });
+    }, 600);
+  });
+  name.addEventListener("blur", () => setTimeout(() => refresh(), 0));
+  const link = el("input", { type: "text", readonly: true, value: "Henter lenke…" });
+  ensureToken(project).then((token) => {
+    link.value = portalUrl(project.id, token);
+  }).catch(() => {
+    link.value = "";
+  });
+  return el("section", { class: "card continue customer-box" }, [
+    el("h2", { class: "h-app" }, "Kunde"),
+    el("p", { class: "meta" }, "Navn og lenke kunden bruker for å se prosjektet, sende meldinger og godkjenne tilbud."),
+    field("Kundenavn", name),
+    field("Lenke til kunden", link),
+    el("div", { class: "action-row" }, [
+      button("Kopier lenke", {
+        class: "btn btn-ghost",
+        onClick: async () => {
+          const token = await ensureToken(project);
+          const url = portalUrl(project.id, token);
+          link.value = url;
+          try {
+            await navigator.clipboard.writeText(url);
+            toast("Lenken er kopiert");
+          } catch (error) {
+            console.error(error);
+            toast("Kunne ikke kopiere. Merk lenken og kopier den selv.");
+          }
+        },
+      }),
+      button("Del lenke", {
+        class: "btn btn-primary",
+        icon: "share",
+        onClick: () => shareProject(project),
+      }),
+    ]),
+  ]);
+}
+
+function templateBox(project, afterChange) {
+  const select = el("select");
+  select.append(el("option", { value: "" }, "Ingen bildemal"));
+  for (const template of templateChoices()) {
+    const option = el("option", { value: template.id }, template.name);
+    if (project.templateId === template.id) option.selected = true;
+    select.append(option);
+  }
+  select.addEventListener("change", async () => {
+    try {
+      await db.collection("projects").doc(project.id).update({ templateId: select.value, updatedAt: stamp() });
+      toast(select.value ? "Bildemal valgt" : "Bildemal fjernet");
+      afterChange?.();
+    } catch (error) {
+      console.error(error);
+      toast("Kunne ikke lagre bildemalen");
+    }
+  });
+  const template = templateFor({ ...project, templateId: select.value });
+  return el("section", { class: "card continue" }, [
+    field("Bildemal", select),
+    template ? el("p", { class: "meta" }, template.steps.join(" · ")) : el("p", { class: "meta" }, "Velg en mal så bildene følger trinnene i rapporten."),
+  ]);
+}
+
+async function moveToTrash(project) {
+  if (!window.confirm("Flytte prosjektet til papirkurven? Bilder og dokumenter slettes automatisk etter 90 dager.")) return;
+  try {
+    await db.collection("projects").doc(project.id).update({
+      trashed: true,
+      trashedAt: stamp(),
+      updatedAt: stamp(),
+    });
+    toast("Lagt i papirkurven");
+    history.back();
+  } catch (error) {
+    console.error(error);
+    toast("Kunne ikke flytte prosjektet");
+  }
+}
+
+async function permanentlyDeleteProject(projectId) {
+  const root = db.collection("projects").doc(projectId);
+  const projectSnap = await root.get();
+  const data = projectSnap.data() || {};
+  const photos = await root.collection("photos").get();
+  for (const photo of photos.docs) {
+    const comments = await photo.ref.collection("comments").get();
+    for (const comment of comments.docs) await comment.ref.delete();
+    if (photo.data().storagePath) await storage.ref(photo.data().storagePath).delete().catch(() => {});
+    await photo.ref.delete();
+  }
+  const itemSnap = await root.collection("items").get();
+  for (const item of itemSnap.docs) {
+    const [itemPhotos, comments] = await Promise.all([
+      item.ref.collection("photos").get(),
+      item.ref.collection("comments").get(),
+    ]);
+    for (const photo of itemPhotos.docs) {
+      if (photo.data().storagePath) await storage.ref(photo.data().storagePath).delete().catch(() => {});
+      await photo.ref.delete();
+    }
+    for (const comment of comments.docs) await comment.ref.delete();
+    await item.ref.delete();
+  }
+  const messages = await root.collection("messages").get();
+  for (const message of messages.docs) {
+    if (message.data().imagePath) await storage.ref(message.data().imagePath).delete().catch(() => {});
+    await message.ref.delete();
+  }
+  const documents = await root.collection("documents").get();
+  for (const entry of documents.docs) {
+    if (entry.data().storagePath) await storage.ref(entry.data().storagePath).delete().catch(() => {});
+    await entry.ref.delete();
+  }
+  const access = await root.collection("access").get();
+  for (const entry of access.docs) await entry.ref.delete();
+  if (data.pdfPath) await storage.ref(data.pdfPath).delete().catch(() => {});
+  await db.collection("references").doc(projectId).delete().catch(() => {});
+  await root.delete();
+}
+
+function purgeOldTrash() {
+  for (const project of projects) {
+    if (!project.trashed || purging.has(project.id)) continue;
+    const age = daysSince(project.trashedAt);
+    if (age == null || age < TRASH_DAYS) continue;
+    purging.add(project.id);
+    permanentlyDeleteProject(project.id).catch((error) => {
+      console.error(error);
+      purging.delete(project.id);
+    });
   }
 }
 
@@ -1037,9 +1439,14 @@ function mountSection(route) {
   const composer = el("form", { class: "card continue", hidden: true });
   const titleInput = el("input", { type: "text", maxlength: "140", placeholder: "Kort overskrift" });
   const textInput = el("textarea", { rows: "4", maxlength: "4000", placeholder: "Hva skjedde?" });
+  const askApproval = el("input", { type: "checkbox" });
   composer.append(
     kind === "bilde" ? null : field("Overskrift", titleInput),
     field("Tekst", textInput),
+    micButton(textInput),
+    kind === "endring" || kind === "tilbud"
+      ? el("label", { class: "checkline" }, [askApproval, el("span", {}, "Be kunden godkjenne dette")])
+      : null,
     button("Lagre notat", { type: "submit", class: "btn btn-primary btn-block" })
   );
   composer.addEventListener("submit", async (event) => {
@@ -1059,6 +1466,8 @@ function mountSection(route) {
         createdBy: user?.uid || "",
         authorName: "Einar",
         coverUrl: "",
+        approvalRequested: (kind === "endring" || kind === "tilbud") && askApproval.checked,
+        approvalStatus: (kind === "endring" || kind === "tilbud") && askApproval.checked ? "venter" : "",
         createdAt: stamp(),
         updatedAt: stamp(),
       });
@@ -1206,7 +1615,28 @@ function mountItem(route) {
         return ref.update(patch);
       });
     });
-    head.append(field(route.legacy || data.kind === "bilde" ? "Kommentar" : "Tekst", textInput));
+    head.append(field(route.legacy || data.kind === "bilde" ? "Kommentar" : "Tekst", textInput), micButton(textInput));
+    if (!route.legacy && (data.kind === "endring" || data.kind === "tilbud")) {
+      const ask = el("input", { type: "checkbox" });
+      ask.checked = data.approvalRequested === true;
+      ask.addEventListener("change", () => {
+        ref.update({
+          approvalRequested: ask.checked,
+          approvalStatus: ask.checked ? (data.approvalStatus && data.approvalStatus !== "" ? data.approvalStatus : "venter") : "",
+          updatedAt: stamp(),
+        }).catch((error) => {
+          console.error(error);
+          toast("Kunne ikke lagre godkjenningen");
+        });
+      });
+      head.append(el("label", { class: "checkline" }, [
+        ask,
+        el("span", {}, "Be kunden godkjenne dette"),
+      ]));
+      if (data.approvalRequested) {
+        head.append(el("p", { class: "meta" }, approvalLine(data) || "Venter på kunden"));
+      }
+    }
     if (data.approved !== false) {
       const box = el("input", { type: "checkbox" });
       box.checked = data.reference === true;
@@ -1241,21 +1671,39 @@ function mountItem(route) {
     head.append(button("Slett", { class: "btn btn-danger", onClick: () => removeItem() }));
   }
 
+  const photoNodes = new Map();
+  function renderPhotos(snap) {
+    const seen = new Set();
+    snap.forEach((docSnap) => {
+      seen.add(docSnap.id);
+      const currentBlock = photoNodes.get(docSnap.id);
+      if (!currentBlock) {
+        const block = photoBlock(docSnap, true);
+        photoNodes.set(docSnap.id, block);
+        photosEl.append(block.node);
+      } else {
+        currentBlock.sync(docSnap.data());
+      }
+    });
+    for (const [id, block] of photoNodes) {
+      if (seen.has(id)) continue;
+      block.node.remove();
+      photoNodes.delete(id);
+    }
+  }
   if (photoCol) {
     subs.push(photoCol.orderBy("createdAt", "desc").onSnapshot((snap) => {
-      photosEl.replaceChildren();
-      snap.forEach((doc) => photosEl.append(photoBlock(doc, true)));
+      renderPhotos(snap);
     }, () => {
-      photoCol.get().then((snap) => {
-        photosEl.replaceChildren();
-        snap.forEach((doc) => photosEl.append(photoBlock(doc, true)));
-      }).catch(() => {});
+      photoCol.get().then(renderPhotos).catch(() => {});
     }));
   } else {
     subs.push(ref.onSnapshot((snap) => {
       photosEl.replaceChildren();
       if (snap.exists && snap.data().url) {
-        photosEl.append(el("img", { class: "preview-img", src: snap.data().url, alt: "Dokumentasjonsbilde" }));
+        const image = el("img", { class: "preview-img", src: snap.data().url, alt: "Dokumentasjonsbilde" });
+        bindImageRetry(image, snap.data().url);
+        photosEl.append(image);
       }
     }));
   }
@@ -1290,6 +1738,7 @@ function mountItem(route) {
     },
   }, [
     field("Ny kommentar", draft),
+    micButton(draft),
     button("Legg til kommentar", { type: "submit", class: "btn btn-primary btn-block" }),
   ]));
 
@@ -1323,16 +1772,20 @@ function mountItem(route) {
     const data = doc.data();
     const caption = el("input", { type: "text", value: data.caption || "", maxlength: "300", placeholder: "Bildetekst" });
     caption.addEventListener("change", () => doc.ref.update({ caption: caption.value }));
-    return el("div", { class: "photo-block" }, [
-      data.url ? el("img", { src: data.url, alt: data.caption || "Bilde" }) : el("p", {}, "Bilde uten lenke"),
-      data.approved === false ? pill("Venter", "pill-warn") : null,
+    const image = data.url ? el("img", { src: data.url, alt: data.caption || "Bilde" }) : null;
+    if (image) bindImageRetry(image, data.url);
+    const pending = data.approved === false ? pill("Venter", "pill-warn") : null;
+    const node = el("div", { class: "photo-block" }, [
+      image || el("p", {}, "Bilde uten lenke"),
+      pending,
       canEdit ? caption : null,
       button("Slett bilde", {
         class: "btn btn-danger",
         onClick: async () => {
           if (!window.confirm("Slette dette bildet?")) return;
           try {
-            if (data.storagePath) await storage.ref(data.storagePath).delete().catch(() => {});
+            const latest = (await doc.ref.get()).data() || data;
+            if (latest.storagePath) await storage.ref(latest.storagePath).delete().catch(() => {});
             await doc.ref.delete();
           } catch (error) {
             console.error(error);
@@ -1341,6 +1794,13 @@ function mountItem(route) {
         },
       }),
     ]);
+    return {
+      node,
+      sync(next) {
+        if (document.activeElement === caption) return;
+        if (caption.value !== (next.caption || "")) caption.value = next.caption || "";
+      },
+    };
   }
 
   function schedule(run) {
@@ -1442,7 +1902,7 @@ function mountReview(route) {
       const input = el("textarea", { rows: "4", maxlength: "4000", placeholder: "Kommentar til bildet" });
       input.dataset.queueId = items[0].id;
       input.value = items[0].text || "";
-      list.append(el("img", { class: "preview-img", src: url, alt: "Nytt bilde" }), field("Kommentar", input));
+      list.append(el("img", { class: "preview-img", src: url, alt: "Nytt bilde" }), field("Kommentar", input), micButton(input));
       return;
     }
     for (const item of items) {
@@ -1453,7 +1913,7 @@ function mountReview(route) {
       list.append(el("div", { class: "review-row" }, [
         el("img", { src: url, alt: "" }),
         input,
-      ]));
+      ]), micButton(input));
     }
   })().catch((error) => {
     console.error(error);
@@ -1468,6 +1928,11 @@ function mountForm(route) {
   const customerPhone = el("input", { type: "tel", maxlength: "40", autocomplete: "tel" });
   const customerEmail = el("input", { type: "email", maxlength: "120", autocomplete: "email" });
   const description = el("textarea", { rows: "3", maxlength: "2000" });
+  const templateSelect = el("select");
+  templateSelect.append(el("option", { value: "" }, "Ingen bildemal"));
+  for (const template of templateChoices()) {
+    templateSelect.append(el("option", { value: template.id }, template.name));
+  }
   const publicLocation = el("input", { type: "text", maxlength: "80", placeholder: "F.eks. Asker" });
   const publicSummary = el("textarea", { rows: "4", maxlength: "1200", placeholder: "Kort omtale uten kundens navn og adresse" });
   const completed = el("input", { type: "date" });
@@ -1481,6 +1946,7 @@ function mountForm(route) {
     field("Telefon til kunde", customerPhone),
     field("E-post til kunde", customerEmail),
     field("Beskrivelse", description),
+    field("Bildemal", templateSelect),
   ]);
   if (route.projectId) {
     form.append(
@@ -1514,6 +1980,7 @@ function mountForm(route) {
       fill(publicLocation, data.publicLocation);
       fill(publicSummary, data.publicSummary);
       if (document.activeElement !== isPublic) isPublic.checked = data.public === true;
+      if (document.activeElement !== templateSelect) templateSelect.value = data.templateId || "";
       save.disabled = false;
       const day = toDate(data.completedAt);
       if (day) {
@@ -1540,6 +2007,7 @@ function mountForm(route) {
       customerPhone: customerPhone.value.trim(),
       customerEmail: customerEmail.value.trim(),
       description: description.value.trim(),
+      templateId: templateSelect.value,
       updatedAt: stamp(),
     };
     try {
@@ -1607,6 +2075,7 @@ function mountReport(route) {
   const status = el("p", { class: "meta save-state" }, "");
   const pdfLine = el("p", { class: "meta" }, "");
   const ratings = el("div", { class: "stack" });
+  const gaps = el("p", { class: "meta" }, "");
   const aiPanel = el("div", { class: "note", hidden: true }, [
     el("h2", {}, "KI-assistent"),
     el("p", {}, AI_DRAFT_URL
@@ -1623,8 +2092,10 @@ function mountReport(route) {
     pdfButton.disabled = true;
     pdfButton.textContent = "Lager PDF…";
     try {
-      await saveReportPdf({ ...project, reportText: text.value }, text.value);
-      toast("Rapporten er lagret i prosjektet og lastet ned");
+      const outcome = await saveReportPdf({ ...project, reportText: text.value }, text.value);
+      toast(outcome.skipped
+        ? `Rapporten er lagret. ${outcome.skipped} ${outcome.skipped === 1 ? "bilde" : "bilder"} ble hoppet over.`
+        : "Rapporten er lagret i prosjektet");
     } catch (error) {
       console.error(error);
       toast(online ? "Kunne ikke lage eller lagre PDF" : "PDF trenger nett for å hente bildene og lagre filen");
@@ -1637,6 +2108,7 @@ function mountReport(route) {
   root.append(
     el("p", { class: "lead" }, "Sammendraget, endringer, avvik og godkjente bilder med kommentarer samles i én PDF. Kunden laster den ned fra portalen."),
     field("Arbeid utført", text),
+    micButton(text),
     status,
     el("div", { class: "action-row" }, [
       button("Lag utkast fra notater", { class: "btn btn-ghost", onClick: () => fillDraft(false) }),
@@ -1645,6 +2117,7 @@ function mountReport(route) {
     aiPanel,
     pdfButton,
     pdfLine,
+    gaps,
     el("h2", { class: "h-app" }, "Kundevurderinger"),
     ratings
   );
@@ -1678,9 +2151,17 @@ function mountReport(route) {
 
   subs.push(db.collection("projects").doc(route.projectId).collection("items").onSnapshot((snap) => {
     ratings.replaceChildren();
-    const rows = snap.docs
-      .map((doc) => ({ id: doc.id, ...doc.data() }))
-      .filter((item) => item.kind === "vurdering");
+    const allItems = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const template = templateFor(projectById(route.projectId));
+    if (template?.steps?.length) {
+      const missing = missingTemplateSteps(template.steps, allItems);
+      gaps.textContent = missing.length
+        ? `Bildemal «${template.name}» mangler: ${missing.join(", ")}.`
+        : `Bildemal «${template.name}» er komplett.`;
+    } else {
+      gaps.textContent = "";
+    }
+    const rows = allItems.filter((item) => item.kind === "vurdering");
     if (!rows.length) {
       ratings.append(el("p", { class: "empty" }, "Ingen vurdering ennå. Påminnelsen deler lenken der kunden kan sende den inn."));
       return;
@@ -1758,6 +2239,352 @@ function mountReport(route) {
   }
 }
 
+function projectList(title, rows, emptyText, extra) {
+  const list = el("div", { class: "stack" });
+  main.append(el("div", { class: "screen" }, [
+    el("h1", { class: "h-app" }, title),
+    list,
+  ]));
+  const draw = () => {
+    list.replaceChildren();
+    if (!rows().length) {
+      list.append(el("p", { class: "empty" }, emptyText));
+      return;
+    }
+    for (const project of rows()) {
+      const card = el("article", { class: "card continue" }, [
+        el("h2", {}, project.name || "Uten navn"),
+        el("p", { class: "meta" }, [project.customerName, project.address].filter(Boolean).join(" · ")),
+        extra(project),
+      ]);
+      list.append(card);
+    }
+  };
+  refresh = draw;
+  draw();
+}
+
+function mountDone() {
+  projectList(
+    "Fullførte",
+    () => projects.filter((project) => isCompleted(project) && !isTrashed(project)),
+    "Ingen fullførte prosjekter ennå.",
+    (project) => el("div", { class: "action-row" }, [
+      button("Åpne", { class: "btn btn-primary", onClick: () => openProject(project.id) }),
+    ])
+  );
+}
+
+function mountTrash() {
+  projectList(
+    "Papirkurv",
+    () => projects.filter((project) => isTrashed(project)),
+    "Papirkurven er tom. Prosjekter som ligger her slettes etter 90 dager, inkludert bilder.",
+    (project) => {
+      const left = trashDaysLeft(project);
+      return el("div", { class: "stack" }, [
+        el("p", { class: "meta" }, left == null ? "" : `${left} dager igjen før alt slettes`),
+        el("div", { class: "action-row" }, [
+          button("Legg tilbake", {
+            class: "btn btn-ghost",
+            onClick: async () => {
+              await db.collection("projects").doc(project.id).update({ trashed: false, trashedAt: null, updatedAt: stamp() });
+              toast("Prosjektet er lagt tilbake");
+            },
+          }),
+          button("Slett permanent", {
+            class: "btn btn-danger",
+            onClick: async () => {
+              if (!window.confirm("Slette prosjektet og alle bilder for godt?")) return;
+              try {
+                await permanentlyDeleteProject(project.id);
+                toast("Prosjektet er slettet");
+              } catch (error) {
+                console.error(error);
+                toast("Kunne ikke slette prosjektet");
+              }
+            },
+          }),
+        ]),
+      ]);
+    }
+  );
+}
+
+function mountMessages(route) {
+  const list = el("div", { class: "thread" });
+  const input = el("textarea", { rows: "3", maxlength: "4000", placeholder: "Skriv til kunden" });
+  const send = button("Send", { type: "submit", class: "btn btn-primary" });
+  const form = el("form", { class: "stack" }, [
+    field("Melding", input),
+    micButton(input),
+    el("div", { class: "action-row" }, [
+      send,
+      button("Bilde", {
+        class: "btn btn-ghost",
+        icon: "image",
+        onClick: () => sendMessageImage(route.projectId, input),
+      }),
+    ]),
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    send.disabled = true;
+    try {
+      await db.collection("projects").doc(route.projectId).collection("messages").add({
+        text,
+        sender: "admin",
+        createdAt: stamp(),
+      });
+      input.value = "";
+    } catch (error) {
+      console.error(error);
+      toast("Kunne ikke sende meldingen");
+    } finally {
+      send.disabled = false;
+    }
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  main.append(el("div", { class: "screen" }, [
+    el("p", { class: "lead" }, "Meldinger går begge veier. Kunden ser dem i portalen."),
+    list,
+    form,
+  ]));
+  subs.push(db.collection("projects").doc(route.projectId).collection("messages").orderBy("createdAt", "asc").onSnapshot((snap) => {
+    list.replaceChildren();
+    if (snap.empty) list.append(el("p", { class: "empty" }, "Ingen meldinger ennå."));
+    snap.forEach((docSnap) => list.append(messageBubble(docSnap.data(), true)));
+    list.scrollTop = list.scrollHeight;
+  }, (error) => {
+    console.error(error);
+    toast("Kunne ikke hente meldingene");
+  }));
+}
+
+function messageBubble(data, adminView) {
+  const mine = data.sender === "admin";
+  const image = data.imageUrl
+    ? el("img", { src: data.imageUrl, alt: "Bilde i meldingen" })
+    : null;
+  if (image) bindImageRetry(image, data.imageUrl);
+  return el("article", { class: `bubble ${mine ? "bubble-admin" : "bubble-customer"}` }, [
+    image,
+    data.text ? el("p", {}, data.text) : null,
+    el("p", { class: "meta" }, [
+      mine ? (adminView ? "Deg" : "Einar") : "Kunde",
+      formatWhen(data.createdAt),
+    ].filter(Boolean).join(" · ")),
+  ]);
+}
+
+async function sendMessageImage(projectId, input) {
+  try {
+    const blobs = await blobsFromCamera("gallery");
+    const blob = blobs[0];
+    if (!blob) return;
+    const compressed = await compressImage(blob);
+    const filename = `melding-${Date.now()}.jpg`;
+    const imagePath = `projects/${projectId}/media/${filename}`;
+    const ref = storage.ref(imagePath);
+    await ref.put(compressed, { contentType: "image/jpeg" });
+    const imageUrl = await ref.getDownloadURL();
+    await db.collection("projects").doc(projectId).collection("messages").add({
+      text: input.value.trim(),
+      sender: "admin",
+      imageUrl,
+      imagePath,
+      createdAt: stamp(),
+    });
+    input.value = "";
+    toast("Bildet er sendt");
+  } catch (error) {
+    if (isCancel(error) || error?.code === "cancel") return;
+    console.error(error);
+    toast("Kunne ikke sende bildet");
+  }
+}
+
+function mountDocuments(route) {
+  const list = el("div", { class: "stack" });
+  const status = el("p", { class: "meta" }, "");
+  main.append(el("div", { class: "screen" }, [
+    el("p", { class: "lead" }, "Tegninger, tilbud og oppdateringer. Det kunden laster opp venter til du godkjenner det."),
+    button("Last opp dokument", {
+      class: "btn btn-primary btn-block",
+      icon: "file",
+      onClick: () => uploadDocuments(route.projectId, status, true),
+    }),
+    status,
+    list,
+  ]));
+  subs.push(db.collection("projects").doc(route.projectId).collection("documents").orderBy("createdAt", "desc").onSnapshot((snap) => {
+    list.replaceChildren();
+    if (snap.empty) list.append(el("p", { class: "empty" }, "Ingen dokumenter ennå."));
+    snap.forEach((docSnap) => {
+      const data = docSnap.data();
+      const row = el("article", { class: "card continue" }, [
+        el("h2", {}, data.name || "Dokument"),
+        el("p", { class: "meta" }, [
+          data.source === "customer" ? "Fra kunde" : "Deg",
+          formatWhen(data.createdAt),
+          data.approved === false ? "Venter" : "Godkjent",
+        ].filter(Boolean).join(" · ")),
+        data.url ? el("a", { href: data.url, target: "_blank", rel: "noopener" }, "Åpne") : null,
+      ]);
+      const actions = el("div", { class: "action-row" });
+      if (data.approved === false) {
+        actions.append(button("Godkjenn", {
+          class: "btn btn-primary",
+          onClick: () => docSnap.ref.update({ approved: true }),
+        }));
+      }
+      actions.append(button("Slett", {
+        class: "btn btn-danger",
+        onClick: async () => {
+          if (!window.confirm("Slette dokumentet?")) return;
+          if (data.storagePath) await storage.ref(data.storagePath).delete().catch(() => {});
+          await docSnap.ref.delete();
+        },
+      }));
+      row.append(actions);
+      list.append(row);
+    });
+  }, (error) => {
+    console.error(error);
+    toast("Kunne ikke hente dokumentene");
+  }));
+}
+
+async function uploadDocuments(projectId, status, approved) {
+  let files = [];
+  try {
+    files = await chooseFiles({ multiple: true, accept: "*/*" });
+  } catch (error) {
+    if (isCancel(error) || error?.code === "cancel") return;
+    throw error;
+  }
+  if (!files?.length) return;
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    status.textContent = `Laster opp ${index + 1} av ${files.length}…`;
+    try {
+      const filename = `${Date.now()}-${index}-${file.name || "dokument"}`.replace(/[\\/]/g, "-");
+      const storagePath = `projects/${projectId}/documents/${filename}`;
+      const ref = storage.ref(storagePath);
+      await ref.put(file, { contentType: file.type || "application/octet-stream" });
+      const url = await ref.getDownloadURL();
+      await db.collection("projects").doc(projectId).collection("documents").add({
+        name: file.name || "Dokument",
+        url,
+        storagePath,
+        approved: approved === true,
+        source: "admin",
+        uploadedBy: user?.email || "",
+        createdAt: stamp(),
+      });
+    } catch (error) {
+      console.error(error);
+      toast(`Kunne ikke laste opp ${file.name || "filen"}`);
+    }
+  }
+  status.textContent = "Ferdig lastet opp";
+}
+
+function mountTemplates() {
+  const list = el("div", { class: "stack" });
+  main.append(el("div", { class: "screen" }, [
+    el("p", { class: "lead" }, "Malene styrer hvilke bilder som bør tas, for eksempel før, grøft og ferdig. Du kan endre trinnene."),
+    button("Lagre standardmaler", {
+      class: "btn btn-primary btn-block",
+      onClick: saveDefaultTemplates,
+    }),
+    list,
+    templateEditor(null),
+  ]));
+  const draw = () => {
+    if (list.contains(document.activeElement)) return;
+    list.replaceChildren();
+    const rows = templateChoices();
+    for (const template of rows) list.append(templateEditor(template));
+  };
+  refresh = draw;
+  draw();
+}
+
+function templateEditor(template) {
+  const name = el("input", { type: "text", maxlength: "80", value: template?.name || "", placeholder: "Navn, f.eks. Drenering" });
+  const steps = el("textarea", {
+    rows: "4",
+    maxlength: "500",
+    placeholder: "Ett trinn per linje",
+    value: template?.steps?.join("\n") || "",
+  });
+  const form = el("form", { class: "card continue stack" }, [
+    el("h2", { class: "h-app" }, template ? template.name : "Ny mal"),
+    field("Navn", name),
+    field("Trinn", steps),
+    button(template ? "Lagre mal" : "Legg til mal", { type: "submit", class: "btn btn-primary" }),
+    template && templates.some((item) => item.id === template.id)
+      ? button("Slett mal", {
+        class: "btn btn-danger",
+        onClick: async () => {
+          if (!window.confirm("Slette malen?")) return;
+          await db.collection("photoTemplates").doc(template.id).delete();
+        },
+      })
+      : null,
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const trimmed = name.value.trim();
+    const list = steps.value.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+    if (!trimmed || !list.length) {
+      toast("Skriv navn og minst ett trinn");
+      return;
+    }
+    const id = template?.id || trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || crypto.randomUUID();
+    try {
+      await db.collection("photoTemplates").doc(id).set({
+        name: trimmed,
+        steps: list,
+        updatedAt: stamp(),
+      }, { merge: true });
+      if (!template) {
+        name.value = "";
+        steps.value = "";
+      }
+      toast("Malen er lagret");
+    } catch (error) {
+      console.error(error);
+      toast("Kunne ikke lagre malen");
+    }
+  });
+  return form;
+}
+
+async function saveDefaultTemplates() {
+  try {
+    for (const template of DEFAULT_TEMPLATES) {
+      await db.collection("photoTemplates").doc(template.id).set({
+        name: template.name,
+        steps: template.steps,
+        updatedAt: stamp(),
+      }, { merge: true });
+    }
+    toast("Standardmalene er lagret");
+  } catch (error) {
+    console.error(error);
+    toast("Kunne ikke lagre malene");
+  }
+}
+
 function fillTabs() {
   const spec = [
     ["projects", "Prosjekter", "projects"],
@@ -1828,6 +2655,7 @@ function startProjects() {
       projects = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
       updateChrome();
       refresh();
+      purgeOldTrash();
     },
     (error) => {
       console.error(error);
@@ -1837,6 +2665,40 @@ function startProjects() {
       }
     }
   );
+}
+
+function startTemplates() {
+  if (stopTemplates) return;
+  stopTemplates = db.collection("photoTemplates").onSnapshot((snap) => {
+    templates = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const route = current();
+    if (["templates", "capture", "project", "report", "form"].includes(route.name)) refresh();
+  }, (error) => console.error(error));
+}
+
+async function registerAdminPush() {
+  const Push = window.Capacitor?.Plugins?.PushNotifications;
+  if (!Push || !user || pushReady) return;
+  pushReady = true;
+  try {
+    let perm = await Push.checkPermissions();
+    if (perm.receive !== "granted") perm = await Push.requestPermissions();
+    if (perm.receive !== "granted") return;
+    await Push.addListener("registration", async (token) => {
+      const value = token?.value || "";
+      const id = value.replace(/[^A-Za-z0-9]/g, "").slice(0, 80);
+      if (!id) return;
+      await db.collection("adminDevices").doc(id).set({
+        token: value,
+        platform: "android",
+        updatedAt: stamp(),
+      }, { merge: true });
+    });
+    await Push.addListener("registrationError", (error) => console.warn("Push", error));
+    await Push.register();
+  } catch (error) {
+    console.warn("Push er ikke satt opp ennå", error);
+  }
 }
 
 async function boot() {
@@ -1861,6 +2723,9 @@ async function boot() {
     if (!user) {
       stopProjects?.();
       stopProjects = null;
+      stopTemplates?.();
+      stopTemplates = null;
+      templates = [];
       projects = [];
       stack = [{ name: "login" }];
       sessionStorage.removeItem("nav");
@@ -1872,7 +2737,9 @@ async function boot() {
     await releaseStaleHolds();
     queueItems = await listQueue();
     startProjects();
+    startTemplates();
     history.replaceState({ stack: snapshotStack() }, "");
+    registerAdminPush();
     persistStack();
     render();
     syncQueue();

@@ -273,6 +273,118 @@ test("storage: kunde med tilgang laster opp bilde, ikke PDF, og fremmede leser i
   }));
 });
 
+test("meldinger og dokumenter er bare for admin og kunden med lenke", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(db, "projects/p1/messages/m1"), { text: "Hei", sender: "admin" });
+    await setDoc(doc(db, "projects/p1/documents/d1"), {
+      name: "Tegning",
+      approved: true,
+      source: "admin",
+      url: "https://example.com/tegning.pdf",
+    });
+    await setDoc(doc(db, "projects/p1/documents/pending"), {
+      name: "Fra kunde",
+      approved: false,
+      source: "customer",
+      uploadedBy: "kunde",
+    });
+  });
+  const kunde = customerDb();
+  const stranger = strangerDb();
+  await assertSucceeds(getDoc(doc(kunde, "projects/p1/messages/m1")));
+  await assertSucceeds(getDoc(doc(kunde, "projects/p1/documents/d1")));
+  await assertSucceeds(getDoc(doc(kunde, "projects/p1/documents/pending")));
+  await assertFails(getDoc(doc(stranger, "projects/p1/messages/m1")));
+  await assertFails(getDoc(doc(stranger, "projects/p1/documents/d1")));
+  await assertSucceeds(addDoc(collection(kunde, "projects/p1/messages"), {
+    text: "Vi er hjemme",
+    sender: "customer",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(addDoc(collection(kunde, "projects/p1/messages"), {
+    text: "Jeg er admin",
+    sender: "admin",
+    createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(addDoc(collection(adminDb(), "projects/p1/messages"), {
+    text: "Kommer i morgen",
+    sender: "admin",
+    createdAt: serverTimestamp(),
+  }));
+});
+
+test("kunde kan godkjenne et tilbud, ikke et skjult punkt", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(db, "projects/p1/items/tilbud1"), {
+      kind: "tilbud",
+      title: "Drenering",
+      text: "Rundt huset",
+      approved: true,
+      approvalRequested: true,
+      approvalStatus: "venter",
+      source: "admin",
+    });
+    await setDoc(doc(db, "projects/p1/items/hidden-offer"), {
+      kind: "endring",
+      title: "Skjult",
+      text: "Ikke vist",
+      approved: false,
+      approvalRequested: true,
+      approvalStatus: "venter",
+      source: "admin",
+    });
+  });
+  const db = customerDb();
+  await assertSucceeds(updateDoc(doc(db, "projects/p1/items/tilbud1"), {
+    approvalStatus: "godkjent",
+    approvedAt: serverTimestamp(),
+    approvedBy: "kunde1",
+    approvedByName: "Kari",
+  }));
+  await assertFails(updateDoc(doc(db, "projects/p1/items/hidden-offer"), {
+    approvalStatus: "godkjent",
+    approvedAt: serverTimestamp(),
+    approvedBy: "kunde1",
+    approvedByName: "Kari",
+  }));
+  await assertFails(updateDoc(doc(db, "projects/p1/items/tilbud1"), { text: "Endret tekst" }));
+});
+
+test("e-postkø og maler er bare for admin", async () => {
+  await assertFails(getDoc(doc(strangerDb(), "mail/x")));
+  await assertFails(addDoc(collection(customerDb(), "mail"), {
+    to: "a@b.no",
+    message: { subject: "Hei", text: "Tekst" },
+    createdAt: serverTimestamp(),
+  }));
+  await assertSucceeds(addDoc(collection(adminDb(), "mail"), {
+    to: "kunde@example.com",
+    message: { subject: "Rapport", text: "Klar" },
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(getDoc(doc(strangerDb(), "photoTemplates/drenering")));
+  await assertSucceeds(setDoc(doc(adminDb(), "photoTemplates/drenering"), { name: "Drenering", steps: ["Før"] }));
+});
+
+test("storage: dokumenter er ikke offentlige", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "projects/p1/access/kunde1"), { token: "TOK123456" });
+  });
+  const kunde = env.authenticatedContext("kunde1", { firebase: { sign_in_provider: "anonymous" } });
+  const stranger = env.unauthenticatedContext();
+  await assertSucceeds(uploadString(ref(kunde.storage(), "projects/p1/documents/tegning.pdf"), "pdf", "raw", {
+    contentType: "application/pdf",
+  }));
+  await assertFails(getBytes(ref(stranger.storage(), "projects/p1/documents/tegning.pdf")));
+});
+
 test("regelfilene slipper ikke gjennom åpen skriving", () => {
   const firestore = readFileSync("firestore.rules", "utf8");
   const storage = readFileSync("storage.rules", "utf8");

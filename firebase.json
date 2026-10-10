@@ -5,5 +5,8 @@
   "storage": {
     "target": "rules",
     "rules": "storage.rules"
+  },
+  "functions": {
+    "source": "functions"
   }
 }

@@ -21,7 +21,21 @@ export const KIND_META = {
     singular: "Avvik",
     empty: "Ingen avvik registrert.",
   },
+  tilbud: {
+    label: "Tilbud",
+    singular: "Tilbud",
+    empty: "Ingen tilbud eller endringsforslag ennå.",
+  },
 };
+
+export const TRASH_DAYS = 90;
+
+export const DEFAULT_TEMPLATES = [
+  { id: "drenering", name: "Drenering", steps: ["Før", "Grøft", "Rør/duk", "Tilbakefylling", "Ferdig"] },
+  { id: "beplantning", name: "Beplantning", steps: ["Før", "Jord", "Planting", "Vanning", "Ferdig"] },
+  { id: "stottemur", name: "Støttemur", steps: ["Før", "Fundament", "Mur", "Ferdig"] },
+  { id: "plen", name: "Plen og jord", steps: ["Før", "Grunnarbeid", "Ferdig"] },
+];
 
 const MS_DAY = 24 * 60 * 60 * 1000;
 
@@ -135,6 +149,61 @@ export function projectShareText(project, url) {
   return `Hei! Her kan du følge prosjektet «${project.name}», se rapporten og sende inn bilder og info: ${url}`;
 }
 
+export function isCompleted(project) {
+  const status = project?.status;
+  return status === "fullfort" || status === "done";
+}
+
+export function isTrashed(project) {
+  return project?.trashed === true;
+}
+
+export function isOffer(project) {
+  return project?.status === "tilbud" && !isTrashed(project) && !isCompleted(project);
+}
+
+export function phaseLabel(project) {
+  if (isTrashed(project)) return "I papirkurven";
+  if (isCompleted(project)) return "Fullført";
+  if (project?.status === "tilbud") return "Tilbud";
+  return "Pågår";
+}
+
+export function daysSince(value, now = new Date()) {
+  const date = toDate(value);
+  if (!date) return null;
+  return Math.floor((now.getTime() - date.getTime()) / MS_DAY);
+}
+
+export function trashDaysLeft(project, now = new Date()) {
+  if (!isTrashed(project)) return null;
+  const age = daysSince(project.trashedAt, now);
+  if (age == null) return TRASH_DAYS;
+  return Math.max(0, TRASH_DAYS - age);
+}
+
+export function missingTemplateSteps(steps, items) {
+  const have = new Set(
+    (items || [])
+      .filter((item) => item && item.kind === "bilde" && item.approved !== false && item.step)
+      .map((item) => item.step)
+  );
+  return (steps || []).filter((step) => step && !have.has(step));
+}
+
+export function approvalLine(item) {
+  if (!item || (!item.approvalRequested && !item.approvalStatus)) return "";
+  const status = item.approvalStatus || "venter";
+  const label = status === "godkjent"
+    ? "Godkjent av kunde"
+    : status === "avslatt"
+      ? "Avslått av kunde"
+      : "Venter på kundens godkjenning";
+  const who = item.approvedByName ? ` (${item.approvedByName})` : "";
+  const when = formatWhen(item.approvedAt);
+  return [label + who, when].filter(Boolean).join(" · ");
+}
+
 function clip(value, max) {
   return String(value || "").trim().slice(0, max);
 }
@@ -164,7 +233,7 @@ export function buildReferenceDoc(project, items, photosByItem = {}) {
       continue;
     }
     if (title || text) {
-      if (["bilde", "endring", "avvik", "kunde"].includes(item.kind)) {
+      if (["bilde", "endring", "avvik", "kunde", "tilbud"].includes(item.kind)) {
         tasks.push({ kind: item.kind, title, text, createdAt: toIso(item.createdAt) });
       }
     }
@@ -216,6 +285,7 @@ export function buildLocalDraft(project, items, extras = {}) {
     ["endring", "Endringer"],
     ["avvik", "Avvik"],
     ["kunde", "Grunnlag fra kunde"],
+    ["tilbud", "Tilbud"],
   ];
 
   for (const [kind, heading] of groups) {
@@ -229,6 +299,8 @@ export function buildLocalDraft(project, items, extras = {}) {
       const head = [when, title].filter(Boolean).join(" — ");
       lines.push(head ? `- ${head}` : "- Notat");
       if (text) lines.push(`  ${text}`);
+      const approval = approvalLine(item);
+      if (approval) lines.push(`  ${approval}`);
       const photos = photosByItem[item.id] || [];
       if (photos.length) {
         const captions = photos.map((photo) => clip(photo.caption, 180)).filter(Boolean);

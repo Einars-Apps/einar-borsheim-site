@@ -8,8 +8,10 @@ import {
   setDoc,
   collection,
   addDoc,
+  updateDoc,
   query,
   where,
+  orderBy,
   onSnapshot,
   serverTimestamp,
   getDocs,
@@ -20,7 +22,8 @@ import {
   uploadBytes,
   getDownloadURL,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-storage.js";
-import { formatDay, formatWhen } from "../www/js/logic.js";
+import { approvalLine, formatDay, formatWhen, isCompleted } from "../www/js/logic.js";
+import { canSpeak, dictate } from "../www/js/speech.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -39,6 +42,10 @@ let uid = "";
 let project = null;
 let approvedItems = [];
 let ownItems = [];
+let legacyPhotos = [];
+let approvedDocs = [];
+let ownDocs = [];
+let thread = [];
 
 function show(view) {
   for (const node of [viewLoading, viewError, viewProject]) node.classList.add("hidden");
@@ -122,7 +129,7 @@ function render() {
     return;
   }
   const items = mergedItems();
-  const done = project.status === "fullfort" || !!project.completedAt;
+  const finished = isCompleted(project);
   const pdfSlot = el("p", { class: "muted" }, "Sluttrapporten legges her når den er klar.");
   const pdfPath = `projects/${projectId}/rapport/sluttrapport.pdf`;
   viewProject.replaceChildren();
@@ -131,17 +138,17 @@ function render() {
     el("h1", {}, project.name || "Prosjekt"),
     project.description ? el("p", { class: "pre" }, project.description) : null,
     project.address ? el("p", { class: "muted" }, project.address) : null,
-    done ? el("p", { class: "muted" }, `Ferdig ${formatDay(project.completedAt) || ""}`.trim()) : null,
-    pdfSlot,
+    finished ? el("p", { class: "muted" }, `Ferdig ${formatDay(project.completedAt) || ""}`.trim()) : null,
+    finished ? pdfSlot : el("p", { class: "muted" }, "Sluttrapporten kan lastes ned når oppdraget er ferdig og godkjent."),
   ]));
   const knownPdf = displayUrl(project.pdfUrl);
-  if (project.pdfPath === pdfPath) {
+  if (finished && project.pdfPath === pdfPath) {
     getDownloadURL(ref(storage, pdfPath)).then((url) => {
       const href = displayUrl(url);
       if (!href || !pdfSlot.isConnected) return;
       pdfSlot.replaceWith(el("a", { class: "pdf-link", href, target: "_blank", rel: "noopener" }, "Last ned sluttrapport (PDF)"));
     }).catch(() => {});
-  } else if (knownPdf) {
+  } else if (finished && knownPdf) {
     pdfSlot.replaceWith(el("a", { class: "pdf-link", href: knownPdf, target: "_blank", rel: "noopener" }, "Last ned sluttrapport (PDF)"));
   }
 
@@ -152,16 +159,49 @@ function render() {
     ]));
   }
 
+  const pendingDecisions = items.filter((item) =>
+    (item.kind === "tilbud" || item.kind === "endring")
+    && item.approvalRequested === true
+    && item.approved === true
+    && item.approvalStatus !== "godkjent"
+    && item.approvalStatus !== "avslatt"
+  );
+  if (pendingDecisions.length) {
+    const box = el("section", { class: "k-card k-stack" }, [
+      el("h2", {}, "Til godkjenning"),
+      el("p", { class: "muted" }, "Ett trykk er nok. Tidspunkt og navn lagres i rapporten."),
+    ]);
+    for (const item of pendingDecisions) {
+      box.append(el("article", { class: "k-card" }, [
+        el("h3", {}, item.title || (item.kind === "tilbud" ? "Tilbud" : "Endring")),
+        item.text ? el("p", { class: "pre" }, item.text) : null,
+        decisionButtons(item),
+      ]));
+    }
+    viewProject.append(box);
+  }
+
   const groups = [
     ["bilde", "Bilder"],
+    ["tilbud", "Tilbud"],
     ["endring", "Endringer"],
     ["avvik", "Avvik"],
   ];
   for (const [kind, title] of groups) {
     const rows = items.filter((item) => item.kind === kind && item.approved === true);
     const section = el("section", { class: "k-card k-stack" }, [el("h2", {}, title)]);
-    if (!rows.length) section.append(el("p", { class: "muted" }, "Ingenting er lagt ut her ennå."));
+    if (!rows.length && !(kind === "bilde" && legacyPhotos.length)) section.append(el("p", { class: "muted" }, "Ingenting er lagt ut her ennå."));
     for (const item of rows) section.append(itemCard(item));
+    if (kind === "bilde") {
+      for (const photo of legacyPhotos) {
+        const src = displayUrl(photo.url);
+        if (!src) continue;
+        section.append(el("figure", {}, [
+          el("img", { class: "k-photo", src, alt: photo.caption || "Bilde", loading: "lazy" }),
+          photo.caption ? el("figcaption", { class: "muted" }, photo.caption) : null,
+        ]));
+      }
+    }
     viewProject.append(section);
   }
 
@@ -174,10 +214,12 @@ function render() {
     ...mine.map((item) => itemCard(item, true)),
   ]);
   viewProject.append(inbox);
+  viewProject.append(messageSection());
+  viewProject.append(documentSection());
 
   const rate = el("section", { class: "k-card k-stack" }, [el("h2", {}, "Vurdering")]);
   const ratings = items.filter((item) => item.kind === "vurdering" && item.createdBy === uid);
-  if (!done) {
+  if (!finished) {
     rate.append(el("p", { class: "muted" }, "Du kan legge igjen stjerner og en kommentar når oppdraget er markert ferdig."));
   } else {
     for (const item of ratings) rate.append(itemCard(item, true));
@@ -195,6 +237,7 @@ function itemCard(item, showStatus = false) {
     item.kind === "vurdering" && item.title ? el("p", {}, `${item.stars || "–"} av 5`) : null,
     item.text ? el("p", { class: "pre" }, item.text) : null,
     el("p", { class: "muted" }, formatWhen(item.createdAt)),
+    approvalNote(item),
     el("div", { class: "k-stack", id: `media-${item.id}` }),
     el("div", { id: `comments-${item.id}` }),
     commentForm(item.id),
@@ -206,6 +249,7 @@ function commentForm(itemId) {
   const input = el("textarea", { rows: "2", maxlength: "2000", placeholder: "Legg til en kommentar" });
   const form = el("form", { class: "k-stack" }, [
     input,
+    mic(input),
     el("button", { type: "submit", class: "btn btn-ghost" }, "Send kommentar"),
   ]);
   form.addEventListener("submit", async (event) => {
@@ -287,6 +331,7 @@ function submissionForm() {
     field("Navn", name),
     field("Overskrift", title),
     field("Beskrivelse", text),
+    mic(text),
     field("Bilder", files),
     submit,
     status,
@@ -350,6 +395,7 @@ function ratingForm() {
     el("p", {}, "Hvor fornøyd er du?"),
     starRow,
     field("Kommentar", text),
+    mic(text),
     field("Bilder av resultatet, hvis du vil", files),
     submit,
     status,
@@ -412,6 +458,194 @@ async function uploadPhoto(itemId, file, index) {
   });
 }
 
+function mic(textarea) {
+  if (!canSpeak()) return null;
+  const button = el("button", { type: "button", class: "btn btn-ghost" }, "Tale");
+  button.addEventListener("click", async () => {
+    try {
+      await dictate((spoken) => {
+        const base = textarea.value || "";
+        const spacer = base && !/\s$/.test(base) ? " " : "";
+        textarea.value = `${base}${spacer}${spoken}`;
+      });
+    } catch (error) {
+      console.error(error);
+      alert("Tale til tekst virket ikke. Sjekk mikrofontillatelse.");
+    }
+  });
+  return button;
+}
+
+function approvalNote(item) {
+  if (!item.approvalRequested) return null;
+  if (item.approvalStatus !== "godkjent" && item.approvalStatus !== "avslatt") return null;
+  return el("p", { class: "notice" }, approvalLine(item));
+}
+
+function decisionButtons(item) {
+  return el("div", { class: "k-actions" }, [
+    el("button", {
+      type: "button",
+      class: "btn btn-primary",
+      onclick: () => decide(item, "godkjent"),
+    }, item.kind === "tilbud" ? "Godkjenn tilbudet" : "Godkjenn endringen"),
+    el("button", {
+      type: "button",
+      class: "btn btn-ghost",
+      onclick: () => decide(item, "avslatt"),
+    }, "Avslå"),
+  ]);
+}
+
+async function decide(item, status) {
+  const name = String(project?.customerName || "Kunde").trim().slice(0, 79) || "Kunde";
+  try {
+    await updateDoc(doc(db, "projects", projectId, "items", item.id), {
+      approvalStatus: status,
+      approvedAt: serverTimestamp(),
+      approvedBy: uid,
+      approvedByName: name,
+    });
+    notice = status === "godkjent" ? "Takk. Godkjenningen er lagret." : "Svaret er lagret.";
+    document.activeElement?.blur?.();
+    render();
+  } catch (error) {
+    console.error(error);
+    alert("Kunne ikke lagre svaret. Prøv igjen.");
+  }
+}
+
+function mergedDocs() {
+  const map = new Map();
+  for (const item of approvedDocs) map.set(item.id, item);
+  for (const item of ownDocs) map.set(item.id, item);
+  return [...map.values()].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+}
+
+function messageSection() {
+  const list = el("div", { class: "thread" });
+  if (!thread.length) list.append(el("p", { class: "muted" }, "Ingen meldinger ennå."));
+  for (const message of thread) {
+    const mine = message.sender === "customer";
+    const src = displayUrl(message.imageUrl);
+    list.append(el("article", { class: `bubble ${mine ? "bubble-customer" : "bubble-admin"}` }, [
+      src ? el("img", { src, alt: "Bilde i meldingen" }) : null,
+      message.text ? el("p", { class: "pre" }, message.text) : null,
+      el("p", { class: "muted" }, `${mine ? "Deg" : "Einar A Børsheim"} · ${formatWhen(message.createdAt)}`),
+    ]));
+  }
+  const input = el("textarea", { rows: "3", maxlength: "4000", placeholder: "Skriv til Einar" });
+  const file = el("input", { type: "file", accept: "image/*" });
+  const status = el("p", { class: "muted", hidden: true });
+  const form = el("form", { class: "k-stack" }, [
+    input,
+    mic(input),
+    field("Bilde, hvis du vil", file),
+    el("button", { type: "submit", class: "btn btn-primary" }, "Send melding"),
+    status,
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    const chosen = file.files?.[0];
+    if (!text && !chosen) return;
+    form.querySelector("button").disabled = true;
+    status.hidden = false;
+    status.textContent = "Sender…";
+    try {
+      const payload = { text, sender: "customer", createdAt: serverTimestamp() };
+      if (chosen) {
+        const blob = await compressImage(chosen);
+        const imagePath = `projects/${projectId}/media/melding-${Date.now()}.jpg`;
+        const storageRef = ref(storage, imagePath);
+        await uploadBytes(storageRef, blob, { contentType: "image/jpeg" });
+        payload.imageUrl = await getDownloadURL(storageRef);
+        payload.imagePath = imagePath;
+      }
+      await addDoc(collection(db, "projects", projectId, "messages"), payload);
+      input.value = "";
+      file.value = "";
+      input.blur();
+      status.textContent = "Sendt.";
+    } catch (error) {
+      console.error(error);
+      status.textContent = "Meldingen ble ikke sendt.";
+    } finally {
+      form.querySelector("button").disabled = false;
+    }
+  });
+  return el("section", { class: "k-card k-stack" }, [
+    el("h2", {}, "Meldinger"),
+    el("p", { class: "muted" }, "Skriv direkte til Einar. Svar vises her."),
+    list,
+    form,
+  ]);
+}
+
+function documentSection() {
+  const docs = mergedDocs();
+  const list = el("div", { class: "k-stack" });
+  if (!docs.length) list.append(el("p", { class: "muted" }, "Ingen dokumenter ennå."));
+  for (const item of docs) {
+    const href = displayUrl(item.url);
+    list.append(el("article", {}, [
+      href ? el("a", { href, target: "_blank", rel: "noopener" }, item.name || "Dokument") : el("p", {}, item.name || "Dokument"),
+      el("p", { class: "muted" }, [
+        item.source === "customer" ? "Deg" : "Einar A Børsheim",
+        formatWhen(item.createdAt),
+        item.approved === false ? "Venter på godkjenning" : "",
+      ].filter(Boolean).join(" · ")),
+    ]));
+  }
+  const file = el("input", { type: "file", multiple: true });
+  const status = el("p", { class: "muted", hidden: true });
+  const form = el("form", { class: "k-stack" }, [
+    field("Last opp tegning, tilbud eller annet", file),
+    el("button", { type: "submit", class: "btn btn-ghost" }, "Send dokument"),
+    status,
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const files = [...(file.files || [])];
+    if (!files.length) return;
+    form.querySelector("button").disabled = true;
+    status.hidden = false;
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        status.textContent = `Laster opp ${index + 1} av ${files.length}…`;
+        const current = files[index];
+        const safeName = String(current.name || "dokument").replace(/[\\/]/g, "-");
+        const storagePath = `projects/${projectId}/documents/${Date.now()}-${index}-${safeName}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, current, { contentType: current.type || "application/octet-stream" });
+        const url = await getDownloadURL(storageRef);
+        await addDoc(collection(db, "projects", projectId, "documents"), {
+          name: current.name || "Dokument",
+          url,
+          storagePath,
+          approved: false,
+          source: "customer",
+          uploadedBy: uid,
+          createdAt: serverTimestamp(),
+        });
+      }
+      file.value = "";
+      status.textContent = "Sendt. Einar godkjenner før det vises som klart.";
+    } catch (error) {
+      console.error(error);
+      status.textContent = "Dokumentet ble ikke sendt.";
+    } finally {
+      form.querySelector("button").disabled = false;
+    }
+  });
+  return el("section", { class: "k-card k-stack" }, [
+    el("h2", {}, "Dokumenter"),
+    el("p", { class: "muted" }, "Tegninger, oppdateringer og tilbud. Det du laster opp venter til Einar har sett det."),
+    list,
+    form,
+  ]);
+}
+
 async function init() {
   if (!projectId || !token) {
     show(viewError);
@@ -442,6 +676,22 @@ async function init() {
     onSnapshot(doc(db, "projects", projectId), (snap) => {
       if (!snap.exists()) return;
       project = { id: snap.id, ...snap.data() };
+      render();
+    });
+    onSnapshot(query(collection(db, "projects", projectId, "photos"), where("approved", "==", true)), (snap) => {
+      legacyPhotos = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      render();
+    });
+    onSnapshot(query(collection(db, "projects", projectId, "documents"), where("approved", "==", true)), (snap) => {
+      approvedDocs = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      render();
+    });
+    onSnapshot(query(collection(db, "projects", projectId, "documents"), where("source", "==", "customer")), (snap) => {
+      ownDocs = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      render();
+    });
+    onSnapshot(query(collection(db, "projects", projectId, "messages"), orderBy("createdAt", "asc")), (snap) => {
+      thread = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       render();
     });
   } catch (error) {

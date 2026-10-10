@@ -52,6 +52,13 @@ img { max-width: 100%; }
   background: var(--accent-dark);
   color: #f4fbf7;
 }
+.topbar-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: 0 0 auto;
+}
 .topbar-text { min-width: 0; flex: 1; }
 .topbar h1 {
   margin: 0;
@@ -169,6 +176,7 @@ img { max-width: 100%; }
 
 .login-screen { min-height: 100dvh; justify-content: center; padding: 32px 20px 48px; }
 .brand-lockup { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.login-logo { width: 104px; height: 104px; border-radius: 50%; object-fit: cover; align-self: center; }
 .brand-lockup strong { color: var(--accent); letter-spacing: 0.02em; }
 
 .field { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 0.92rem; }
@@ -397,6 +405,13 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
 .save-state { min-height: 1.2em; }
+.thread { display: flex; flex-direction: column; gap: 8px; }
+.bubble { max-width: 88%; padding: 10px 12px; border-radius: 16px; }
+.bubble p { margin: 0; }
+.bubble img { width: 100%; border-radius: 12px; margin-bottom: 6px; }
+.bubble-admin { align-self: flex-end; background: #e7f2ec; }
+.bubble-customer { align-self: flex-start; background: white; border: 1px solid var(--line); }
+.customer-box input[readonly] { background: #f6f1e8; }
 
 @media (min-width: 800px) {
   .tabbar, .topbar { left: 50%; right: auto; width: min(760px, 100%); transform: translateX(-50%); }
