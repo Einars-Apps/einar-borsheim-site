@@ -1,9 +1,28 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.token.email == 'e.bors@hotmail.com';
+    }
+
+    function hasAccess(projectId) {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/projects/$(projectId)/access/$(request.auth.uid));
+    }
+
+    function isPublic(projectId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId)).data.get('public', false) == true;
+    }
+
     match /projects/{projectId}/{fileName} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null;
+      allow read: if isAdmin() || hasAccess(projectId) || isPublic(projectId);
+      // Bare bilder, maks 15 MB. Kunden kan ikke overskrive eller slette.
+      allow create: if (isAdmin() || hasAccess(projectId))
+        && request.resource.size < 15 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow update, delete: if isAdmin();
     }
   }
 }

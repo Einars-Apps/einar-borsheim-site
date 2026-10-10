@@ -1,18 +1,49 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // Kun Einar (e-postinnlogging med denne adressen) er admin.
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.token.email == 'e.bors@hotmail.com';
+    }
+
+    // Kunden har aapnet riktig delingslenke for dette prosjektet.
+    function hasAccess(projectId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/projects/$(projectId)/access/$(request.auth.uid));
+    }
+
+    // Prosjektet er merket som offentlig referanse (public: true).
+    function isPublic(projectId) {
+      return get(/databases/$(database)/documents/projects/$(projectId)).data.get('public', false) == true;
+    }
+
     match /projects/{projectId} {
-      // Alle innloggede (admin med e-post, eller kunde anonymt via lenke) kan lese
-      allow read: if request.auth != null;
-      // Kun admin (e-post-innlogging) kan opprette/endre/slette selve prosjektet
-      allow create, update, delete: if request.auth != null && request.auth.token.email != null;
+      allow read: if isAdmin()
+        || hasAccess(projectId)
+        || resource.data.get('public', false) == true;
+      allow create, update, delete: if isAdmin();
+
+      // Kunden registrerer tilgang ved aa oppgi riktig token fra lenken.
+      match /access/{uid} {
+        allow create: if request.auth != null
+          && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['token'])
+          && request.resource.data.token
+             == get(/databases/$(database)/documents/projects/$(projectId)).data.shareToken;
+        allow read: if isAdmin() || (request.auth != null && request.auth.uid == uid);
+        allow delete: if isAdmin();
+      }
 
       match /photos/{photoId} {
-        allow read: if request.auth != null;
-        // Både admin og kunde kan legge til bilder
-        allow create: if request.auth != null;
-        // Kun admin kan godkjenne, redigere kommentar eller slette
-        allow update, delete: if request.auth != null && request.auth.token.email != null;
+        allow read: if isAdmin()
+          || (hasAccess(projectId) && resource.data.approved == true)
+          || (isPublic(projectId) && resource.data.approved == true);
+        // Admin kan alltid legge til. Kunden kan bare legge til ikke-godkjente bilder.
+        allow create: if isAdmin()
+          || (hasAccess(projectId) && request.resource.data.approved == false);
+        allow update, delete: if isAdmin();
       }
     }
   }

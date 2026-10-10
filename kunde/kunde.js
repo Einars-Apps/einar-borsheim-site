@@ -5,6 +5,7 @@ import {
   getFirestore,
   doc,
   getDoc,
+  setDoc,
   collection,
   addDoc,
   query,
@@ -60,7 +61,9 @@ async function init() {
     return;
   }
   try {
-    await signInAnonymously(auth);
+    const cred = await signInAnonymously(auth);
+    // Registrer tilgang med token fra lenken (sjekkes av Firestore-reglene).
+    await setDoc(doc(db, "projects", projectId, "access", cred.user.uid), { token }).catch(() => {});
     const snap = await getDoc(doc(db, "projects", projectId));
     if (!snap.exists() || snap.data().shareToken !== token) {
       showView(viewError);
