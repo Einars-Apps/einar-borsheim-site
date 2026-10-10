@@ -5,7 +5,7 @@ export const COMPANY = {
   postal: "1386 Asker",
   address: "Eriksvei 13\n1386 Asker",
   phone: "905 52 065",
-  email: "e.bors@hotmail.com",
+  email: "post@einar-borsheim.com",
   orgNr: "962 091 504",
 };
 
