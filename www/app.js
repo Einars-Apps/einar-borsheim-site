@@ -83,9 +83,13 @@ const pendingSectionEl = document.getElementById("pending-section");
 const pendingGridEl = document.getElementById("pending-grid");
 const photoGridEl = document.getElementById("photo-grid");
 const photosEmptyEl = document.getElementById("photos-empty");
+const messageListEl = document.getElementById("message-list");
+const messageInputEl = document.getElementById("message-input");
+const sendMessageBtn = document.getElementById("send-message-btn");
 
 let unsubscribeProjects = null;
 let unsubscribePhotos = null;
+let unsubscribeMessages = null;
 let currentProject = null; // { id, name, description, shareToken }
 let currentPhotos = [];
 let reportSaveTimeout;
@@ -215,13 +219,60 @@ function openProject(id, data) {
   reportTextEl.value = data.reportText || "";
   showView(viewProject);
   listenToPhotos(id);
+  listenToMessages(id);
   renderPendingQueue();
 }
 
 backToProjectsBtn.addEventListener("click", () => {
   if (unsubscribePhotos) unsubscribePhotos();
+  if (unsubscribeMessages) unsubscribeMessages();
   currentProject = null;
   showView(viewProjects);
+});
+
+function listenToMessages(projectId) {
+  if (unsubscribeMessages) unsubscribeMessages();
+  const q = query(collection(db, "projects", projectId, "messages"), orderBy("createdAt", "asc"));
+  unsubscribeMessages = onSnapshot(q, (snapshot) => {
+    messageListEl.innerHTML = "";
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      const bubble = document.createElement("div");
+      bubble.className = `message-bubble ${data.sender === "admin" ? "from-admin" : "from-customer"}`;
+      const time = data.createdAt?.toDate ? data.createdAt.toDate().toLocaleString("no-NO") : "";
+      bubble.innerHTML = `<span></span><span class="message-meta">${data.sender === "admin" ? "Deg" : "Kunde"} · ${time}</span>`;
+      bubble.querySelector("span").textContent = data.text;
+      messageListEl.appendChild(bubble);
+    });
+    messageListEl.scrollTop = messageListEl.scrollHeight;
+  });
+}
+
+async function sendAdminMessage() {
+  const text = messageInputEl.value.trim();
+  if (!text || !currentProject) return;
+  sendMessageBtn.disabled = true;
+  try {
+    await addDoc(collection(db, "projects", currentProject.id, "messages"), {
+      text,
+      sender: "admin",
+      createdAt: serverTimestamp(),
+    });
+    messageInputEl.value = "";
+  } catch (err) {
+    console.error("Kunne ikke sende melding", err.code, err.message);
+    alert(`Kunne ikke sende melding (${err.code || err.message}).`);
+  } finally {
+    sendMessageBtn.disabled = false;
+  }
+}
+
+sendMessageBtn.addEventListener("click", sendAdminMessage);
+messageInputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendAdminMessage();
+  }
 });
 
 reportTextEl.addEventListener("input", () => {
@@ -284,8 +335,11 @@ deleteProjectBtn.addEventListener("click", async () => {
   }
 });
 
+const photoCards = new Map(); // photoId -> { card, container }
+
 function listenToPhotos(projectId) {
   if (unsubscribePhotos) unsubscribePhotos();
+  photoCards.clear();
   const q = query(collection(db, "projects", projectId, "photos"), orderBy("createdAt", "desc"));
   unsubscribePhotos = onSnapshot(q, (snapshot) => {
     currentPhotos = [];
@@ -298,15 +352,55 @@ function listenToPhotos(projectId) {
       else approved.push(data);
     });
 
-    photoGridEl.innerHTML = "";
     photosEmptyEl.classList.toggle("hidden", approved.length > 0);
-    approved.forEach((data) => renderPhotoCard(photoGridEl, data, false));
-
     pendingSectionEl.classList.toggle("hidden", pending.length === 0);
-    pendingGridEl.innerHTML = "";
-    pending.forEach((data) => renderPhotoCard(pendingGridEl, data, true));
+
+    const seenIds = new Set();
+    updatePhotoGrid(photoGridEl, approved, false, seenIds);
+    updatePhotoGrid(pendingGridEl, pending, true, seenIds);
+
+    // Fjern kort for bilder som ikke lenger finnes (slettet)
+    for (const [id, entry] of photoCards) {
+      if (!seenIds.has(id)) {
+        entry.card.remove();
+        photoCards.delete(id);
+      }
+    }
   });
 }
+
+// Oppdaterer rutenettet uten å ødelegge fokus i et tekstfelt brukeren skriver i akkurat nå
+function updatePhotoGrid(container, items, isPending, seenIds) {
+  let previousEl = null;
+  items.forEach((data) => {
+    seenIds.add(data.id);
+    const existing = photoCards.get(data.id);
+    const captionHasFocus = existing && existing.card.querySelector(".photo-caption") === document.activeElement;
+
+    if (!existing) {
+      const card = renderPhotoCard(container, data, isPending);
+      photoCards.set(data.id, { card, container });
+    } else {
+      // Flytt kortet til riktig container hvis det byttet status (kunde->godkjent)
+      if (existing.container !== container) {
+        container.appendChild(existing.card);
+        existing.container = container;
+      }
+      if (!captionHasFocus) {
+        const captionEl = existing.card.querySelector(".photo-caption");
+        if (captionEl.value !== (data.caption || "")) captionEl.value = data.caption || "";
+      }
+    }
+    // Sørg for riktig rekkefølge uten å flytte kortet brukeren skriver i
+    const entry = photoCards.get(data.id);
+    if (!captionHasFocus) {
+      if (previousEl) previousEl.after(entry.card);
+      else container.prepend(entry.card);
+    }
+    previousEl = entry.card;
+  });
+}
+
 
 function renderPhotoCard(container, data, isPending) {
   const card = document.createElement("div");
@@ -364,7 +458,7 @@ function renderPhotoCard(container, data, isPending) {
     await deleteDoc(doc(db, "projects", currentProject.id, "photos", data.id));
   });
 
-  container.appendChild(card);
+  return card;
 }
 
 // --- Offline-kø (lagres lokalt til nettforbindelse er tilbake) ---

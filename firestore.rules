@@ -45,6 +45,15 @@ service cloud.firestore {
           || (hasAccess(projectId) && request.resource.data.approved == false);
         allow update, delete: if isAdmin();
       }
+
+      // Toveis meldinger (innboks/utboks) mellom admin og kunde - ingen godkjenning nodvendig.
+      match /messages/{messageId} {
+        allow read: if isAdmin() || hasAccess(projectId) || isPublic(projectId);
+        allow create: if (isAdmin() || hasAccess(projectId))
+          && request.resource.data.keys().hasAll(['text', 'sender', 'createdAt'])
+          && request.resource.data.sender in ['admin', 'customer'];
+        allow update, delete: if isAdmin();
+      }
     }
   }
 }

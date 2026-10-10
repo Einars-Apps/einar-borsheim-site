@@ -10,6 +10,7 @@ import {
   addDoc,
   query,
   where,
+  orderBy,
   onSnapshot,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
@@ -38,6 +39,9 @@ const photoInput = document.getElementById("photo-input");
 const commentInput = document.getElementById("comment-input");
 const submitBtn = document.getElementById("submit-btn");
 const submitStatusEl = document.getElementById("submit-status");
+const messageListEl = document.getElementById("message-list");
+const messageInputEl = document.getElementById("message-input");
+const sendMessageBtn = document.getElementById("send-message-btn");
 
 function showView(view) {
   [viewLoading, viewError, viewProject].forEach((v) => v.classList.add("hidden"));
@@ -78,11 +82,56 @@ async function init() {
     }
     showView(viewProject);
     listenToPhotos();
+    listenToMessages();
   } catch (err) {
     console.error("Kunne ikke laste prosjekt", err);
     showView(viewError);
   }
 }
+
+function listenToMessages() {
+  const q = query(collection(db, "projects", projectId, "messages"), orderBy("createdAt", "asc"));
+  onSnapshot(q, (snapshot) => {
+    messageListEl.innerHTML = "";
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      const bubble = document.createElement("div");
+      bubble.className = `message-bubble ${data.sender === "customer" ? "from-customer" : "from-admin"}`;
+      const time = data.createdAt?.toDate ? data.createdAt.toDate().toLocaleString("no-NO") : "";
+      bubble.innerHTML = `<span></span><span class="message-meta">${data.sender === "customer" ? "Deg" : "Einar A Børsheim"} · ${time}</span>`;
+      bubble.querySelector("span").textContent = data.text;
+      messageListEl.appendChild(bubble);
+    });
+    messageListEl.scrollTop = messageListEl.scrollHeight;
+  });
+}
+
+async function sendCustomerMessage() {
+  const text = messageInputEl.value.trim();
+  if (!text) return;
+  sendMessageBtn.disabled = true;
+  try {
+    await addDoc(collection(db, "projects", projectId, "messages"), {
+      text,
+      sender: "customer",
+      createdAt: serverTimestamp(),
+    });
+    messageInputEl.value = "";
+  } catch (err) {
+    console.error("Kunne ikke sende melding", err);
+    alert("Kunne ikke sende melding. Prøv igjen.");
+  } finally {
+    sendMessageBtn.disabled = false;
+  }
+}
+
+sendMessageBtn.addEventListener("click", sendCustomerMessage);
+messageInputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendCustomerMessage();
+  }
+});
 
 function listenToPhotos() {
   const q = query(collection(db, "projects", projectId, "photos"), where("approved", "==", true));
