@@ -59,6 +59,8 @@ import {
   shareTargets,
 } from "./js/offers.js";
 import { renderFikenProjectBox, renderOfferEditor, renderOfferList, renderQuickOrder } from "./js/offers-view.js";
+import { changeText, costChanges, costReportText, liveCost, patchCost } from "./js/cost.js";
+import { renderCostOverview } from "./js/cost-view.js";
 import { fetchFrostRain } from "./js/frost.js";
 import { button, el, field, icon, sheet, toast } from "./js/dom.js";
 
@@ -712,6 +714,24 @@ async function saveReportPdf(project, reportText) {
     }
     sections.push({ title: "Drenering – dokumentasjon og vurdering", items: drainageItems });
   }
+  const costSnap = await db.collection("projects").doc(project.id).collection("quantities").doc("live").get();
+  const logSnap = await db.collection("projects").doc(project.id).collection("costLog").orderBy("at", "desc").limit(80).get();
+  const costSettings = await readAppSettings();
+  const costSummary = liveCost({ cost: costSnap.data() || null, prices: costSettings.prices, items });
+  const costHistory = logSnap.docs.map((entry) => entry.data()).reverse();
+  sections.push({
+    title: "Nåværende kostnad",
+    items: [{
+      title: "Oversikt",
+      text: costReportText(costSummary, costHistory.map((entry) => ({
+        when: formatWhen(entry.at),
+        byName: entry.byName || "Einar",
+        text: entry.text || changeText(entry),
+      }))),
+      photos: [],
+      comments: [],
+    }],
+  });
   const approvedOffers = approved.filter((item) => isOfferItem(item) && offerStatus(item) === "godkjent");
   if (approvedOffers.length) {
     const offerItems = [{
@@ -1441,6 +1461,10 @@ function mountProject(route) {
   let items = [];
   let legacy = [];
   let drainageCount = 0;
+  let costDoc = null;
+  let costLog = [];
+  let priceTable = pricesFromSettings(null);
+  let costQueue = Promise.resolve();
   const draw = () => {
     const active = document.activeElement;
     if (active && root.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) {
@@ -1540,8 +1564,49 @@ function mountProject(route) {
       button("Meldinger", { class: "btn btn-ghost", onClick: () => push({ name: "messages", projectId: project.id }) }),
       button("Dokumenter", { class: "btn btn-ghost", onClick: () => push({ name: "documents", projectId: project.id }) }),
     ]);
+    const summary = liveCost({ cost: costDoc, prices: priceTable, items });
+    const savePatch = (patch) => {
+      costQueue = costQueue.then(async () => {
+        const next = patchCost(costDoc, priceTable, patch);
+        const changes = costChanges(costDoc, next, priceTable);
+        if (!changes.length) return;
+        costDoc = { agreedExVat: next.agreedExVat, lines: next.lines };
+        draw();
+        await db.collection("projects").doc(project.id).collection("quantities").doc("live").set({
+          agreedExVat: next.agreedExVat,
+          lines: next.lines,
+          updatedAt: stamp(),
+        }, { merge: true });
+        await Promise.all(changes.map((change) => db.collection("projects").doc(project.id).collection("costLog").add({
+          at: stamp(),
+          by: user?.uid || "",
+          byName: "Einar",
+          lineId: change.lineId,
+          label: change.label,
+          field: change.field,
+          from: change.from,
+          to: change.to,
+          unit: change.unit,
+          text: changeText(change),
+        })));
+      }).catch((error) => {
+        console.error(error);
+        toast("Kunne ikke lagre mengden");
+      });
+    };
     root.append(
       info,
+      renderCostOverview({
+        summary,
+        history: costLog.map((entry) => ({
+          when: formatWhen(entry.at),
+          byName: entry.byName || "Einar",
+          text: entry.text || changeText(entry),
+        })),
+        editable: true,
+        onAgreed: (value) => savePatch({ field: "agreedExVat", value }),
+        onQuantity: (lineId, field, value) => savePatch({ lineId, field, value }),
+      }),
       renderFikenProjectBox({
         project,
         onList: () => callFiken("listFikenProjects", {}),
@@ -1567,6 +1632,18 @@ function mountProject(route) {
     drainageCount = snap.size;
     draw();
   }, (error) => console.error(error)));
+  subs.push(db.collection("projects").doc(route.projectId).collection("quantities").doc("live").onSnapshot((snap) => {
+    costDoc = snap.exists ? snap.data() : null;
+    draw();
+  }, (error) => console.error(error)));
+  subs.push(db.collection("projects").doc(route.projectId).collection("costLog").orderBy("at", "desc").limit(40).onSnapshot((snap) => {
+    costLog = snap.docs.map((entry) => entry.data());
+    draw();
+  }, (error) => console.error(error)));
+  readAppSettings().then((settings) => {
+    priceTable = settings.prices;
+    draw();
+  });
   draw();
 }
 

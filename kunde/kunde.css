@@ -2,7 +2,9 @@
   max-width: 760px;
   margin: 0 auto;
   padding: 1.2rem 1rem 4rem;
+  overflow-x: clip;
 }
+#view-project { overflow-x: clip; }
 
 .hidden { display: none !important; }
 
@@ -97,6 +99,18 @@ textarea { min-height: 96px; }
 .bubble img { width: 100%; border-radius: 12px; margin-bottom: 0.4rem; }
 .bubble-admin { align-self: flex-start; background: #fff; border: 1px solid var(--line); }
 .bubble-customer { align-self: flex-end; background: #e7f2ec; }
+
+.cost-box { display: flex; flex-direction: column; gap: 10px; overflow-wrap: anywhere; }
+.cost-box .h-app { margin: 0; font-size: 1.2rem; }
+.cost-box .meta, .cost-money, .cost-line-title, .qty-label { margin: 0; }
+.cost-box .meta { color: var(--muted); }
+.cost-line-title, .qty-label, .cost-money { font-weight: 700; }
+.cost-diff-up { color: #8e2f2f; font-weight: 700; margin: 0; }
+.cost-diff-down { color: #0f6b4c; font-weight: 700; margin: 0; }
+.cost-preview { background: #f3e2c8; border-radius: 12px; padding: 10px 12px; margin: 0; }
+.qty-line { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+.cost-log { margin: 0; padding-left: 1.1rem; }
+.cost-log li { margin: 0.25rem 0; overflow-wrap: anywhere; }
 
 .pdf-link {
   display: flex;

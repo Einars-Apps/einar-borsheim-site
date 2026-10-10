@@ -327,7 +327,19 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .photo-chip { margin: 0; width: 104px; }
 .photo-chip img { width: 104px; height: 104px; object-fit: cover; border-radius: 12px; display: block; }
 .cost-fallback { width: 100%; }
-.fiken-project, .fiken-status { overflow-wrap: anywhere; }
+.fiken-project, .fiken-status, .cost-box { overflow-wrap: anywhere; }
+.cost-box { display: flex; flex-direction: column; gap: 10px; }
+.cost-money, .cost-line-title, .qty-label { margin: 0; }
+.cost-line-title, .qty-label { font-weight: 700; }
+.cost-diff-up { color: var(--danger); font-weight: 700; margin: 0; }
+.cost-diff-down { color: var(--accent); font-weight: 700; margin: 0; }
+.cost-preview { background: #f3e2c8; border-radius: 12px; padding: 10px 12px; margin: 0; }
+.qty-line { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+.qty-step { display: flex; align-items: center; gap: 8px; }
+.qty-step input { flex: 1 1 auto; min-width: 0; text-align: center; }
+.qty-btn { flex: 0 0 52px; width: 52px; min-width: 52px; padding: 0; }
+.cost-log { margin: 0; padding-left: 1.1rem; }
+.cost-log li { margin: 0.25rem 0; }
 .pill-muted { background: #eeeae3; color: var(--muted); }
 
 .note { padding: 14px; box-shadow: none; }
