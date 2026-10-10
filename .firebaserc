@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "einar-borsheim-internkon-ee8b6"
-  }
+  },
+  "targets": {
+    "einar-borsheim-internkon-ee8b6": {
+      "storage": {
+        "rules": [
+          "einar-borsheim-internkon-ee8b6.firebasestorage.app"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

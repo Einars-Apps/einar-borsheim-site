@@ -3,6 +3,7 @@
     "rules": "firestore.rules"
   },
   "storage": {
+    "target": "rules",
     "rules": "storage.rules"
   }
 }
