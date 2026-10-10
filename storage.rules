@@ -4,7 +4,7 @@ service firebase.storage {
 
     function isAdmin() {
       return request.auth != null
-        && request.auth.token.email == 'e.bors@hotmail.com';
+        && request.auth.token.get('email', '') == 'e.bors@hotmail.com';
     }
 
     function hasAccess(projectId) {
@@ -16,13 +16,33 @@ service firebase.storage {
       return firestore.get(/databases/(default)/documents/projects/$(projectId)).data.get('public', false) == true;
     }
 
+    function isImage() {
+      return request.resource.size < 15 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    // Eldre bilder laa flatt under prosjektmappen. Beholdes for eksisterende filer.
     match /projects/{projectId}/{fileName} {
       allow read: if isAdmin() || hasAccess(projectId) || isPublic(projectId);
-      // Bare bilder, maks 15 MB. Kunden kan ikke overskrive eller slette.
-      allow create: if (isAdmin() || hasAccess(projectId))
-        && request.resource.size < 15 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
+      allow create: if (isAdmin() || hasAccess(projectId)) && isImage();
       allow update, delete: if isAdmin();
+    }
+
+    // Nye bilder. Offentlig nettside bruker nedlastingslenker i references, ikke direkte lesing.
+    match /projects/{projectId}/media/{fileName} {
+      allow read: if isAdmin() || hasAccess(projectId);
+      allow create: if (isAdmin() || hasAccess(projectId)) && isImage();
+      allow update, delete: if isAdmin();
+    }
+
+    // Sluttrapport. Kun admin skriver. Kunde med prosjektlenke kan laste ned.
+    match /projects/{projectId}/rapport/{fileName} {
+      allow read: if isAdmin() || hasAccess(projectId);
+      allow create, update: if isAdmin()
+        && request.resource.size < 40 * 1024 * 1024
+        && request.resource.contentType == 'application/pdf'
+        && fileName.matches('^[A-Za-z0-9_.-]+\\.pdf$');
+      allow delete: if isAdmin();
     }
   }
 }

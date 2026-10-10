@@ -1,0 +1,248 @@
+import { PORTAL_BASE } from "./company.js";
+
+export const KIND_META = {
+  bilde: {
+    label: "Bilder",
+    singular: "Bilde",
+    empty: "Ingen dokumentasjonsbilder ennå. Ta et bilde, så ligger det her.",
+  },
+  kunde: {
+    label: "Fra kunde",
+    singular: "Fra kunde",
+    empty: "Kunden har ikke sendt inn noe ennå. Del prosjektlenken, så kan de laste opp grunnlag.",
+  },
+  endring: {
+    label: "Endringer",
+    singular: "Endring",
+    empty: "Ingen endringer registrert.",
+  },
+  avvik: {
+    label: "Avvik",
+    singular: "Avvik",
+    empty: "Ingen avvik registrert.",
+  },
+};
+
+const MS_DAY = 24 * 60 * 60 * 1000;
+
+export function toDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value.toDate === "function") {
+    const date = value.toDate();
+    return date instanceof Date && !Number.isNaN(date.getTime()) ? date : null;
+  }
+  if (typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === "string") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === "object" && typeof value.seconds === "number") {
+    return new Date(value.seconds * 1000 + Math.floor((value.nanoseconds || 0) / 1e6));
+  }
+  return null;
+}
+
+export function toIso(value) {
+  const date = toDate(value);
+  return date ? date.toISOString() : null;
+}
+
+export function formatWhen(value) {
+  const date = toDate(value);
+  if (!date) return "";
+  return new Intl.DateTimeFormat("nb-NO", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+export function formatDay(value) {
+  const date = toDate(value);
+  if (!date) return "";
+  return new Intl.DateTimeFormat("nb-NO", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+export function addYears(date, years) {
+  const next = new Date(date.getTime());
+  next.setFullYear(next.getFullYear() + years);
+  return next;
+}
+
+export function reminderPlan(project, now = new Date()) {
+  const completed = toDate(project?.completedAt);
+  if (!completed) return [];
+  return [1, 2].map((year) => {
+    const due = addYears(completed, year);
+    const done = year === 1 ? !!project.reminder1Done : !!project.reminder2Done;
+    const daysUntil = Math.ceil((due.getTime() - now.getTime()) / MS_DAY);
+    let state = "scheduled";
+    if (done) state = "done";
+    else if (now.getTime() >= due.getTime()) state = "due";
+    return { year, due, done, state, daysUntil };
+  });
+}
+
+export function dueReminderCount(projects, now = new Date()) {
+  return (projects || []).reduce(
+    (sum, project) => sum + reminderPlan(project, now).filter((entry) => entry.state === "due").length,
+    0
+  );
+}
+
+export function reminderWhenLabel(entry) {
+  if (entry.state === "due") {
+    const late = Math.abs(Math.min(entry.daysUntil, 0));
+    if (late <= 0) return "Forfalt i dag";
+    if (late === 1) return "1 dag på overtid";
+    return `${late} dager på overtid`;
+  }
+  if (entry.daysUntil <= 1) return "Forfaller i morgen eller i dag";
+  return `Om ${entry.daysUntil} dager`;
+}
+
+export function randomToken(length = 12) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  let out = "";
+  for (let i = 0; i < length; i++) out += chars[bytes[i] % chars.length];
+  return out;
+}
+
+export function portalUrl(projectId, token, base = PORTAL_BASE) {
+  const url = new URL(base);
+  url.searchParams.set("p", projectId);
+  url.searchParams.set("t", token);
+  return url.toString();
+}
+
+export function reminderShareText(project, year, url) {
+  return `Hei! Det er omtrent ${year} år siden vi avsluttet «${project.name}». Hvis du vil, setter jeg pris på en kort vurdering av hvordan det ble: ${url}`;
+}
+
+export function projectShareText(project, url) {
+  return `Hei! Her kan du følge prosjektet «${project.name}», se rapporten og sende inn bilder og info: ${url}`;
+}
+
+function clip(value, max) {
+  return String(value || "").trim().slice(0, max);
+}
+
+function httpsUrl(value) {
+  const url = String(value || "");
+  if (!url.startsWith("https://") || url.length > 2000) return "";
+  return url;
+}
+
+// Kun felter som skal kunne ligge åpent på nettsiden.
+// Delingskode, kundekontakt, adresse og PDF-lenke skal aldri med.
+export function buildReferenceDoc(project, items, photosByItem = {}) {
+  const chosen = (items || []).filter((item) => item && item.approved === true && item.reference === true);
+  const photos = [];
+  const tasks = [];
+  const ratings = [];
+
+  for (const item of chosen) {
+    const text = clip(item.text, 800);
+    const title = clip(item.title, 140);
+    if (item.kind === "vurdering") {
+      const stars = Number(item.stars);
+      if (Number.isInteger(stars) && stars >= 1 && stars <= 5) {
+        ratings.push({ stars, text, createdAt: toIso(item.createdAt) });
+      }
+      continue;
+    }
+    if (title || text) {
+      if (["bilde", "endring", "avvik", "kunde"].includes(item.kind)) {
+        tasks.push({ kind: item.kind, title, text, createdAt: toIso(item.createdAt) });
+      }
+    }
+    const ownPhotos = photosByItem[item.id] || [];
+    for (const photo of ownPhotos) {
+      if (photos.length >= 24) break;
+      if (!photo || photo.approved === false) continue;
+      const url = httpsUrl(photo.url);
+      if (!url) continue;
+      photos.push({
+        url,
+        caption: clip(photo.caption || text, 300),
+        kind: item.kind || "bilde",
+      });
+    }
+  }
+
+  const ratingAvg = ratings.length
+    ? Math.round((ratings.reduce((sum, rating) => sum + rating.stars, 0) / ratings.length) * 10) / 10
+    : 0;
+
+  return {
+    name: clip(project?.name, 140),
+    summary: clip(project?.publicSummary, 1200),
+    location: clip(project?.publicLocation, 80),
+    completedAt: toIso(project?.completedAt),
+    photos: photos.slice(0, 24),
+    tasks: tasks.slice(0, 40),
+    ratings: ratings.slice(0, 10),
+    ratingAvg,
+    ratingCount: ratings.length,
+  };
+}
+
+export function buildLocalDraft(project, items, extras = {}) {
+  const photosByItem = extras.photosByItem || {};
+  const commentsByItem = extras.commentsByItem || {};
+  const lines = [];
+  lines.push(`Oppdrag: ${project?.name || "Uten navn"}`);
+  if (project?.address) lines.push(`Adresse: ${project.address}`);
+  if (project?.customerName) lines.push(`Kunde: ${project.customerName}`);
+  lines.push("");
+  lines.push("Arbeid utført");
+  lines.push("Skriv om hva som ble gjort. Punktene under er hentet fra notatene i prosjektet og kan redigeres.");
+  lines.push("");
+
+  const groups = [
+    ["bilde", "Dokumentasjon"],
+    ["endring", "Endringer"],
+    ["avvik", "Avvik"],
+    ["kunde", "Grunnlag fra kunde"],
+  ];
+
+  for (const [kind, heading] of groups) {
+    const list = (items || []).filter((item) => item.kind === kind && item.approved !== false);
+    if (!list.length) continue;
+    lines.push(heading);
+    for (const item of list) {
+      const when = formatWhen(item.createdAt);
+      const title = clip(item.title, 200);
+      const text = clip(item.text, 2000);
+      const head = [when, title].filter(Boolean).join(" — ");
+      lines.push(head ? `- ${head}` : "- Notat");
+      if (text) lines.push(`  ${text}`);
+      const photos = photosByItem[item.id] || [];
+      if (photos.length) {
+        const captions = photos.map((photo) => clip(photo.caption, 180)).filter(Boolean);
+        lines.push(`  Bilder: ${photos.length}${captions.length ? ` (${captions.join("; ")})` : ""}`);
+      }
+      const comments = (commentsByItem[item.id] || []).filter((comment) => comment.approved !== false);
+      for (const comment of comments) {
+        const textValue = clip(comment.text, 500);
+        if (!textValue) continue;
+        lines.push(`  Kommentar (${formatWhen(comment.createdAt)}): ${textValue}`);
+      }
+    }
+    lines.push("");
+  }
+
+  return `${lines.join("\n").trim()}\n`;
+}

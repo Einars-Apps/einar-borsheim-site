@@ -2,13 +2,13 @@
 <html lang="no">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Prosjektinnsyn | Einar A Børsheim</title>
-    <meta name="description" content="Se bilder og status for ditt prosjekt hos Einar A Børsheim." />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
-      rel="stylesheet"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prosjekt | Einar A Børsheim</title>
+    <meta name="description" content="Se dokumentasjon, last ned rapport og send inn bilder for ditt prosjekt hos Einar A Børsheim." />
+    <meta name="robots" content="noindex" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="../styles.css" />
     <link rel="stylesheet" href="kunde.css" />
   </head>
@@ -16,40 +16,16 @@
     <header class="site-header">
       <a class="brand" href="../index.html">Einar A Børsheim</a>
     </header>
-
     <main class="kunde-main">
       <section id="view-loading" class="panel">
-        <p>Laster prosjekt...</p>
+        <p>Åpner prosjektet…</p>
       </section>
-
       <section id="view-error" class="panel hidden">
-        <h1>Fant ikke prosjektet</h1>
-        <p class="muted">Lenken ser ut til å mangle eller ha utløpt. Ta kontakt med Einar A Børsheim for en ny lenke.</p>
+        <h1>Lenken virker ikke</h1>
+        <p class="muted">Be Einar om en ny lenke hvis denne er gammel eller ufullstendig.</p>
       </section>
-
-      <section id="view-project" class="panel hidden">
-        <h1 id="project-title">Prosjekt</h1>
-        <p id="project-desc" class="muted"></p>
-        <div id="report-box" class="hidden">
-          <h2>Status / rapport</h2>
-          <p id="report-text"></p>
-        </div>
-
-        <h2>Bilder</h2>
-        <div id="photo-grid" class="photo-grid"></div>
-        <p id="photos-empty" class="muted hidden">Ingen bilder lagt til ennå.</p>
-
-        <hr class="section-divider" />
-        <h2>Legg til bilde eller kommentar</h2>
-        <p class="muted">Bildene dine vises her etter at Einar har godkjent dem.</p>
-        <label class="upload-btn" for="photo-input">📷 Legg til bilde</label>
-        <input type="file" id="photo-input" accept="image/*" hidden />
-        <textarea id="comment-input" rows="2" placeholder="Valgfri kommentar til bildet..."></textarea>
-        <button id="submit-btn" class="btn btn-primary" disabled>Send inn</button>
-        <p id="submit-status" class="muted hidden"></p>
-      </section>
+      <section id="view-project" class="hidden"></section>
     </main>
-
     <script type="module" src="kunde.js"></script>
   </body>
 </html>
