@@ -47,6 +47,7 @@ const PENDING_QUEUE_KEY = "pendingPhotoUploads";
 const Camera = window.Capacitor?.Plugins?.Camera;
 const Share = window.Capacitor?.Plugins?.Share;
 const Network = window.Capacitor?.Plugins?.Network;
+const Filesystem = window.Capacitor?.Plugins?.Filesystem;
 
 // --- DOM ---
 const viewLogin = document.getElementById("view-login");
@@ -641,7 +642,24 @@ async function generatePdfReport(project, reportText, photos) {
   }
 
   const filename = `internkontroll-${project.name.replace(/\s+/g, "_")}.pdf`;
-  pdf.save(filename);
+
+  if (Filesystem) {
+    // Native app: skriv PDF-en til enheten og åpne del/lagre-menyen (nettleser-nedlasting fungerer ikke i WebView)
+    const base64 = pdf.output("datauristring").split(",")[1];
+    const writeResult = await Filesystem.writeFile({
+      path: filename,
+      data: base64,
+      directory: "CACHE",
+    });
+    if (Share) {
+      await Share.share({ title: filename, url: writeResult.uri });
+    } else {
+      alert(`PDF lagret: ${writeResult.uri}`);
+    }
+  } else {
+    // Nettleser (PC/test): vanlig nedlasting
+    pdf.save(filename);
+  }
 }
 
 function getImageDimensions(dataUrl) {
