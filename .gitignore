@@ -7,3 +7,4 @@ android/captures/
 android/.idea/
 *.apk
 serve-apk.js
+.tmp-*
