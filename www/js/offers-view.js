@@ -1,6 +1,5 @@
 import { button, el, field } from "./dom.js";
 import { canSpeak, dictate } from "./speech.js";
-import { costCsv } from "./drainage.js";
 import {
   alternativeHeading,
   alternativePriceText,
@@ -8,7 +7,8 @@ import {
   blankOfferFields,
   chosenAlternative,
   formatOfferSum,
-  fikenLinesFromOffer,
+  fikenProjectFallback,
+  fikenProjectStatus,
   isOfferItem,
   normalizeAlternatives,
   offerStatus,
@@ -36,7 +36,7 @@ function taleButton(textarea) {
   });
 }
 
-export function renderOfferList({ items, onOpen, onNew }) {
+export function renderOfferList({ items, project, onOpen, onNew }) {
   const posts = (items || []).filter(isOfferItem);
   const sum = approvedChoiceSum(posts);
   const list = el("div", { class: "stack" });
@@ -53,6 +53,8 @@ export function renderOfferList({ items, onOpen, onNew }) {
           offerTypeLabel(item.kind),
           offerStatusLabel(status),
           status === "godkjent" && chosen ? alternativeHeading(chosen) : "",
+          fikenProjectStatus(item, project),
+          !item.fikenSynced && item.fikenError ? "Ikke synket til Fiken" : "",
         ].filter(Boolean).join(" · ")),
       ]),
     ]);
@@ -70,7 +72,7 @@ export function renderOfferList({ items, onOpen, onNew }) {
   ]);
 }
 
-export function renderOfferEditor({ item, onSave, onSend, onWithdraw, onFiken }) {
+export function renderOfferEditor({ item, project, onSave, onSend, onWithdraw, onFiken, onFikenProject }) {
   const status = offerStatus(item);
   const stored = item.alternatives?.length ? item.alternatives : blankOfferFields().alternatives;
   const alternatives = stored.map((alternative) => ({ ...alternative }));
@@ -87,6 +89,14 @@ export function renderOfferEditor({ item, onSave, onSend, onWithdraw, onFiken })
 
   function paintNote() {
     const chosen = chosenAlternative(item);
+    if (item.fikenSynced) {
+      note.textContent = fikenProjectStatus(item, project);
+      return;
+    }
+    if (item.fikenError) {
+      note.textContent = item.fikenError;
+      return;
+    }
     if (status === "godkjent" && chosen) {
       note.textContent = `Kunden valgte ${alternativeHeading(chosen)}. ${alternativePriceText(chosen)}.`;
       return;
@@ -176,6 +186,11 @@ export function renderOfferEditor({ item, onSave, onSend, onWithdraw, onFiken })
 
   const fiken = el("div", { class: "stack" });
   if (status === "godkjent" && chosenAlternative(item)) {
+    function showFallback(message) {
+      fallback.hidden = false;
+      fallback.value = `${message || ""}\n\n${fikenProjectFallback(item, project)}`.trim();
+      note.textContent = message || "Fiken-utkastet ble ikke opprettet. Linjene ligger under.";
+    }
     async function send(fikenKind) {
       try {
         const result = await onFiken?.(fikenKind);
@@ -187,16 +202,37 @@ export function renderOfferEditor({ item, onSave, onSend, onWithdraw, onFiken })
         throw new Error(result?.message || "Fiken er ikke tilgjengelig");
       } catch (error) {
         console.error(error);
-        const lines = fikenLinesFromOffer(item);
-        fallback.hidden = false;
-        fallback.value = `${error.message || ""}\n\n${costCsv(lines)}`.trim();
-        note.textContent = "Fiken-utkastet ble ikke opprettet. Linjene ligger under.";
+        showFallback(error.message || "Fiken-utkastet ble ikke opprettet. Linjene ligger under.");
       }
     }
+    async function sendProject() {
+      try {
+        const result = await onFikenProject?.();
+        if (result?.ok) {
+          fallback.hidden = true;
+          note.textContent = result.message || fikenProjectStatus(item, project);
+          return;
+        }
+        throw new Error(result?.message || "Fiken er ikke tilgjengelig");
+      } catch (error) {
+        console.error(error);
+        showFallback(error.message || "Posten ble ikke lagt i Fiken-prosjektet. Teksten ligger under.");
+      }
+    }
+    if (item.fikenSynced) {
+      fiken.append(el("p", { class: "meta fiken-status" }, fikenProjectStatus(item, project)));
+      if (item.fikenDraftId) fiken.append(el("p", { class: "meta" }, `Fakturautkast ${item.fikenDraftId}. Det er ikke sendt.`));
+    } else {
+      fiken.append(button("Send til Fiken-prosjekt", { class: "btn btn-primary btn-block", onClick: sendProject }));
+    }
     fiken.append(el("div", { class: "action-row" }, [
-      button("Tilbudsutkast i Fiken", { class: "btn btn-primary", onClick: () => send("tilbud") }),
+      button("Tilbudsutkast i Fiken", { class: "btn btn-ghost", onClick: () => send("tilbud") }),
       button("Fakturautkast i Fiken", { class: "btn btn-ghost", onClick: () => send("faktura") }),
     ]));
+    if (item.fikenError) {
+      fallback.hidden = false;
+      fallback.value = fikenProjectFallback(item, project);
+    }
   } else {
     fiken.append(el("p", { class: "meta" }, "Fiken bruker den godkjente løsningen. Knappene kommer når kunden har valgt."));
   }
@@ -220,6 +256,78 @@ export function renderOfferEditor({ item, onSave, onSend, onWithdraw, onFiken })
     el("div", { class: "action-row" }, actions),
     fiken,
     fallback,
+  ]);
+}
+
+export function renderFikenProjectBox({ project, onList, onCreate }) {
+  const note = el("p", { class: "meta" });
+  const picker = el("div", { class: "stack" });
+  const linked = project?.fikenProjectId
+    ? `Koblet til Fiken-prosjekt ${project.fikenProjectName || project.fikenProjectId}${project.fikenProjectNumber ? ` (${project.fikenProjectNumber})` : ""}.`
+    : "Ikke koblet til Fiken ennå. Godkjente poster legges på ett felles fakturautkast for prosjektet du velger.";
+
+  async function loadList() {
+    note.textContent = "Henter prosjekter fra Fiken…";
+    picker.replaceChildren();
+    try {
+      const result = await onList?.();
+      const projects = result?.projects || [];
+      if (!projects.length) {
+        note.textContent = "Fiken har ingen åpne prosjekter. Opprett et nytt.";
+        return;
+      }
+      const select = el("select");
+      select.append(el("option", { value: "" }, "Velg prosjekt"));
+      for (const entry of projects) {
+        const label = [entry.name, entry.number, entry.contactName].filter(Boolean).join(" · ");
+        select.append(el("option", { value: String(entry.projectId) }, label || String(entry.projectId)));
+      }
+      picker.append(
+        field("Eksisterende Fiken-prosjekt", select),
+        button("Bruk valgt prosjekt", {
+          class: "btn btn-primary btn-block",
+          onClick: async () => {
+            if (!select.value) {
+              note.textContent = "Velg et prosjekt i listen.";
+              return;
+            }
+            note.textContent = "Kobler til prosjektet…";
+            try {
+              const linkedProject = await onCreate?.({ fikenProjectId: Number(select.value) });
+              note.textContent = linkedProject?.message || "Koblet til Fiken-prosjektet.";
+            } catch (error) {
+              note.textContent = error.message || "Kunne ikke koble til prosjektet.";
+            }
+          },
+        }),
+      );
+      note.textContent = `${projects.length} åpne prosjekter i Fiken.`;
+    } catch (error) {
+      note.textContent = error.message || "Fiken-funksjonen er ikke tilgjengelig.";
+    }
+  }
+
+  return el("section", { class: "card continue fiken-project" }, [
+    el("h2", { class: "h-app" }, "Fiken-prosjekt"),
+    el("p", { class: "meta" }, linked),
+    el("p", { class: "meta" }, "Godkjente poster samles på ett fakturautkast. Fakturaen sendes ikke av seg selv."),
+    el("div", { class: "action-row" }, [
+      button("Hent Fiken-prosjekter", { class: "btn btn-ghost", onClick: loadList }),
+      button("Opprett Fiken-prosjekt", {
+        class: "btn btn-primary",
+        onClick: async () => {
+          note.textContent = "Oppretter prosjekt i Fiken…";
+          try {
+            const created = await onCreate?.({ create: true });
+            note.textContent = created?.message || "Fiken-prosjektet er opprettet.";
+          } catch (error) {
+            note.textContent = error.message || "Kunne ikke opprette Fiken-prosjektet.";
+          }
+        },
+      }),
+    ]),
+    picker,
+    note,
   ]);
 }
 

@@ -327,6 +327,7 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .photo-chip { margin: 0; width: 104px; }
 .photo-chip img { width: 104px; height: 104px; object-fit: cover; border-radius: 12px; display: block; }
 .cost-fallback { width: 100%; }
+.fiken-project, .fiken-status { overflow-wrap: anywhere; }
 .pill-muted { background: #eeeae3; color: var(--muted); }
 
 .note { padding: 14px; box-shadow: none; }

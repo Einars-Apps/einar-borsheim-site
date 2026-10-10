@@ -58,7 +58,7 @@ import {
   quickProjectName,
   shareTargets,
 } from "./js/offers.js";
-import { renderOfferEditor, renderOfferList, renderQuickOrder } from "./js/offers-view.js";
+import { renderFikenProjectBox, renderOfferEditor, renderOfferList, renderQuickOrder } from "./js/offers-view.js";
 import { fetchFrostRain } from "./js/frost.js";
 import { button, el, field, icon, sheet, toast } from "./js/dom.js";
 
@@ -1102,6 +1102,7 @@ function mountOffers(route) {
   const draw = () => {
     root.replaceChildren(renderOfferList({
       items,
+      project: projectById(route.projectId),
       onOpen: (itemId) => push({ name: "item", projectId: route.projectId, itemId }),
       onNew: async () => {
         try {
@@ -1442,7 +1443,7 @@ function mountProject(route) {
   let drainageCount = 0;
   const draw = () => {
     const active = document.activeElement;
-    if (active && root.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+    if (active && root.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) {
       return;
     }
     const project = projectById(route.projectId);
@@ -1539,7 +1540,18 @@ function mountProject(route) {
       button("Meldinger", { class: "btn btn-ghost", onClick: () => push({ name: "messages", projectId: project.id }) }),
       button("Dokumenter", { class: "btn btn-ghost", onClick: () => push({ name: "documents", projectId: project.id }) }),
     ]);
-    root.append(info, customerBox(project), templateBox(project, () => setTimeout(draw, 0)), tiles, extra);
+    root.append(
+      info,
+      renderFikenProjectBox({
+        project,
+        onList: () => callFiken("listFikenProjects", {}),
+        onCreate: (payload) => callFiken("linkFikenProject", { projectId: project.id, ...payload }),
+      }),
+      customerBox(project),
+      templateBox(project, () => setTimeout(draw, 0)),
+      tiles,
+      extra,
+    );
   };
   refresh = () => draw();
   watchQueue(draw);
@@ -1603,33 +1615,40 @@ async function readAppSettings() {
   }
 }
 
-async function createFikenDraft({ kind, lines, title, project, incomeAccount }) {
-  const user = auth.currentUser;
-  if (!user) throw new Error("Ikke innlogget");
-  const token = await user.getIdToken();
-  const response = await fetch("https://europe-west1-einar-borsheim-internkon-ee8b6.cloudfunctions.net/createFikenDraft", {
+async function callFiken(name, data) {
+  const current = auth.currentUser;
+  if (!current) throw new Error("Ikke innlogget");
+  const token = await current.getIdToken();
+  const response = await fetch(`https://europe-west1-einar-borsheim-internkon-ee8b6.cloudfunctions.net/${name}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      data: {
-        kind,
-        customerName: project.customerName || "",
-        customerEmail: project.customerEmail || "",
-        address: project.address || "",
-        title: title || project.name || "Drenering",
-        lines: fikenDraftLines(lines),
-        incomeAccount: incomeAccount || "3000",
-      },
-    }),
+    body: JSON.stringify({ data }),
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(body?.error?.message || "Fiken-funksjonen er ikke tilgjengelig");
   }
   return body.result || body;
+}
+
+async function createFikenDraft({ kind, lines, title, project, incomeAccount }) {
+  return callFiken("createFikenDraft", {
+    kind,
+    customerName: project.customerName || "",
+    customerEmail: project.customerEmail || "",
+    address: project.address || "",
+    title: title || project.name || "Drenering",
+    lines: fikenDraftLines(lines),
+    incomeAccount: incomeAccount || "3000",
+  });
+}
+
+async function sendOfferToFikenProject(project, item) {
+  if (!project?.id || !item?.id) throw new Error("Fant ikke posten.");
+  return callFiken("syncOfferToFikenProject", { projectId: project.id, itemId: item.id });
 }
 
 function mountDrainage(route) {
@@ -2057,7 +2076,7 @@ function mountItem(route) {
     }
     const data = snap.data();
     const textValue = route.legacy ? data.caption || "" : data.text || "";
-    const nextShape = [data.approved, data.kind, data.reference, data.source, data.stars, data.approvalStatus, data.selectedAlternativeId, route.legacy].join("|");
+    const nextShape = [data.approved, data.kind, data.reference, data.source, data.stars, data.approvalStatus, data.selectedAlternativeId, data.fikenSynced, data.fikenDraftId, data.fikenError, route.legacy].join("|");
     if (nextShape !== shape) {
       shape = nextShape;
       buildHead(data, textValue);
@@ -2106,6 +2125,7 @@ function mountItem(route) {
     if (!route.legacy && isOfferItem(data)) {
       head.append(renderOfferEditor({
         item: data,
+        project,
         onSave: async ({ kind, alternatives }) => {
           await ref.update({ kind, alternatives, updatedAt: stamp() });
           toast("Alternativene er lagret");
@@ -2119,6 +2139,7 @@ function mountItem(route) {
           toast("Posten er et utkast igjen");
         },
         onFiken: (fikenKind) => sendOfferToFiken(projectById(route.projectId), data, fikenKind),
+        onFikenProject: () => sendOfferToFikenProject(projectById(route.projectId), { ...data, id: route.itemId }),
       }));
       if (data.approvalRequested) head.append(el("p", { class: "meta" }, approvalLine(data) || "Venter på kunden"));
     }
