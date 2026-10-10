@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_TEMPLATES,
   approvalLine,
+  backAction,
   buildLocalDraft,
   buildReferenceDoc,
   dueReminderCount,
@@ -168,6 +169,18 @@ test("bildemal og godkjenning", () => {
     approvedByName: "Kari",
     approvedAt: "2026-03-02T10:00:00Z",
   }]), /Ekstra kummer/);
+});
+
+test("tilbake går ett steg og minimerer bare fra starten", () => {
+  assert.equal(backAction({ route: "item", depth: 4, overlay: true, native: true }), "overlay");
+  assert.equal(backAction({ route: "section", depth: 3, overlay: false, native: true }), "pop");
+  assert.equal(backAction({ route: "project", depth: 2, overlay: false, native: true }), "pop");
+  assert.equal(backAction({ route: "reminders", depth: 1, overlay: false, native: true }), "root");
+  assert.equal(backAction({ route: "capture", depth: 2, overlay: false, native: true }), "pop");
+  assert.equal(backAction({ route: "projects", depth: 1, overlay: false, native: true }), "minimize");
+  assert.equal(backAction({ route: "login", depth: 1, overlay: false, native: true }), "minimize");
+  assert.equal(backAction({ route: "projects", depth: 1, overlay: false, native: false }), "leave");
+  assert.equal(backAction({ route: "projects", depth: 3, overlay: false, native: true }), "pop");
 });
 
 test("portallenke har prosjekt og token", () => {

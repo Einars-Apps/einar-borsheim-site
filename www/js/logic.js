@@ -149,6 +149,15 @@ export function projectShareText(project, url) {
   return `Hei! Her kan du følge prosjektet «${project.name}», se rapporten og sende inn bilder og info: ${url}`;
 }
 
+// Ett steg tilbake i appen. Overlegg lukkes først. Bare prosjektlisten og innlogging minimerer.
+export function backAction({ route, depth, overlay, native }) {
+  if (overlay) return "overlay";
+  const atStart = (route === "projects" || route === "login") && depth <= 1;
+  if (atStart) return native ? "minimize" : "leave";
+  if (depth <= 1) return "root";
+  return "pop";
+}
+
 export function isCompleted(project) {
   const status = project?.status;
   return status === "fullfort" || status === "done";

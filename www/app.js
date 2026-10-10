@@ -8,6 +8,7 @@ import {
   buildLocalDraft,
   buildReferenceDoc,
   daysSince,
+  backAction,
   dueReminderCount,
   formatDay,
   formatWhen,
@@ -60,6 +61,7 @@ let pushReady = false;
 const purging = new Set();
 let toldDenied = false;
 let skipReviewSave = false;
+let navReady = false;
 const subs = [];
 const queueWatchers = new Set();
 let refresh = () => {};
@@ -81,16 +83,23 @@ function persistStack() {
 }
 
 function restoreStack() {
+  if (navReady) return;
+  navReady = true;
+  let saved = [{ name: "projects" }];
   try {
-    const saved = JSON.parse(sessionStorage.getItem("nav") || "");
-    if (Array.isArray(saved) && saved.length && saved.every((entry) => entry && ROUTES.has(entry.name))) {
-      stack = saved;
-      return;
+    const parsed = JSON.parse(sessionStorage.getItem("nav") || "");
+    if (Array.isArray(parsed) && parsed.length && parsed.every((entry) => entry && ROUTES.has(entry.name))) {
+      saved = parsed;
     }
   } catch {
     /* behold standard */
   }
-  stack = [{ name: "projects" }];
+  stack = [saved[0]];
+  history.replaceState({ stack: snapshotStack() }, "");
+  for (let index = 1; index < saved.length; index += 1) {
+    stack.push(saved[index]);
+    history.pushState({ stack: snapshotStack() }, "");
+  }
 }
 
 function clearSubs() {
@@ -2602,26 +2611,81 @@ function fillTabs() {
     if (name === "reminders") tab.append(el("span", { class: "badge", id: "due-badge", hidden: true }, "0"));
     tab.addEventListener("click", () => {
       if (name === "capture") {
+        if (current().name === "capture") return;
         captureKind = "bilde";
         const projectId = localStorage.getItem("lastProjectId") || projects[0]?.id || null;
         push({ name: "capture", projectId });
         return;
       }
-      reset({ name });
+      if (name === "reminders") {
+        if (current().name === "reminders") return;
+        push({ name: "reminders" });
+        return;
+      }
+      if (current().name === "projects") return;
+      push({ name: "projects" });
     });
   }
   backBtn.replaceChildren(icon("back"));
 }
 
+function requestBack(hardware = false) {
+  const native = hardware || !!window.Capacitor?.isNativePlatform?.();
+  const action = backAction({
+    route: current().name,
+    depth: stack.length,
+    overlay: !!document.querySelector(".sheet-back"),
+    native,
+  });
+  if (action === "minimize") {
+    window.Capacitor?.Plugins?.App?.minimizeApp?.();
+    return;
+  }
+  if (action === "root" || (action === "pop" && stack.length <= 1)) {
+    reset({ name: user ? "projects" : "login" });
+    return;
+  }
+  history.back();
+}
+
+function bindHardwareBack() {
+  const attach = () => {
+    const AppPlugin = window.Capacitor?.Plugins?.App;
+    if (!AppPlugin?.addListener || bindHardwareBack.done) return !!bindHardwareBack.done;
+    bindHardwareBack.done = true;
+    AppPlugin.addListener("backButton", () => {
+      requestBack(true);
+    });
+    return true;
+  };
+  if (attach()) return;
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries += 1;
+    if (attach() || tries > 20) clearInterval(timer);
+  }, 250);
+}
+
 function bindChrome() {
-  backBtn.addEventListener("click", () => history.back());
+  bindHardwareBack();
+  backBtn.addEventListener("click", () => requestBack(false));
   netBanner.addEventListener("click", () => syncQueue());
   window.addEventListener("popstate", async (event) => {
+    if (!user) {
+      if (current().name !== "login") {
+        stack = [{ name: "login" }];
+        persistStack();
+        render();
+      }
+      return;
+    }
+    const next = event.state?.stack;
+    if (!Array.isArray(next) || !next.length) return;
+    if (JSON.stringify(next) === JSON.stringify(snapshotStack())) return;
     const leaving = current();
     if (leaving.name === "review" && !skipReviewSave) await persistReview(leaving.ids || []);
     skipReviewSave = false;
-    const next = event.state?.stack;
-    stack = Array.isArray(next) && next.length ? next.map((entry) => ({ ...entry })) : [{ name: user ? "projects" : "login" }];
+    stack = next.map((entry) => ({ ...entry, ids: entry.ids ? [...entry.ids] : undefined }));
     persistStack();
     render();
   });
@@ -2728,6 +2792,7 @@ async function boot() {
       templates = [];
       projects = [];
       stack = [{ name: "login" }];
+      navReady = false;
       sessionStorage.removeItem("nav");
       history.replaceState({ stack: snapshotStack() }, "");
       render();
@@ -2738,7 +2803,6 @@ async function boot() {
     queueItems = await listQueue();
     startProjects();
     startTemplates();
-    history.replaceState({ stack: snapshotStack() }, "");
     registerAdminPush();
     persistStack();
     render();

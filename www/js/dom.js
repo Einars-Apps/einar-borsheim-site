@@ -82,14 +82,32 @@ export function sheet(title, body) {
     el("div", { class: "sheet", role: "dialog" }, [
       el("div", { class: "sheet-bar" }, [
         el("h2", {}, title),
-        button("Lukk", { class: "btn btn-ghost", onClick: () => root.remove() }),
+        button("Lukk", { class: "btn btn-ghost", onClick: () => closeSheet() }),
       ]),
       body,
     ]),
   ]);
+  const previous = history.state && typeof history.state === "object" ? history.state : {};
+  history.pushState({ ...previous, overlay: true }, "");
+  let closed = false;
+  const remove = () => {
+    if (closed) return;
+    closed = true;
+    root.remove();
+    window.removeEventListener("popstate", onPop);
+  };
+  function onPop() {
+    remove();
+  }
+  function closeSheet() {
+    if (closed) return;
+    if (history.state?.overlay) history.back();
+    else remove();
+  }
   root.addEventListener("click", (event) => {
-    if (event.target === root) root.remove();
+    if (event.target === root) closeSheet();
   });
+  window.addEventListener("popstate", onPop);
   document.body.append(root);
   return root;
 }
