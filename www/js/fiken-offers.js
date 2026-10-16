@@ -1,6 +1,3 @@
-import { formatKr } from "./offers.js";
-import { formatQty } from "./cost.js";
-
 function cloneLine(line) {
   return {
     id: line.id,
@@ -54,119 +51,95 @@ function round2(value) {
   return Math.round(number * 100) / 100;
 }
 
-function fikenDateLabel(iso) {
+export function fikenDateLabel(iso) {
   const match = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!match) return "";
   return `${match[3]}.${match[2]}.${match[1]}`;
 }
 
-function offerMoney(doc) {
-  const lines = doc?.lines || [];
-  const exVat = round2(lines.reduce((sum, line) => sum + (Number(line.planned) || 0) * (Number(line.unitPrice) || 0), 0));
-  const vat = round2(exVat * 0.25);
-  return { exVat, vat, incVat: round2(exVat + vat) };
+function clip(value, max) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
 }
 
-export function offerDocumentsFromLines(lines) {
-  const groups = new Map();
-  for (const line of lines || []) {
-    const source = String(line?.source || "");
-    const match = source.match(/^fra Fiken-tilbud nr (.+)$/);
-    if (!match) continue;
-    const idMatch = String(line.id || "").match(/^ft-([^-]+)-/);
-    const key = idMatch ? `ft-${idMatch[1]}` : `ft-nr-${match[1]}`;
-    if (!groups.has(key)) {
-      groups.set(key, { key, kind: "tilbud", number: match[1], date: "", lines: [] });
-    }
-    groups.get(key).lines.push(line);
-  }
-  return [...groups.values()];
+function clipBlock(value, max) {
+  return String(value || "").replace(/\r\n/g, "\n").trim().slice(0, max);
 }
 
-export function fikenOfferText(doc) {
-  const money = offerMoney(doc);
-  const date = fikenDateLabel(doc?.date);
-  const title = doc?.kind === "ordre"
-    ? `Fiken-ordrebekreftelse nr ${doc?.number || ""}`
-    : `Fiken-tilbud nr ${doc?.number || ""}`;
-  const parts = [title.trim()];
-  if (date) parts.push(`Dato ${date}`);
-  parts.push("");
-  for (const line of doc?.lines || []) {
-    const quantity = Number(line.planned) || 0;
-    const unitPrice = Number(line.unitPrice) || 0;
-    const sum = round2(quantity * unitPrice);
-    parts.push(`${line.label || "Linje"}\n${formatQty(quantity)} ${line.unit || "stk"} à ${formatKr(unitPrice)} eks. mva = ${formatKr(sum)}`);
-    parts.push("");
-  }
-  parts.push(`Sum eks. mva ${formatKr(money.exVat)}`);
-  parts.push(`Mva ${formatKr(money.vat)}`);
-  parts.push(`Sum inkl. mva ${formatKr(money.incVat)}`);
-  return parts.join("\n").slice(0, 4000);
+export function fikenQuoteLines(quote) {
+  return (Array.isArray(quote?.lines) ? quote.lines : []).slice(0, 80).map((line) => {
+    const quantity = round2(line?.quantity ?? line?.planned);
+    const unitPrice = round2(line?.unitPrice);
+    const net = line?.net == null ? round2(quantity * unitPrice) : round2(line.net);
+    const discount = Number(line?.discountPercent);
+    return {
+      description: clip(line?.description || line?.label, 200) || "Linje",
+      comment: clip(line?.comment, 200),
+      quantity,
+      unitPrice,
+      discountPercent: Number.isFinite(discount) && discount > 0 ? discount : null,
+      net,
+    };
+  }).filter((line) => line.description || line.comment || line.quantity || line.unitPrice);
 }
 
-export function fikenOfferFields(doc) {
-  const money = offerMoney(doc);
-  const date = fikenDateLabel(doc?.date);
-  const title = (doc?.kind === "ordre"
-    ? `Fiken-ordrebekreftelse nr ${doc?.number || ""}`
-    : `Fiken-tilbud nr ${doc?.number || ""}`).trim().slice(0, 140);
-  return {
-    kind: "tilbud",
-    title,
-    text: fikenOfferText(doc),
-    alternatives: [{
-      id: "standard",
-      name: "Standard",
-      description: date ? `Akseptert grunntilbud fra Fiken. Dato ${date}.` : "Akseptert grunntilbud fra Fiken.",
-      priceExVat: money.exVat,
-    }],
-    selectedAlternativeId: "standard",
-    approved: true,
-    approvalRequested: true,
-    approvalStatus: "godkjent",
-    fikenSyncKey: String(doc?.key || ""),
-    fikenBase: true,
-    source: "fiken",
+export function fikenQuoteFacts(quote) {
+  const rows = [];
+  const add = (label, value) => {
+    const text = String(value ?? "").replace(/\s+/g, " ").trim();
+    if (text) rows.push({ label, value: text });
   };
+  add("Tilbudsnr", quote?.number);
+  add("Dato", fikenDateLabel(quote?.date));
+  add("Akseptert", fikenDateLabel(quote?.accepted));
+  add("Kunde", quote?.customerName);
+  add("E-post", quote?.customerEmail);
+  add("Telefon", quote?.customerPhone);
+  add("Organisasjonsnummer", quote?.organizationNumber);
+  add("Adresse", quote?.address);
+  add("Vår referanse", quote?.ourReference);
+  add("Kundens referanse", quote?.yourReference);
+  add("Ordrereferanse", quote?.orderReference);
+  add("Gyldig til", fikenDateLabel(quote?.validUntil));
+  if (Number(quote?.daysUntilDueDate) > 0) add("Gyldig i", `${Number(quote.daysUntilDueDate)} dager`);
+  return rows;
 }
 
-function sameOffer(current, fields) {
-  const alternative = (current?.alternatives || [])[0] || {};
-  const next = fields.alternatives[0];
-  return current?.title === fields.title
-    && current?.text === fields.text
-    && current?.selectedAlternativeId === fields.selectedAlternativeId
-    && current?.approvalStatus === fields.approvalStatus
-    && current?.fikenBase === true
-    && alternative.name === next.name
-    && alternative.description === next.description
-    && Number(alternative.priceExVat) === Number(next.priceExVat);
+export function fikenQuoteRecord(quote) {
+  const pdfUrl = String(quote?.pdfUrl || "");
+  const record = {
+    key: clip(quote?.key, 40),
+    number: clip(quote?.number, 40),
+    date: String(quote?.date || "").slice(0, 10),
+    accepted: String(quote?.accepted || "").slice(0, 10),
+    validUntil: String(quote?.validUntil || "").slice(0, 10),
+    customerName: clip(quote?.customerName, 200),
+    customerEmail: clip(quote?.customerEmail, 200),
+    customerPhone: clip(quote?.customerPhone, 40),
+    organizationNumber: clip(quote?.organizationNumber, 40),
+    address: clip(quote?.address, 300),
+    ourReference: clip(quote?.ourReference, 200),
+    yourReference: clip(quote?.yourReference, 200),
+    orderReference: clip(quote?.orderReference, 200),
+    invoiceText: clipBlock(quote?.invoiceText, 4000),
+    comment: clipBlock(quote?.comment, 4000),
+    currency: clip(quote?.currency, 3) || "NOK",
+    lines: fikenQuoteLines(quote),
+    exVat: round2(quote?.exVat),
+    vat: round2(quote?.vat),
+    incVat: round2(quote?.incVat),
+    pdfUrl: pdfUrl.startsWith("https://") ? pdfUrl.slice(0, 2000) : "",
+    pdfName: clip(quote?.pdfName, 200),
+  };
+  const days = Number(quote?.daysUntilDueDate);
+  if (Number.isInteger(days) && days > 0) record.daysUntilDueDate = days;
+  const discount = round2(quote?.discount);
+  if (discount > 0) record.discount = discount;
+  return record;
 }
 
-export function planFikenOfferSync(existingItems, documents, { overwriteManual = false } = {}) {
-  const drafts = (documents || []).filter((doc) => doc && doc.kind !== "ordre" && doc.key);
-  const actions = [];
-  for (const doc of drafts) {
-    const fields = fikenOfferFields(doc);
-    const current = (existingItems || []).find((item) => item?.fikenSyncKey === doc.key || item?.id === `fiken-${doc.key}`);
-    if (!current) {
-      actions.push({ op: "create", id: `fiken-${doc.key}`, data: fields });
-      continue;
-    }
-    if (current.fikenManual === true && !overwriteManual) {
-      actions.push({ op: "skip", id: current.id, reason: "manual" });
-      continue;
-    }
-    if (sameOffer(current, fields)) {
-      actions.push({ op: "skip", id: current.id, reason: "same" });
-      continue;
-    }
-    actions.push({
-      op: "update",
-      id: current.id,
-      data: { ...fields, fikenManual: false },
-    });
-  }
-  return actions;
+export function quotesFromFikenResult(result) {
+  const quotes = Array.isArray(result?.quotes)
+    ? result.quotes
+    : (result?.offers || []).filter((doc) => doc?.kind === "tilbud");
+  return quotes.filter((doc) => doc && doc.kind !== "ordre" && doc.key);
 }

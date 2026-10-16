@@ -360,6 +360,11 @@ service cloud.firestore {
         allow create, update, delete: if isAdmin();
       }
 
+      // Hele Fiken-tilbudet, til lesing i boksen Tilbud. Bare admin.
+      match /fikenOffers/{offerId} {
+        allow read, create, update, delete: if isAdmin();
+      }
+
       // Mengder og enhetspris i kostnadsoversikten. Bare admin skriver. Kunden leser bare når flagget er på.
       match /quantities/{docId} {
         allow read: if isAdmin() || customerMayReadCost(projectId);

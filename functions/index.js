@@ -431,15 +431,39 @@ exports.listFikenOfferLines = onCall(fikenCallable({ invoker: "public" }), async
   } catch (error) {
     if (error?.details?.fikenStatus !== 404) throw error;
   }
+  let drafts = [];
+  try {
+    drafts = await listFikenPages(token, slug, "offers/drafts");
+  } catch (error) {
+    drafts = [];
+  }
   const offersOut = fikenOffers.mapFikenOffers({
     offers,
     confirmations,
     projectId: fikenProjectId,
     contactId,
   });
+  const contactIds = new Set();
+  for (const offer of offers) {
+    if (!fikenOffers.matchesSale(offer, fikenProjectId, contactId)) continue;
+    const id = Number(offer?.contactId);
+    if (Number.isInteger(id) && id > 0) contactIds.add(id);
+  }
+  const contacts = {};
+  for (const id of contactIds) {
+    contacts[id] = await fikenContact(token, slug, id);
+  }
+  const quotes = fikenOffers.mapFikenQuotes({
+    offers,
+    drafts,
+    contacts,
+    projectId: fikenProjectId,
+    contactId,
+  });
   return {
     lines: offersOut.flatMap((doc) => doc.lines),
     offers: offersOut,
+    quotes,
   };
 });
 

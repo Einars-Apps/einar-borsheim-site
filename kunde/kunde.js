@@ -245,7 +245,7 @@ function render() {
     viewProject.append(drainage);
   }
 
-  const offerPosts = items.filter((item) => isOfferItem(item) && item.approved === true && item.approvalRequested === true);
+  const offerPosts = items.filter((item) => isOfferItem(item) && item.fikenBase !== true && item.approved === true && item.approvalRequested === true);
   if (offerPosts.length) {
     const box = el("section", { class: "k-card k-stack" }, [
       el("h2", {}, "Tilbud og endringer"),

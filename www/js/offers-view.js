@@ -39,7 +39,7 @@ function taleButton(textarea) {
 }
 
 export function renderOfferList({ items, project, onOpen, onNew }) {
-  const posts = (items || []).filter(isOfferItem);
+  const posts = (items || []).filter((item) => isOfferItem(item) && item.fikenBase !== true);
   const sum = approvedChoiceSum(posts);
   const list = el("div", { class: "stack" });
   if (!posts.length) {

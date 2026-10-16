@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mapFikenOffers, mapFikenSales } from "../functions/fiken-offers.js";
-import { fikenOfferFields, mergeFikenLines, planFikenOfferSync } from "../www/js/fiken-offers.js";
+import { mapFikenOffers, mapFikenQuotes, mapFikenSales } from "../functions/fiken-offers.js";
+import { fikenQuoteFacts, fikenQuoteRecord, mergeFikenLines, quotesFromFikenResult } from "../www/js/fiken-offers.js";
 import { customerSeesCost, liveCost, patchCost } from "../www/js/cost.js";
 
 const offers = [
@@ -113,52 +113,96 @@ test("kostnadslinje fra Fiken inngår i estimatet, og endring merkes som manuell
   assert.equal(edited.fikenLines[0].unitPrice, 1000);
 });
 
-test("Fiken-tilbudet blir Standard-post med linjer, dato og summer, uten duplikat", () => {
-  const documents = mapFikenOffers({ offers, confirmations, projectId: 42, contactId: 7 });
-  const quote = documents.find((doc) => doc.key === "ft-5");
+test("Fiken-tilbudet blir en lesbar kopi med tekst, kunde og PDF, ikke et Standard-valg", () => {
+  const source = {
+    offerId: 5,
+    offerNumber: 10001,
+    offerDraftUuid: "abc",
+    date: "2026-04-02",
+    accepted: "2026-04-10",
+    projectId: 42,
+    contactId: 7,
+    contactPersonId: 3,
+    comment: "Tilbudet gjelder nordvegg.",
+    ourReference: "Einar",
+    yourReference: "Kari",
+    orderReference: "Bestilling 12",
+    net: 1275000,
+    vat: 318750,
+    gross: 1593750,
+    discount: 5000,
+    address: { streetAddress: "Kaigaten 1", postCode: "5528", city: "Haugesund" },
+    lines: [
+      { description: "Graving av grøft", comment: "Inkludert bortkjøring", quantity: 12.5, unitPrice: 100000, net: 1250000 },
+      { productName: "Kum", quantity: 2, net: 25000 },
+    ],
+  };
+  const draft = {
+    uuid: "abc",
+    invoiceText: "Hei Kari.\nDette er tilbudet.",
+    daysUntilDueDate: 14,
+    ourReference: "Skal ikke overstyre",
+    attachments: [
+      { filename: "intern.pdf", downloadUrl: "https://api.fiken.no/secret.pdf" },
+      {
+        filename: "tilbud-10001.pdf",
+        downloadUrl: "https://api.fiken.no/files/tilbud.pdf",
+        downloadUrlWithFikenNormalUserCredentials: "https://fiken.no/logg-inn/tilbud-10001.pdf",
+      },
+    ],
+  };
+  const contact = {
+    name: "Kari Nordmann",
+    email: "kari@example.com",
+    organizationNumber: "999888777",
+    phoneNumber: "90000000",
+    contactPerson: [{ contactPersonId: 3, name: "Kari", email: "kari@example.com", phoneNumber: "90000000" }],
+  };
+  const [quote] = mapFikenQuotes({
+    offers: [source, { ...source, offerId: 8, projectId: 99, offerDraftUuid: "annet" }],
+    drafts: [draft],
+    contacts: { 7: contact },
+    projectId: 42,
+    contactId: 7,
+  });
+  assert.equal(quote.key, "ft-5");
   assert.equal(quote.number, "10001");
-  assert.equal(quote.date, "2026-04-02");
-  assert.equal(quote.kind, "tilbud");
+  assert.equal(quote.customerName, "Kari Nordmann");
+  assert.equal(quote.customerPhone, "90000000");
+  assert.equal(quote.address, "Kaigaten 1, 5528 Haugesund");
+  assert.equal(quote.ourReference, "Einar");
+  assert.equal(quote.yourReference, "Kari");
+  assert.equal(quote.orderReference, "Bestilling 12");
+  assert.equal(quote.invoiceText, "Hei Kari.\nDette er tilbudet.");
+  assert.equal(quote.comment, "Tilbudet gjelder nordvegg.");
+  assert.equal(quote.validUntil, "2026-04-16");
+  assert.equal(quote.daysUntilDueDate, 14);
   assert.equal(quote.exVat, 12750);
   assert.equal(quote.vat, 3187.5);
   assert.equal(quote.incVat, 15937.5);
-  const fields = fikenOfferFields(quote);
-  assert.equal(fields.title, "Fiken-tilbud nr 10001");
-  assert.equal(fields.approvalStatus, "godkjent");
-  assert.equal(fields.selectedAlternativeId, "standard");
-  assert.equal(fields.fikenBase, true);
-  assert.equal(fields.alternatives[0].name, "Standard");
-  assert.equal(fields.alternatives[0].priceExVat, 12750);
-  assert.match(fields.text, /Dato 02\.04\.2026/);
-  assert.match(fields.text, /Graving av grøft/);
-  assert.match(fields.text, /Kum/);
-  assert.match(fields.text, /Sum eks\. mva/);
-  assert.match(fields.text, /Sum inkl\. mva/);
-  const created = planFikenOfferSync([], documents);
-  assert.deepEqual(created.map((action) => action.op), ["create", "create"]);
-  assert.equal(created[0].id, "fiken-ft-4");
-  const again = planFikenOfferSync([{ id: created[0].id, ...created[0].data }, { id: created[1].id, ...created[1].data }], documents);
-  assert.equal(again.every((action) => action.op === "skip" && action.reason === "same"), true);
-  const manual = planFikenOfferSync([{
-    id: "fiken-ft-5",
-    ...fields,
-    fikenManual: true,
-    title: "Endret av Einar",
-  }], [quote]);
-  assert.equal(manual[0].op, "skip");
-  assert.equal(manual[0].reason, "manual");
-  const replaced = planFikenOfferSync([{
-    id: "fiken-ft-5",
-    ...fields,
-    fikenManual: true,
-    title: "Endret av Einar",
-  }], [quote], { overwriteManual: true });
-  assert.equal(replaced[0].op, "update");
-  assert.equal(replaced[0].id, "fiken-ft-5");
+  assert.equal(quote.discount, 50);
+  assert.equal(quote.lines[0].description, "Graving av grøft");
+  assert.equal(quote.lines[0].comment, "Inkludert bortkjøring");
+  assert.equal(quote.lines[1].description, "Kum");
+  assert.equal(quote.pdfUrl, "https://fiken.no/logg-inn/tilbud-10001.pdf");
+  assert.equal(quote.pdfUrl.includes("api.fiken.no"), false);
+  const facts = fikenQuoteFacts(quote);
+  assert.equal(facts.find((row) => row.label === "Tilbudsnr").value, "10001");
+  assert.equal(facts.find((row) => row.label === "Dato").value, "02.04.2026");
+  assert.equal(facts.find((row) => row.label === "Gyldig til").value, "16.04.2026");
+  assert.equal(facts.find((row) => row.label === "Akseptert").value, "10.04.2026");
+  const stored = fikenQuoteRecord(quote);
+  assert.equal(stored.key, "ft-5");
+  assert.equal(stored.invoiceText.includes("\n"), true);
+  assert.equal(stored.pdfUrl.startsWith("https://"), true);
+  const fromOld = quotesFromFikenResult({
+    offers: [{ key: "ft-5", kind: "tilbud", number: "10001" }, { key: "fo-9", kind: "ordre" }],
+  });
+  assert.deepEqual(fromOld.map((doc) => doc.key), ["ft-5"]);
   const summary = liveCost({
-    cost: { agreedExVat: 0, fikenLines: quote.lines },
+    cost: { agreedExVat: 0, fikenLines: mapFikenSales({ offers: [source], confirmations: [], projectId: 42, contactId: 7 }) },
     prices: {},
-    items: [{ id: "fiken-ft-5", ...fields, approved: true }],
+    items: [{ id: "gammel", kind: "tilbud", fikenBase: true, approved: true, approvalRequested: true, approvalStatus: "godkjent", selectedAlternativeId: "standard", alternatives: [{ id: "standard", name: "Standard", priceExVat: 12750 }] }],
   });
   assert.equal(summary.estimated.exVat, 12750);
   assert.equal(summary.offers.rows.length, 0);

@@ -501,6 +501,19 @@ test("kunde kan lese mengder bare når Einar har skrudd det på, og kan ikke skr
   }));
 });
 
+test("Fiken-tilbudet kan bare leses og skrives av admin", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(context.firestore(), "projects/p1/fikenOffers/ft-5"), { number: "10001" });
+  });
+  await assertFails(getDoc(doc(customerDb(), "projects/p1/fikenOffers/ft-5")));
+  await assertFails(setDoc(doc(customerDb(), "projects/p1/fikenOffers/ft-9"), { number: "1" }));
+  const snap = await assertSucceeds(getDoc(doc(adminDb(), "projects/p1/fikenOffers/ft-5")));
+  assert.equal(snap.data().number, "10001");
+  await assertSucceeds(setDoc(doc(adminDb(), "projects/p1/fikenOffers/ft-5"), { number: "10002", comment: "Nordvegg" }));
+});
+
 test("e-postkø og maler er bare for admin", async () => {
   await assertFails(getDoc(doc(strangerDb(), "mail/x")));
   await assertFails(addDoc(collection(customerDb(), "mail"), {
