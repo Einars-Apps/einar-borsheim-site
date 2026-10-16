@@ -7,6 +7,7 @@ const { getFirestore } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const billable = require("./fiken-billable");
 const fikenImport = require("./fiken-import");
+const fikenOffers = require("./fiken-offers");
 
 const fikenToken = defineSecret("FIKEN_API_TOKEN");
 const fikenCompany = defineSecret("FIKEN_COMPANY_SLUG");
@@ -369,8 +370,20 @@ async function syncApprovedOffer(projectId, itemId) {
   });
 }
 
-function fikenCallable() {
-  return { secrets: [fikenToken, fikenCompany], region: "europe-west1" };
+function fikenCallable(extra = {}) {
+  return { secrets: [fikenToken, fikenCompany], region: "europe-west1", ...extra };
+}
+
+async function listFikenPages(token, slug, resource) {
+  const all = [];
+  for (let page = 0; page < 10; page += 1) {
+    const query = new URLSearchParams({ pageSize: "100", page: String(page) });
+    const found = await fikenRequest(token, `/companies/${encodeURIComponent(slug)}/${resource}?${query}`);
+    const list = Array.isArray(found.body) ? found.body : [];
+    all.push(...list);
+    if (!found.pageCount || page + 1 >= found.pageCount || list.length < 100) break;
+  }
+  return all;
 }
 
 async function fikenContact(token, slug, contactId) {
@@ -395,6 +408,36 @@ exports.listFikenProjects = onCall(fikenCallable(), async (request) => {
     if (card.projectId) projects.push(card);
   }
   return { projects };
+});
+
+exports.listFikenOfferLines = onCall(fikenCallable({ invoker: "public" }), async (request) => {
+  assertFikenAdmin(request);
+  const fikenProjectId = Number(request.data?.fikenProjectId);
+  if (!Number.isInteger(fikenProjectId) || fikenProjectId <= 0) {
+    throw new HttpsError("invalid-argument", "Prosjektet er ikke koblet til Fiken.");
+  }
+  const { token, slug } = fikenSecrets();
+  let contactId = null;
+  try {
+    const project = await fikenRequest(token, `/companies/${encodeURIComponent(slug)}/projects/${fikenProjectId}`);
+    contactId = Number(project.body?.contact?.contactId || project.body?.contactId) || null;
+  } catch (error) {
+    contactId = null;
+  }
+  const offers = await listFikenPages(token, slug, "offers");
+  let confirmations = [];
+  try {
+    confirmations = await listFikenPages(token, slug, "orderConfirmations");
+  } catch (error) {
+    if (error?.details?.fikenStatus !== 404) throw error;
+  }
+  const lines = fikenOffers.mapFikenSales({
+    offers,
+    confirmations,
+    projectId: fikenProjectId,
+    contactId,
+  });
+  return { lines };
 });
 
 exports.linkFikenProject = onCall(fikenCallable(), async (request) => {

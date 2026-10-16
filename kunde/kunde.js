@@ -35,7 +35,7 @@ import {
   offerTypeLabel,
 } from "../www/js/offers.js";
 import { drainageReportText, reportIsPublished, verdictLabel } from "../www/js/drainage.js";
-import { changeText, liveCost } from "../www/js/cost.js";
+import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
 import { renderCostOverview } from "../www/js/cost-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
 
@@ -63,6 +63,32 @@ let thread = [];
 let drainagePoints = [];
 let costState = null;
 let costHistory = [];
+let stopCost = null;
+let stopCostLog = null;
+
+function watchCost() {
+  if (!customerSeesCost(project)) {
+    if (stopCost) stopCost();
+    if (stopCostLog) stopCostLog();
+    stopCost = null;
+    stopCostLog = null;
+    costState = null;
+    costHistory = [];
+    return;
+  }
+  if (!stopCost) {
+    stopCost = onSnapshot(doc(db, "projects", projectId, "quantities", "live"), (snap) => {
+      costState = snap.exists() ? snap.data() : null;
+      if (document.getElementById("cost-slot")) paintCost();
+    }, (error) => console.error(error));
+  }
+  if (!stopCostLog) {
+    stopCostLog = onSnapshot(query(collection(db, "projects", projectId, "costLog"), orderBy("at", "desc")), (snap) => {
+      costHistory = snap.docs.map((docSnap) => docSnap.data());
+      if (document.getElementById("cost-slot")) paintCost();
+    }, (error) => console.error(error));
+  }
+}
 let previewChoices = {};
 
 function show(view) {
@@ -185,7 +211,7 @@ function render() {
     finished ? el("p", { class: "muted" }, `Ferdig ${formatDay(project.completedAt) || ""}`.trim()) : null,
     finished ? pdfSlot : el("p", { class: "muted" }, "Sluttrapporten kan lastes ned når oppdraget er ferdig og godkjent."),
   ]));
-  viewProject.append(el("div", { id: "cost-slot" }));
+  if (customerSeesCost(project)) viewProject.append(el("div", { id: "cost-slot" }));
   const knownPdf = displayUrl(project.pdfUrl);
   if (finished && project.pdfPath === pdfPath) {
     getDownloadURL(ref(storage, pdfPath)).then((url) => {
@@ -779,6 +805,7 @@ async function init() {
     project = { id: snap.id, ...snap.data() };
     document.title = `${project.name || "Prosjekt"} | Einar A Børsheim`;
     show(viewProject);
+    watchCost();
     render();
     const items = collection(db, "projects", projectId, "items");
     onSnapshot(query(items, where("approved", "==", true)), (snap) => {
@@ -792,16 +819,10 @@ async function init() {
     onSnapshot(doc(db, "projects", projectId), (snap) => {
       if (!snap.exists()) return;
       project = { id: snap.id, ...snap.data() };
+      watchCost();
       render();
     });
-    onSnapshot(doc(db, "projects", projectId, "quantities", "live"), (snap) => {
-      costState = snap.exists() ? snap.data() : null;
-      if (document.getElementById("cost-slot")) paintCost();
-    }, (error) => console.error(error));
-    onSnapshot(query(collection(db, "projects", projectId, "costLog"), orderBy("at", "desc")), (snap) => {
-      costHistory = snap.docs.map((docSnap) => docSnap.data());
-      if (document.getElementById("cost-slot")) paintCost();
-    }, (error) => console.error(error));
+    watchCost();
     onSnapshot(query(collection(db, "projects", projectId, "photos"), where("approved", "==", true)), (snap) => {
       legacyPhotos = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       render();

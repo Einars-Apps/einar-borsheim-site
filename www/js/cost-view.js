@@ -51,7 +51,16 @@ function stepper(value, label, onCommit) {
   return el("div", { class: "qty-step" }, [minus, input, plus]);
 }
 
-export function renderCostOverview({ summary, history = [], editable = false, showPreview = false, onAgreed, onQuantity }) {
+export function renderCostOverview({
+  summary,
+  history = [],
+  editable = false,
+  showPreview = false,
+  showToCustomer = false,
+  extras = [],
+  onAgreed,
+  onQuantity,
+}) {
   const diffClass = summary.differenceExVat > 0 ? "cost-diff-up" : summary.differenceExVat < 0 ? "cost-diff-down" : "meta";
   const approved = (summary.offers?.rows || []).filter((row) => row.status === "godkjent");
   const agreed = editable
@@ -71,12 +80,35 @@ export function renderCostOverview({ summary, history = [], editable = false, sh
     : el("p", { class: "meta" }, `Avtalt pris / grunntilbud: ${formatKr(summary.agreedExVat)} eks. mva`);
 
   const lines = el("div", { class: "cost-lines" });
-  for (const line of summary.lines) {
+  const ordered = [
+    ...summary.lines.filter((line) => line.fromFiken),
+    ...summary.lines.filter((line) => !line.fromFiken),
+  ];
+  for (const line of ordered) {
     const deviation = `${signedQty(line.deviation)} ${line.unit}`;
     const body = [
       el("p", { class: "cost-line-title" }, line.label),
-      el("p", { class: "meta" }, `à ${formatKr(line.unitPrice)} eks. mva`),
+      line.source ? el("p", { class: "meta" }, line.source) : null,
+      editable && line.fromFiken ? null : el("p", { class: "meta" }, `à ${formatKr(line.unitPrice)} eks. mva`),
     ];
+    if (editable && line.fromFiken) {
+      const price = el("input", {
+        type: "text",
+        inputmode: "decimal",
+        value: formatQty(line.unitPrice),
+        "aria-label": `Enhetspris ${line.label}`,
+      });
+      let priceDirty = false;
+      price.addEventListener("input", () => { priceDirty = true; });
+      const commitPrice = () => {
+        if (!priceDirty) return;
+        priceDirty = false;
+        onQuantity?.(line.id, "unitPrice", price.value);
+      };
+      price.addEventListener("change", commitPrice);
+      price.addEventListener("blur", commitPrice);
+      body.push(field("Enhetspris, eks. mva", price));
+    }
     if (editable) {
       body.push(
         el("p", { class: "qty-label" }, `Planlagt, ${line.unit}`),
@@ -102,8 +134,11 @@ export function renderCostOverview({ summary, history = [], editable = false, sh
   return el("section", { class: "card continue cost-box" }, [
     el("h2", { class: "h-app" }, "Nåværende kostnad"),
     el("p", { class: "meta" }, editable
-      ? "Mengdene oppdateres med en gang. Kunden ser det samme, men kan ikke endre tallene."
+      ? (showToCustomer
+        ? "Mengdene oppdateres med en gang. Kunden ser det samme, men kan ikke endre tallene."
+        : "Mengdene oppdateres med en gang. Kunden ser ikke denne oversikten.")
       : "Einar oppdaterer mengdene. Du kan ikke endre mengder eller priser."),
+    ...extras,
     agreed,
     approved.length
       ? el("div", { class: "stack" }, approved.map((row) => el("p", { class: "meta" }, `Godkjent: ${row.title}${row.name ? ` – ${row.name}` : ""} ${formatKr(row.exVat)} eks. mva`)))

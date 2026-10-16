@@ -19,6 +19,12 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/projects/$(projectId)).data.get('public', false) == true;
     }
 
+    // Kostnadsoversikten er skjult for kunden til Einar setter showCostToCustomer på prosjektet.
+    function customerMayReadCost(projectId) {
+      return hasAccess(projectId)
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.showCostToCustomer == true;
+    }
+
     function itemPath(projectId, itemId) {
       return /databases/$(database)/documents/projects/$(projectId)/items/$(itemId);
     }
@@ -354,15 +360,15 @@ service cloud.firestore {
         allow create, update, delete: if isAdmin();
       }
 
-      // Mengder og enhetspris i kostnadsoversikten. Kunden kan lese. Bare admin skriver.
+      // Mengder og enhetspris i kostnadsoversikten. Bare admin skriver. Kunden leser bare når flagget er på.
       match /quantities/{docId} {
-        allow read: if isAdmin() || hasAccess(projectId);
+        allow read: if isAdmin() || customerMayReadCost(projectId);
         allow create, update, delete: if isAdmin();
       }
 
-      // Historikk for mengder og avtalt pris. Kunden kan lese. Bare admin legger til, og posten endres ikke.
+      // Historikk for mengder og avtalt pris. Kunden leser bare når flagget er på. Bare admin legger til.
       match /costLog/{entryId} {
-        allow read: if isAdmin() || hasAccess(projectId);
+        allow read: if isAdmin() || customerMayReadCost(projectId);
         allow create: if isAdmin() && validCostLog();
         allow update, delete: if false;
       }
