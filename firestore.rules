@@ -100,7 +100,7 @@ service cloud.firestore {
         && request.resource.data.label is string
         && request.resource.data.label.size() > 0
         && request.resource.data.label.size() < 80
-        && request.resource.data.field in ['planned', 'done', 'unitPrice', 'agreedExVat']
+        && request.resource.data.field in ['planned', 'done', 'unitPrice', 'agreedExVat', 'quantity']
         && request.resource.data.from is number
         && request.resource.data.to is number
         && request.resource.data.from >= 0

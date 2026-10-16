@@ -51,6 +51,81 @@ function stepper(value, label, onCommit) {
   return el("div", { class: "qty-step" }, [minus, input, plus]);
 }
 
+function commitField(input, onCommit) {
+  let dirty = false;
+  input.addEventListener("input", () => { dirty = true; });
+  const commit = () => {
+    if (!dirty) return;
+    dirty = false;
+    onCommit(input.value);
+  };
+  input.addEventListener("change", commit);
+  input.addEventListener("blur", commit);
+  return input;
+}
+
+function extraSection({ summary, editable, onAddExtra, onDeleteExtra, onExtra }) {
+  const rows = summary.extras || [];
+  const visible = editable
+    ? rows
+    : rows.filter((row) => row.description || row.quantity || row.unitPrice);
+  if (!editable && !visible.length) return null;
+  const block = [
+    el("h3", { class: "h-app" }, "Tilleggsarbeider"),
+    editable ? el("p", { class: "meta" }, "Ekstra arbeid utover tilbudet. Enhetspris er eks. mva.") : null,
+  ];
+  for (const row of visible) {
+    const sum = el("p", { class: "meta" }, `Linjesum ${formatKr(row.sum)} eks. mva`);
+    if (!editable) {
+      block.push(el("article", { class: "qty-line" }, [
+        el("p", { class: "cost-line-title" }, row.description || "Tillegg"),
+        el("p", {}, `${formatQty(row.quantity)} à ${formatKr(row.unitPrice)} eks. mva`),
+        sum,
+      ]));
+      continue;
+    }
+    const description = commitField(el("input", {
+      type: "text",
+      maxlength: "200",
+      value: row.description || "",
+      "aria-label": "Beskrivelse",
+    }), (value) => onExtra?.(row.id, "description", value));
+    const price = commitField(el("input", {
+      type: "text",
+      inputmode: "decimal",
+      value: formatQty(row.unitPrice),
+      "aria-label": "Enhetspris eks. mva",
+    }), (value) => onExtra?.(row.id, "unitPrice", value));
+    const quantity = commitField(el("input", {
+      type: "text",
+      inputmode: "decimal",
+      value: formatQty(row.quantity),
+      "aria-label": "Antall",
+    }), (value) => onExtra?.(row.id, "quantity", value));
+    block.push(el("article", { class: "qty-line" }, [
+      field("Beskrivelse", description),
+      field("Enhetspris, kr eks. mva", price),
+      field("Antall", quantity),
+      sum,
+      button("Slett tillegg", {
+        class: "btn btn-danger",
+        onClick: () => onDeleteExtra?.(row.id),
+      }),
+    ]));
+  }
+  const filled = rows.length > 0 && rows.every((row) => String(row.description || "").trim());
+  if (editable && (rows.length === 0 || filled)) {
+    block.push(button("Legg til nytt tillegg", {
+      class: "btn btn-ghost btn-block",
+      onClick: () => onAddExtra?.(),
+    }));
+  }
+  if (visible.length) {
+    block.push(el("p", { class: "cost-money" }, `Sum tilleggsarbeider: ${formatKr(summary.extrasExVat || 0)} eks. mva`));
+  }
+  return el("section", { class: "extra-box" }, block);
+}
+
 export function renderCostOverview({
   summary,
   history = [],
@@ -60,6 +135,9 @@ export function renderCostOverview({
   extras = [],
   onAgreed,
   onQuantity,
+  onAddExtra,
+  onDeleteExtra,
+  onExtra,
 }) {
   const diffClass = summary.differenceExVat > 0 ? "cost-diff-up" : summary.differenceExVat < 0 ? "cost-diff-down" : "meta";
   const approved = (summary.offers?.rows || []).filter((row) => row.status === "godkjent");
@@ -150,6 +228,7 @@ export function renderCostOverview({
       ? el("p", { class: "cost-preview" }, `Forhåndsvisning hvis du godkjenner valget: ${formatKr(summary.preview.exVat)} eks. mva, ${formatKr(summary.preview.incVat)} inkl. mva. Det er ${signedKr(summary.previewDeltaExVat)} eks. mva mot nåværende estimat.`)
       : null,
     lines,
+    extraSection({ summary, editable, onAddExtra, onDeleteExtra, onExtra }),
     el("h3", { class: "h-app" }, "Historikk"),
     log,
     history.length > 15 ? el("p", { class: "meta" }, "Hele historikken ligger i PDF-rapporten.") : null,

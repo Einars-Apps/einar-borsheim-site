@@ -431,13 +431,16 @@ exports.listFikenOfferLines = onCall(fikenCallable({ invoker: "public" }), async
   } catch (error) {
     if (error?.details?.fikenStatus !== 404) throw error;
   }
-  const lines = fikenOffers.mapFikenSales({
+  const offersOut = fikenOffers.mapFikenOffers({
     offers,
     confirmations,
     projectId: fikenProjectId,
     contactId,
   });
-  return { lines };
+  return {
+    lines: offersOut.flatMap((doc) => doc.lines),
+    offers: offersOut,
+  };
 });
 
 exports.linkFikenProject = onCall(fikenCallable(), async (request) => {

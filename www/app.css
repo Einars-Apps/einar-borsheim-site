@@ -347,6 +347,8 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .cost-diff-down { color: var(--accent); font-weight: 700; margin: 0; }
 .cost-preview { background: #f3e2c8; border-radius: 12px; padding: 10px 12px; margin: 0; }
 .qty-line { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+.extra-box { display: flex; flex-direction: column; gap: 10px; }
+.extra-box h3 { margin: 8px 0 0; }
 .qty-step { display: flex; align-items: center; gap: 8px; }
 .qty-step input { flex: 1 1 auto; min-width: 0; text-align: center; }
 .qty-btn { flex: 0 0 52px; width: 52px; min-width: 52px; padding: 0; }

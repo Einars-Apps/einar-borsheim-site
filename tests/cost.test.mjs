@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { changeText, costChanges, costReportText, liveCost, patchCost } from "../www/js/cost.js";
+import { DEFAULT_PRICES } from "../www/js/drainage.js";
+import { changeText, costChanges, costReportText, liveCost, patchCost, persistableCost } from "../www/js/cost.js";
 
 const prices = {
   groftM: 350,
@@ -109,4 +110,60 @@ test("endring logges fra og til, og uendret mengde gir ingen linje", () => {
   assert.match(report, /Påløpt hittil/);
   assert.match(report, /planlagt 40 m, utført 28,5 m/);
   assert.match(report, /Einar: Grøft, utført/);
+});
+
+test("uberørte standardlinjer vises ikke, mengde og Fiken beholdes, grøftpris blir i kalkulatoren", () => {
+  assert.equal(DEFAULT_PRICES.groftM, 1000);
+  const summary = liveCost({
+    cost: {
+      agreedExVat: 0,
+      lines: {
+        groft: { planned: 0, done: 0, unitPrice: 1000 },
+        graving: { planned: 3, done: 0, unitPrice: 450 },
+        pukk: { planned: 0, done: 1, unitPrice: 550 },
+      },
+      fikenLines: [{
+        id: "ft-1-0",
+        label: "Kum",
+        planned: 0,
+        done: 0,
+        unitPrice: 100,
+        source: "fra Fiken-tilbud nr 1",
+      }],
+    },
+    prices,
+    items: [],
+  });
+  assert.deepEqual(summary.lines.map((line) => line.id), ["graving", "pukk", "ft-1-0"]);
+  const stored = persistableCost({
+    agreedExVat: 0,
+    lines: {
+      groft: { planned: 0, done: 0, unitPrice: 1000 },
+      graving: { planned: 3, done: 0, unitPrice: 450 },
+      pukk: { planned: 0, done: 1, unitPrice: 550 },
+    },
+  });
+  assert.equal(stored.lines.groft, undefined);
+  assert.equal(stored.lines.graving.planned, 3);
+  assert.equal(stored.lines.pukk.done, 1);
+});
+
+test("tilleggsarbeider summeres inn i nåværende kostnad", () => {
+  let cost = patchCost({}, prices, { addExtra: true, extraId: "ta-en" });
+  cost = patchCost(cost, prices, { extraId: "ta-en", field: "description", value: "Ekstra kumlokk" });
+  cost = patchCost(cost, prices, { extraId: "ta-en", field: "unitPrice", value: "500" });
+  cost = patchCost(cost, prices, { extraId: "ta-en", field: "quantity", value: "2" });
+  const summary = liveCost({ cost, prices, items: [] });
+  assert.equal(summary.extras.length, 1);
+  assert.equal(summary.extras[0].sum, 1000);
+  assert.equal(summary.extrasExVat, 1000);
+  assert.equal(summary.estimated.exVat, 1000);
+  assert.equal(summary.incurred.exVat, 1000);
+  assert.equal(summary.lines.some((line) => line.id === "groft"), false);
+  const changes = costChanges({ extras: [] }, cost, prices);
+  assert.deepEqual(changes.map((change) => change.field), ["quantity", "unitPrice"]);
+  assert.match(changeText(changes[0]), /Ekstra kumlokk, antall: 0 → 2 stk/);
+  const removed = patchCost(cost, prices, { deleteExtraId: "ta-en" });
+  assert.equal(removed.extras.length, 0);
+  assert.equal(liveCost({ cost: removed, prices, items: [] }).estimated.exVat, 0);
 });
