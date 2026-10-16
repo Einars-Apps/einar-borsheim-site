@@ -29,7 +29,7 @@ import {
 } from "./js/logic.js";
 import { canSpeak, dictate } from "./js/speech.js";
 import { AI_DRAFT_URL, requestAiDraft } from "./js/ai.js";
-import { blobToDataUrl, preparePhoto } from "./js/image.js";
+import { blobToDataUrl, exifBackfillPatch, fileTimeCandidate, preparePhoto, readExifMeta } from "./js/image.js";
 import { readDevicePosition } from "./js/geo.js";
 import { formatCapture, gpsLabel, photoWhen, placeFields, showGpsInReport, withDevicePosition } from "./js/place.js";
 import { addToQueue, getQueueItem, listQueue, removeQueue, updateQueue } from "./js/queue.js";
@@ -90,10 +90,12 @@ import {
   groupPhotos,
   isTrashedPhoto,
   newGroupId,
+  needsExifBackfill,
   photoKey,
   publishedPhotoKeys,
   redundantPhotoItem,
   sortPhotos,
+  uploadTimestamps,
 } from "./js/photos.js";
 import { mapAnchor, mountPhotoBoard } from "./js/photo-view.js";
 
@@ -507,6 +509,13 @@ async function blobFromRef(ref) {
   return (await fetch(ref.webPath)).blob();
 }
 
+async function prepareRef(ref) {
+  return preparePhoto(await blobFromRef(ref), {
+    exif: ref instanceof Blob ? null : ref?.exif || null,
+    lastModified: fileTimeCandidate(ref),
+  });
+}
+
 async function collectPrepared(source) {
   const positionTask = source === "camera" ? readDevicePosition() : Promise.resolve(null);
   let refs = await cameraRefs(source);
@@ -523,7 +532,7 @@ async function collectPrepared(source) {
       uploadWatch.done = index;
       updateChrome();
       try {
-        prepared.push(await preparePhoto(await blobFromRef(refs[index])));
+        prepared.push(await prepareRef(refs[index]));
       } catch (error) {
         console.error(error);
         skipped += 1;
@@ -570,7 +579,7 @@ async function ingestBlobs(projectId, kind, photos, { title = "", text = "", ste
     let prepared = photo;
     if (!(photo?.blob instanceof Blob) || !("takenAt" in (photo || {}))) {
       try {
-        prepared = await preparePhoto(await blobFromRef(photo));
+        prepared = await prepareRef(photo);
       } catch (error) {
         console.error(error);
         skipped += 1;
@@ -592,8 +601,8 @@ async function ingestBlobs(projectId, kind, photos, { title = "", text = "", ste
       thumb: prepared.thumb || null,
       prepared: true,
       filename: `${Date.now()}-${index}-${id.slice(0, 8)}.jpg`,
-      createdAt: prepared.takenAt || Date.now(),
       ...queuePlace(prepared),
+      ...uploadTimestamps(Date.now(), prepared.takenAt),
       held: mode !== "attach",
       error: "",
       attempts: 0,
@@ -682,7 +691,7 @@ async function uploadQueueItem(item) {
         createdBy: user?.uid || "",
         authorName: "Einar",
         coverUrl: cover || "",
-        createdAt: firebase.firestore.Timestamp.fromDate(new Date(item.createdAt || Date.now())),
+        createdAt: firebase.firestore.Timestamp.fromDate(new Date(item.uploadedAt || item.createdAt || Date.now())),
         updatedAt: stamp(),
       }), UPLOAD_TIMEOUT_MS);
     } else if (cover && !existing.data().coverUrl) {
@@ -692,8 +701,10 @@ async function uploadQueueItem(item) {
   if (url) {
     const photoRef = itemRef.collection("photos").doc(item.photoId);
     const photo = await withTimeout(photoRef.get(), UPLOAD_TIMEOUT_MS);
+    const times = uploadTimestamps(item.uploadedAt || item.createdAt || Date.now(), item.takenAt);
+    const uploadedAt = firebase.firestore.Timestamp.fromDate(new Date(times.uploadedAt));
+    const takenAt = times.takenAt ? firebase.firestore.Timestamp.fromDate(new Date(times.takenAt)) : null;
     if (!photo.exists) {
-      const takenAt = item.takenAt ? firebase.firestore.Timestamp.fromDate(new Date(item.takenAt)) : null;
       await withTimeout(photoRef.set({
         url,
         storagePath,
@@ -702,9 +713,13 @@ async function uploadQueueItem(item) {
         approved: true,
         source: "admin",
         createdBy: user?.uid || "",
-        createdAt: firebase.firestore.Timestamp.fromDate(new Date(item.createdAt || Date.now())),
+        createdAt: uploadedAt,
+        uploadedAt,
+        exifChecked: true,
         ...(takenAt ? { takenAt } : {}),
       }), UPLOAD_TIMEOUT_MS);
+    } else if (takenAt && !photo.data()?.takenAt) {
+      await withTimeout(photoRef.set({ takenAt, exifChecked: true }, { merge: true }), UPLOAD_TIMEOUT_MS);
     }
   }
   const place = placeFields(item);
@@ -738,7 +753,8 @@ async function prepareStuckBlobs() {
         thumb: prepared.thumb,
         prepared: true,
         error: "",
-        createdAt: item.createdAt || prepared.takenAt || Date.now(),
+        createdAt: item.createdAt || Date.now(),
+        uploadedAt: item.uploadedAt || item.createdAt || Date.now(),
         ...place,
       });
     } catch (error) {
@@ -929,7 +945,7 @@ async function collectContent(projectId) {
       reference: data.reference === true,
       createdAt: data.createdAt || null,
     });
-    photosByItem[id] = [{ id: doc.id, url: data.url, caption: data.caption || "", approved: data.approved !== false, createdAt: data.createdAt || null, takenAt: data.takenAt || null }];
+    photosByItem[id] = [{ id: doc.id, url: data.url, caption: data.caption || "", approved: data.approved !== false, createdAt: data.createdAt || null, uploadedAt: data.uploadedAt || null, takenAt: data.takenAt || null }];
     const comments = await root.collection("photos").doc(doc.id).collection("comments").get();
     commentsByItem[id] = comments.docs.map((entry) => entry.data());
   }
@@ -2580,6 +2596,38 @@ function onceUnsub(stop) {
   };
 }
 
+const exifSession = new Set();
+
+function backfillPhotoTimes(photos) {
+  const pending = (photos || []).filter((photo) => needsExifBackfill(photo) && !exifSession.has(photoKey(photo)));
+  for (const photo of pending) exifSession.add(photoKey(photo));
+  let cursor = 0;
+  async function next() {
+    while (cursor < pending.length) {
+      const photo = pending[cursor];
+      cursor += 1;
+      try {
+        const response = await fetch(photo.url);
+        if (!response.ok) continue;
+        const patch = exifBackfillPatch(readExifMeta(await response.arrayBuffer()));
+        const update = { exifChecked: true };
+        if (patch.takenAtMillis) update.takenAt = firebase.firestore.Timestamp.fromMillis(patch.takenAtMillis);
+        await db.runTransaction(async (tx) => {
+          const snap = await tx.get(photo.ref);
+          if (snap.data()?.takenAt) {
+            tx.update(photo.ref, { exifChecked: true });
+            return;
+          }
+          tx.update(photo.ref, update);
+        });
+      } catch (error) {
+        console.error(error);
+      }
+    }
+  }
+  Promise.all([next(), next()]).catch((error) => console.error(error));
+}
+
 function photoHandlers(projectId, getPhotos) {
   async function updateCovers(itemIds, photos) {
     const stacks = groupPhotos(photos);
@@ -2676,6 +2724,18 @@ function photoHandlers(projectId, getPhotos) {
       } catch (error) {
         console.error(error);
         toast("Kunne ikke lagre bildeteksten");
+      }
+    },
+    async onTakenAt(photo, millis) {
+      if (!photo?.ref || !Number.isFinite(millis)) return;
+      try {
+        await photo.ref.update({
+          takenAt: firebase.firestore.Timestamp.fromMillis(millis),
+          exifChecked: true,
+        });
+      } catch (error) {
+        console.error(error);
+        toast("Kunne ikke lagre opptakstiden");
       }
     },
     async onGroup(chosen) {
@@ -2814,6 +2874,7 @@ function mountPhotoSection(projectId) {
       return;
     }
     latest = collect();
+    backfillPhotoTimes(latest);
     const lonely = items.filter((item) => item.kind === "bilde" && !(photosByItem.get(item.id) || []).length);
     board.update(latest, {
       showNote: true,
@@ -3033,6 +3094,7 @@ function mountItem(route) {
   function showItemPhotos(list) {
     latestPhotos = list.map((photo) => withPlace(photo, itemPlaces));
     photoBoard.update(latestPhotos, { showNote: false, emptyText: "" });
+    backfillPhotoTimes(latestPhotos);
   }
 
   subs.push(ref.onSnapshot((snap) => {

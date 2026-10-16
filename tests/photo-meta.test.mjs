@@ -1,8 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readExifDate, readExifMeta } from "../www/js/image.js";
-import { captureMillis, sortPhotos } from "../www/js/photos.js";
-import { formatCapture, gpsLabel, mapHref, showGpsInReport, withDevicePosition } from "../www/js/place.js";
+import {
+  chooseTakenAt,
+  exifBackfillPatch,
+  exifDateFromRecord,
+  fileModifiedMillis,
+  gpsFromExifRecord,
+  readExifDate,
+  readExifMeta,
+} from "../www/js/image.js";
+import { captureMillis, needsExifBackfill, sortPhotos, uploadTimestamps } from "../www/js/photos.js";
+import {
+  captureInputToMillis,
+  captureInputValue,
+  formatCapture,
+  gpsLabel,
+  mapHref,
+  photoTimeLabel,
+  showGpsInReport,
+  withDevicePosition,
+} from "../www/js/place.js";
 
 function textBytes(value) {
   return [...value].map((char) => char.charCodeAt(0));
@@ -114,6 +131,74 @@ test("opptakstid vises i Oslo, og EXIF slår filtid", () => {
   assert.ok(Math.abs(meta.lat - 59.8335) < 0.0001);
   assert.ok(Math.abs(meta.lon - 10.4352) < 0.0001);
   assert.equal(meta.accuracyM, 5);
+});
+
+test("opptakstid kommer fra original EXIF, kameraets exif eller filtid", () => {
+  const onlySaved = exifJpeg({ dateTime: "2026:10:16 19:05:00", original: "" });
+  assert.equal(readExifDate(onlySaved), null);
+  assert.equal(readExifMeta(onlySaved).takenAt, null);
+  const shot = new Date(2024, 4, 6, 7, 8, 9).getTime();
+  const now = Date.parse("2026-10-16T12:00:00Z");
+  const modified = Date.parse("2024-05-06T05:08:09Z");
+  const fromCamera = chooseTakenAt({
+    byteTakenAt: null,
+    exifRecord: { DateTime: "2026:10:16 19:05:00", DateTimeOriginal: "2024:05:06 07:08:09" },
+    fileModified: modified,
+    now,
+  });
+  assert.equal(fromCamera.takenAt, shot);
+  assert.equal(fromCamera.source, "exif");
+  assert.equal(exifDateFromRecord(JSON.stringify({ DateTimeDigitized: "2024:05:06 07:08:09", DateTime: "2026:10:16 19:05:00" })), shot);
+  const fromFile = chooseTakenAt({
+    byteTakenAt: null,
+    exifRecord: { DateTime: "2026:10:16 19:05:00" },
+    fileModified: modified,
+    now,
+  });
+  assert.equal(fromFile.takenAt, Date.parse("2024-05-06T05:08:09Z"));
+  assert.equal(fromFile.source, "file");
+  assert.equal(chooseTakenAt({ byteTakenAt: shot, fileModified: modified, now }).source, "exif");
+  assert.equal(fileModifiedMillis(now + 3 * 60 * 1000, now), null);
+  assert.equal(fileModifiedMillis(Date.UTC(1989, 11, 31), now), null);
+  assert.equal(fileModifiedMillis(now + 60 * 1000, now), now + 60 * 1000);
+  const gps = gpsFromExifRecord({
+    GPSLatitude: "59/1,50/1,6/10",
+    GPSLatitudeRef: "N",
+    GPSLongitude: "10/1,26/1,672/100",
+    GPSLongitudeRef: "E",
+    GPSHPositioningError: "5/1",
+  });
+  assert.ok(Math.abs(gps.lat - 59.8335) < 0.0001);
+  assert.ok(Math.abs(gps.lon - 10.4352) < 0.0001);
+  assert.equal(gps.accuracyM, 5);
+});
+
+test("bilder uten opptakstid merkes som lastet opp, og kan få tiden i ettertid", () => {
+  const taken = Date.parse("2026-10-16T12:32:00Z");
+  const uploaded = Date.parse("2026-10-16T16:00:00Z");
+  assert.equal(photoTimeLabel({ takenAt: taken, createdAt: uploaded }), "16.10.2026 kl. 14:32");
+  assert.equal(photoTimeLabel({ createdAt: uploaded }), "Lastet opp 16.10.2026 kl. 18:00");
+  assert.equal(photoTimeLabel({ uploadedAt: uploaded, createdAt: taken }), "Lastet opp 16.10.2026 kl. 18:00");
+  assert.equal(captureInputValue(taken), "2026-10-16T14:32");
+  assert.equal(captureInputToMillis("2026-10-16T14:32"), taken);
+  assert.equal(captureInputToMillis("ikke"), null);
+  const stored = uploadTimestamps(uploaded, taken);
+  assert.equal(stored.createdAt, uploaded);
+  assert.equal(stored.uploadedAt, uploaded);
+  assert.equal(stored.takenAt, taken);
+  assert.equal(uploadTimestamps(uploaded, null).takenAt, null);
+  const photos = [
+    { id: "lastet", url: "https://cdn.example/lastet.jpg", createdAt: 1_700_000_009_000 },
+    { id: "tatt", url: "https://cdn.example/tatt.jpg", createdAt: 1_700_000_009_000, takenAt: 1_700_000_001_000 },
+  ];
+  assert.deepEqual(sortPhotos(photos, "oldest").map((photo) => photo.id), ["tatt", "lastet"]);
+  assert.equal(captureMillis(photos[1]), 1_700_000_001_000);
+  assert.equal(needsExifBackfill({ ref: {}, url: "https://cdn.example/a.jpg" }), true);
+  assert.equal(needsExifBackfill({ ref: {}, url: "https://cdn.example/a.jpg", takenAt: taken }), false);
+  assert.equal(needsExifBackfill({ ref: {}, url: "https://cdn.example/a.jpg", exifChecked: true }), false);
+  assert.equal(needsExifBackfill({ ref: {}, url: "https://cdn.example/a.jpg", trashed: true }), false);
+  assert.deepEqual(exifBackfillPatch({ takenAt: taken }), { takenAtMillis: taken, exifChecked: true });
+  assert.deepEqual(exifBackfillPatch({ takenAt: null }), { exifChecked: true });
 });
 
 test("posisjon vises bare presist når den er innen 30 meter", () => {

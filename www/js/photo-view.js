@@ -1,5 +1,5 @@
 import { button, el, icon } from "./dom.js";
-import { gpsLabel, photoWhen } from "./place.js";
+import { captureInputToMillis, captureInputValue, gpsLabel, photoWhen } from "./place.js";
 import {
   DELETE_OTHERS_CONFIRM,
   DELETE_PHOTO_CONFIRM,
@@ -114,6 +114,7 @@ export function renderPhotoBoard(state, handlers) {
         thumb,
         el("div", { class: "stack" }, [
           el("p", { class: "meta" }, [photoWhen(photo), photo.caption || photo.comment || "Uten tekst"].filter(Boolean).join(" · ")),
+          timeField(photo, handlers.onTakenAt),
           button("Gjenopprett", {
             class: "btn btn-ghost",
             onClick: () => handlers.onRestore(photo),
@@ -161,6 +162,7 @@ function stackCard(stack, ui, handlers) {
     tools,
     captionField(best, handlers.onCaption),
     photoMeta(best),
+    timeField(best, handlers.onTakenAt),
   ]);
   if (ui.expanded) {
     const more = el("div", { class: "photo-more stack" });
@@ -177,6 +179,7 @@ function stackCard(stack, ui, handlers) {
         rowTools,
         captionField(photo, handlers.onCaption),
         photoMeta(photo),
+        timeField(photo, handlers.onTakenAt),
       ]));
     }
     card.append(more);
@@ -206,6 +209,24 @@ export function mapAnchor(place) {
     openMap(place.href);
   });
   return node;
+}
+
+function timeField(photo, onTakenAt) {
+  if (typeof onTakenAt !== "function") return null;
+  const input = el("input", {
+    type: "datetime-local",
+    class: "photo-time",
+    "aria-label": "Opptakstid",
+    value: captureInputValue(photo.takenAt),
+  });
+  input.dataset.photo = photoKey(photo);
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("change", () => {
+    const millis = captureInputToMillis(input.value);
+    if (millis == null) return;
+    onTakenAt(photo, millis);
+  });
+  return el("label", { class: "photo-time-label" }, [el("span", {}, "Opptakstid"), input]);
 }
 
 function photoMeta(photo) {
@@ -240,6 +261,9 @@ export function mountPhotoBoard(host, handlers) {
   let emptyText = "";
 
   function paint() {
+    const active = document.activeElement;
+    const editingKey = active?.classList?.contains("photo-time") ? active.dataset.photo || "" : "";
+    const editingValue = editingKey ? active.value : "";
     host.replaceChildren(renderPhotoBoard({
       photos,
       expanded,
@@ -274,6 +298,11 @@ export function mountPhotoBoard(host, handlers) {
         });
       },
     }));
+    if (!editingKey) return;
+    const next = [...host.querySelectorAll(".photo-time")].find((node) => node.dataset.photo === editingKey);
+    if (!next) return;
+    next.value = editingValue;
+    next.focus();
   }
 
   return {

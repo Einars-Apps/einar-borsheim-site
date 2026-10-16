@@ -29,6 +29,98 @@ function ascii(bytes, offset, length) {
 }
 
 const EMPTY_EXIF = { takenAt: null, lat: null, lon: null, accuracyM: null };
+const EARLIEST_CAPTURE_MS = Date.UTC(1990, 0, 1);
+const FUTURE_CAPTURE_MS = 2 * 60 * 1000;
+
+function exifRecord(value) {
+  if (!value) return null;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  return typeof value === "object" ? value : null;
+}
+
+function rationalList(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => {
+      const piece = part.trim();
+      if (!piece) return null;
+      if (piece.includes("/")) {
+        const [numerator, denominator] = piece.split("/");
+        const top = Number(numerator);
+        const bottom = Number(denominator);
+        if (!Number.isFinite(top) || !Number.isFinite(bottom) || bottom === 0) return null;
+        return top / bottom;
+      }
+      const number = Number(piece);
+      return Number.isFinite(number) ? number : null;
+    })
+    .filter((part) => part != null);
+}
+
+function dmsValue(value, ref) {
+  const parts = rationalList(value);
+  if (parts.length < 3) return null;
+  let result = parts[0] + parts[1] / 60 + parts[2] / 3600;
+  const mark = String(ref || "").trim().toUpperCase().charAt(0);
+  if (mark === "S" || mark === "W") result = -Math.abs(result);
+  return result;
+}
+
+export function exifDateFromRecord(value) {
+  const record = exifRecord(value);
+  if (!record) return null;
+  return exifDateToMillis(record.DateTimeOriginal) || exifDateToMillis(record.DateTimeDigitized) || null;
+}
+
+export function gpsFromExifRecord(value) {
+  const record = exifRecord(value);
+  if (!record) return { lat: null, lon: null, accuracyM: null };
+  const lat = dmsValue(record.GPSLatitude, record.GPSLatitudeRef);
+  const lon = dmsValue(record.GPSLongitude, record.GPSLongitudeRef);
+  if (lat == null || lon == null || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return { lat: null, lon: null, accuracyM: null };
+  }
+  const accuracy = rationalList(record.GPSHPositioningError)[0];
+  const accuracyM = accuracy != null && accuracy >= 0 && accuracy <= 100000 ? accuracy : null;
+  return { lat, lon, accuracyM };
+}
+
+export function fileModifiedMillis(value, now = Date.now()) {
+  const time = Number(value);
+  if (!Number.isFinite(time)) return null;
+  const millis = Math.round(time);
+  if (millis < EARLIEST_CAPTURE_MS || millis > now + FUTURE_CAPTURE_MS) return null;
+  return millis;
+}
+
+export function fileTimeCandidate(ref) {
+  if (!ref || typeof ref !== "object") return null;
+  const modified = Number(ref.lastModified);
+  if (Number.isFinite(modified) && modified > 0) return modified;
+  const created = Date.parse(ref.creationDate || "");
+  return Number.isFinite(created) ? created : null;
+}
+
+export function chooseTakenAt({ byteTakenAt = null, exifRecord: record = null, fileModified = null, now = Date.now() } = {}) {
+  if (byteTakenAt) return { takenAt: byteTakenAt, source: "exif" };
+  const fromCamera = exifDateFromRecord(record);
+  if (fromCamera) return { takenAt: fromCamera, source: "exif" };
+  const modified = fileModifiedMillis(fileModified, now);
+  if (modified) return { takenAt: modified, source: "file" };
+  return { takenAt: null, source: null };
+}
+
+export function exifBackfillPatch(meta) {
+  if (meta?.takenAt) return { takenAtMillis: meta.takenAt, exifChecked: true };
+  return { exifChecked: true };
+}
 
 function parseTiff(bytes, tiff, length) {
   if (tiff < 0 || tiff + 8 > bytes.length) return { ...EMPTY_EXIF };
@@ -118,21 +210,20 @@ function parseTiff(bytes, tiff, length) {
   const root = readEntries(u32(tiff + 4));
   let original = null;
   let digitized = null;
-  let plain = null;
   let exifAt = null;
   let gpsAt = null;
   for (const entry of root) {
     if (entry.tag === 0x8769 && entry.type === 4) exifAt = entry.raw;
     else if (entry.tag === 0x8825 && entry.type === 4) gpsAt = entry.raw;
-    else if (entry.tag === 0x0132) plain = dateOf(entry) || plain;
   }
   for (const entry of readEntries(exifAt)) {
     if (entry.tag === 0x9003) original = dateOf(entry) || original;
     else if (entry.tag === 0x9004) digitized = dateOf(entry) || digitized;
   }
   const gps = gpsAt == null ? {} : readGps(readEntries(gpsAt));
+  // DateTime (0x0132) is the save time. After recompression that is the upload time.
   return {
-    takenAt: original || digitized || plain || null,
+    takenAt: original || digitized || null,
     lat: gps.lat ?? null,
     lon: gps.lon ?? null,
     accuracyM: gps.accuracyM ?? null,
@@ -199,13 +290,27 @@ export async function compressImage(file, maxDimension = UPLOAD_MAX_EDGE, qualit
   }
 }
 
-export async function preparePhoto(file) {
+export async function preparePhoto(file, hints = {}) {
   const buffer = await file.arrayBuffer();
   const meta = readExifMeta(buffer);
+  const chosen = chooseTakenAt({
+    byteTakenAt: meta.takenAt,
+    exifRecord: hints.exif,
+    fileModified: hints.lastModified ?? fileTimeCandidate(file),
+  });
+  const recordGps = gpsFromExifRecord(hints.exif);
   const source = new Blob([buffer], { type: file.type || "image/jpeg" });
   const blob = await compressImage(source, UPLOAD_MAX_EDGE, UPLOAD_JPEG_QUALITY);
   const thumb = await compressImage(blob, THUMB_MAX_EDGE, THUMB_JPEG_QUALITY);
-  return { blob, thumb, ...meta };
+  return {
+    blob,
+    thumb,
+    takenAt: chosen.takenAt,
+    takenFrom: chosen.source,
+    lat: meta.lat ?? recordGps.lat,
+    lon: meta.lon ?? recordGps.lon,
+    accuracyM: meta.accuracyM ?? recordGps.accuracyM,
+  };
 }
 
 export function blobToDataUrl(blob) {

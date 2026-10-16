@@ -55,7 +55,21 @@ function manualGroup(photo) {
 }
 
 export function captureMillis(photo) {
-  return photoMillis(photo?.takenAt) ?? photoMillis(photo?.createdAt);
+  return photoMillis(photo?.takenAt) ?? photoMillis(photo?.uploadedAt) ?? photoMillis(photo?.createdAt);
+}
+
+export function uploadTimestamps(now, takenAt) {
+  return {
+    createdAt: now,
+    uploadedAt: now,
+    takenAt: takenAt || null,
+  };
+}
+
+export function needsExifBackfill(photo) {
+  if (!photo?.ref || !photo.url || isTrashedPhoto(photo)) return false;
+  if (photoMillis(photo.takenAt) != null) return false;
+  return photo.exifChecked !== true;
 }
 
 function compareCapture(a, b, oldest) {
