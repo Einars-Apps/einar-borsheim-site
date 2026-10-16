@@ -156,6 +156,19 @@ export async function generatePdfBlob(model) {
   if (model.reportText && model.reportText.trim()) write(model.reportText.trim(), { size: 11, gap: 2 });
   else write("Ingen sammendrag er skrevet inn.", { size: 11, color: [90, 106, 98] });
 
+  if (model.photos?.length) {
+    gap(3);
+    write("Bilder", { size: 14, bold: true, gap: 2 });
+    for (const photo of model.photos) {
+      try {
+        await drawPhoto(photo);
+      } catch (error) {
+        console.error(error);
+        write("(Et bilde kunne ikke settes inn i rapporten.)", { size: 10, color: [141, 90, 18] });
+      }
+    }
+  }
+
   for (const section of model.sections || []) {
     if (!section.items?.length) continue;
     gap(3);
@@ -201,17 +214,26 @@ export async function generatePdfBlob(model) {
   return { blob: pdf.output("blob"), filename: `Sluttrapport-${safeName || "prosjekt"}.pdf` };
 
   async function drawPhoto(photo) {
-    if (!photo?.dataUrl) return;
-    const dims = await imageSize(photo.dataUrl);
-    const maxW = pageW - margin * 2;
-    const maxH = 105;
-    const ratio = Math.min(maxW / dims.width, maxH / dims.height, 1);
-    const width = Math.max(20, dims.width * ratio);
-    const height = Math.max(20, dims.height * ratio);
-    ensure(height + 8);
-    pdf.addImage(photo.dataUrl, "JPEG", margin, y, width, height);
-    y += height + 2;
+    if (photo?.dataUrl) {
+      const dims = await imageSize(photo.dataUrl);
+      const maxW = pageW - margin * 2;
+      const maxH = 105;
+      const ratio = Math.min(maxW / dims.width, maxH / dims.height, 1);
+      const width = Math.max(20, dims.width * ratio);
+      const height = Math.max(20, dims.height * ratio);
+      ensure(height + 8);
+      pdf.addImage(photo.dataUrl, "JPEG", margin, y, width, height);
+      y += height + 2;
+    }
+    if (photo.when) write(photo.when, { size: 10, bold: true, color: [20, 36, 28], gap: 0.6 });
     if (photo.caption) write(photo.caption, { size: 10, color: [50, 64, 58], gap: 1 });
+    if (photo.place?.text && photo.place?.href) {
+      const label = textOf(photo.place.text);
+      setFont(10, false, accent);
+      ensure(lineHeight(10) + 1);
+      pdf.textWithLink(label, margin, y, { url: photo.place.href });
+      y += lineHeight(10) + 1.2;
+    }
   }
 }
 
