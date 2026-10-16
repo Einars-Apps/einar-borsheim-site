@@ -1,6 +1,6 @@
 import { PORTAL_BASE } from "./company.js";
 import { isOfferItem, offerDecisionText } from "./offers.js";
-import { photoKey, publishedPhotoKeys, representativeKeys } from "./photos.js";
+import { isTrashedPhoto, photoKey, publishedPhotoKeys, representativeKeys } from "./photos.js";
 
 export const KIND_META = {
   bilde: {
@@ -146,6 +146,63 @@ export function portalUrl(projectId, token, base = PORTAL_BASE) {
   url.searchParams.set("p", projectId);
   url.searchParams.set("t", token);
   return url.toString();
+}
+
+export const PORTAL_PREVIEW_APP = "kunde-forhandsvisning";
+export const PORTAL_PREVIEW_BANNER = "Forhåndsvisning – slik ser kunden det";
+
+export function isPortalPreview(search) {
+  const params = typeof search === "string"
+    ? new URLSearchParams(search.startsWith("?") ? search.slice(1) : search)
+    : search;
+  if (!params || typeof params.get !== "function") return false;
+  return params.get("vis") === "forhandsvisning";
+}
+
+export function portalPreviewUrl(projectId, token, base = PORTAL_BASE) {
+  const url = new URL(portalUrl(projectId, token, base));
+  url.searchParams.set("vis", "forhandsvisning");
+  return url.toString();
+}
+
+export function previewOpenMode({ native = false, hasBrowser = false } = {}) {
+  if (native && hasBrowser) return "in-app";
+  if (native) return "copy";
+  return "tab";
+}
+
+function customerSource(record) {
+  const source = record?.source;
+  return source === "kunde" || source === "customer";
+}
+
+export function customerOwnPending(record, uid) {
+  if (!record || isTrashedPhoto(record) || record.approved === true) return false;
+  if (!uid || record.createdBy !== uid) return false;
+  return customerSource(record);
+}
+
+export function customerVisibleContent(record, uid) {
+  if (!record || isTrashedPhoto(record)) return false;
+  if (record.approved === true) return true;
+  return customerOwnPending(record, uid);
+}
+
+export function customerVisibleDocument(record) {
+  if (!record) return false;
+  if (record.approved === true) return true;
+  return record.source === "customer";
+}
+
+export function applyPortalPreviewLock(root) {
+  if (!root || typeof root.querySelectorAll !== "function") return;
+  root.querySelectorAll("button, textarea, select").forEach((node) => {
+    node.disabled = true;
+  });
+  root.querySelectorAll("input").forEach((node) => {
+    if (node.type === "radio") return;
+    node.disabled = true;
+  });
 }
 
 export function reminderShareText(project, year, url) {

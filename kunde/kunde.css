@@ -8,6 +8,25 @@
 
 .hidden { display: none !important; }
 
+.preview-banner {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  margin: 0;
+  background: #0c5344;
+  color: #fff;
+  font-weight: 700;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+button:disabled,
+textarea:disabled,
+input:disabled,
+select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .k-stack { display: flex; flex-direction: column; gap: 0.8rem; }
 .k-card {
   background: #fff;
