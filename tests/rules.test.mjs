@@ -415,7 +415,7 @@ test("drenering leses av admin, kunde og offentlig prosjekt", async () => {
   await assertFails(getDoc(doc(customerDb(), "settings/app")));
 });
 
-test("kunde kan lese mengder, men ikke skrive dem eller loggen", async () => {
+test("kunde kan lese mengder bare når Einar har skrudd det på, og kan ikke skrive dem", async () => {
   await seedProject();
   await env.withSecurityRulesDisabled(async (context) => {
     await setDoc(doc(context.firestore(), "projects/p1/access/kunde1"), { token: "TOK123456" });
@@ -423,10 +423,28 @@ test("kunde kan lese mengder, men ikke skrive dem eller loggen", async () => {
       agreedExVat: 10000,
       lines: { groft: { planned: 40, done: 28, unitPrice: 350 } },
     });
+    await setDoc(doc(context.firestore(), "projects/p1/costLog/log1"), {
+      at: new Date(),
+      by: "admin-user",
+      byName: "Einar",
+      lineId: "groft",
+      label: "Grøft",
+      field: "done",
+      from: 0,
+      to: 28,
+      unit: "m",
+      text: "Grøft, utført: 0 → 28 m",
+    });
   });
   const customer = customerDb();
+  await assertFails(getDoc(doc(customer, "projects/p1/quantities/live")));
+  await assertFails(getDoc(doc(customer, "projects/p1/costLog/log1")));
+  await env.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "projects/p1"), { showCostToCustomer: true });
+  });
   const snap = await assertSucceeds(getDoc(doc(customer, "projects/p1/quantities/live")));
   assert.equal(snap.data().agreedExVat, 10000);
+  await assertSucceeds(getDoc(doc(customer, "projects/p1/costLog/log1")));
   await assertFails(setDoc(doc(customer, "projects/p1/quantities/live"), { agreedExVat: 1 }));
   await assertFails(updateDoc(doc(customer, "projects/p1"), { costOverview: { agreedExVat: 1 } }));
   await assertFails(addDoc(collection(customer, "projects/p1/costLog"), {

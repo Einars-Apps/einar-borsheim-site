@@ -54,7 +54,34 @@ export function emptyCost(prices = DEFAULT_PRICES) {
       unitPrice: rate != null && rate >= 0 ? round2(rate) : 0,
     };
   }
-  return { agreedExVat: 0, lines };
+  return { agreedExVat: 0, lines, fikenLines: [] };
+}
+
+export function customerSeesCost(project) {
+  return project?.showCostToCustomer === true;
+}
+
+export function normalizeFikenLines(raw) {
+  const list = Array.isArray(raw?.fikenLines) ? raw.fikenLines : [];
+  const seen = new Set();
+  const lines = [];
+  for (const line of list) {
+    const id = String(line?.id || "").trim().slice(0, 39);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const label = String(line?.label || "Linje").replace(/\s+/g, " ").trim().slice(0, 200) || "Linje";
+    lines.push({
+      id,
+      label,
+      unit: String(line?.unit || "stk").trim().slice(0, 12) || "stk",
+      planned: clampQty(line?.planned),
+      done: clampQty(line?.done),
+      unitPrice: clampQty(line?.unitPrice),
+      source: String(line?.source || "").replace(/\s+/g, " ").trim().slice(0, 80),
+      manual: line?.manual === true,
+    });
+  }
+  return lines;
 }
 
 export function normalizeCost(raw, prices = DEFAULT_PRICES) {
@@ -69,6 +96,7 @@ export function normalizeCost(raw, prices = DEFAULT_PRICES) {
       unitPrice: storedPrice != null && storedPrice >= 0 ? round2(storedPrice) : next.lines[id].unitPrice,
     };
   }
+  next.fikenLines = normalizeFikenLines(raw);
   return next;
 }
 
@@ -134,7 +162,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   const offers = offerContribution(items, previewChoices);
   let plannedEx = 0;
   let doneEx = 0;
-  const lines = PRICE_LINES.map(([id, label, unit]) => {
+  const catalog = PRICE_LINES.map(([id, label, unit]) => {
     const line = state.lines[id];
     const plannedSum = round2(line.planned * line.unitPrice);
     const doneSum = round2(line.done * line.unitPrice);
@@ -150,8 +178,25 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       deviation: round2(line.done - line.planned),
       plannedSum,
       doneSum,
+      fromFiken: false,
+      source: "",
+      manual: false,
     };
   });
+  const fiken = state.fikenLines.map((line) => {
+    const plannedSum = round2(line.planned * line.unitPrice);
+    const doneSum = round2(line.done * line.unitPrice);
+    plannedEx += plannedSum;
+    doneEx += doneSum;
+    return {
+      ...line,
+      deviation: round2(line.done - line.planned),
+      plannedSum,
+      doneSum,
+      fromFiken: true,
+    };
+  });
+  const lines = [...catalog, ...fiken];
   const estimated = withVat(state.agreedExVat + offers.approvedExVat + plannedEx);
   const incurred = withVat(state.agreedExVat + offers.approvedExVat + doneEx);
   const preview = withVat(state.agreedExVat + offers.previewExVat + plannedEx);
@@ -182,6 +227,11 @@ export function patchCost(raw, prices, { lineId, field, value } = {}) {
   if ((field === "planned" || field === "done") && next.lines[lineId]) {
     next.lines[lineId][field] = clampQty(value);
   }
+  const fiken = next.fikenLines.find((line) => line.id === lineId);
+  if (fiken && (field === "planned" || field === "done" || field === "unitPrice")) {
+    fiken[field] = clampQty(value);
+    fiken.manual = true;
+  }
   return next;
 }
 
@@ -202,6 +252,23 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
   for (const [id, label, unit] of PRICE_LINES) {
     const left = before.lines[id];
     const right = after.lines[id];
+    if (left.planned !== right.planned) {
+      changes.push({ lineId: id, label, field: "planned", from: left.planned, to: right.planned, unit });
+    }
+    if (left.done !== right.done) {
+      changes.push({ lineId: id, label, field: "done", from: left.done, to: right.done, unit });
+    }
+    if (left.unitPrice !== right.unitPrice) {
+      changes.push({ lineId: id, label, field: "unitPrice", from: left.unitPrice, to: right.unitPrice, unit: "kr" });
+    }
+  }
+  const beforeFiken = new Map(before.fikenLines.map((line) => [line.id, line]));
+  const afterFiken = new Map(after.fikenLines.map((line) => [line.id, line]));
+  for (const id of new Set([...beforeFiken.keys(), ...afterFiken.keys()])) {
+    const left = beforeFiken.get(id) || { planned: 0, done: 0, unitPrice: 0, label: "Linje", unit: "stk" };
+    const right = afterFiken.get(id) || { planned: 0, done: 0, unitPrice: 0, label: left.label, unit: left.unit };
+    const label = String(right.label || left.label).slice(0, 79);
+    const unit = right.unit || left.unit || "stk";
     if (left.planned !== right.planned) {
       changes.push({ lineId: id, label, field: "planned", from: left.planned, to: right.planned, unit });
     }
@@ -240,7 +307,8 @@ export function costReportText(summary, history = []) {
   lines.push("", "Mengder");
   for (const line of summary?.lines || []) {
     if (!line.planned && !line.done) continue;
-    lines.push(`${line.label}: planlagt ${formatQty(line.planned)} ${line.unit}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva. Enhetspris ${formatKr(line.unitPrice)}.`);
+    const source = line.source ? ` (${line.source})` : "";
+    lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva. Enhetspris ${formatKr(line.unitPrice)}.`);
   }
   lines.push("", "Historikk");
   if (!history.length) lines.push("Ingen endringer er logget.");

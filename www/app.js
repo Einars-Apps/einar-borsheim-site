@@ -60,8 +60,9 @@ import {
 } from "./js/offers.js";
 import { renderFikenProjectBox, renderOfferEditor, renderOfferList, renderQuickOrder } from "./js/offers-view.js";
 import { renderFikenPicker } from "./js/fiken-import-view.js";
-import { fieldsFromFiken, isFikenLinked, unimportedFikenProjects } from "./js/fiken-import.js";
-import { changeText, costChanges, costReportText, liveCost, patchCost } from "./js/cost.js";
+import { fieldsFromFiken, fikenUnreachableMessage, isFikenLinked, unimportedFikenProjects } from "./js/fiken-import.js";
+import { mergeFikenLines } from "./js/fiken-offers.js";
+import { changeText, costChanges, costReportText, customerSeesCost, liveCost, patchCost } from "./js/cost.js";
 import { renderCostOverview } from "./js/cost-view.js";
 import { fetchFrostRain } from "./js/frost.js";
 import { button, el, field, icon, sheet, toast } from "./js/dom.js";
@@ -716,24 +717,26 @@ async function saveReportPdf(project, reportText) {
     }
     sections.push({ title: "Drenering – dokumentasjon og vurdering", items: drainageItems });
   }
-  const costSnap = await db.collection("projects").doc(project.id).collection("quantities").doc("live").get();
-  const logSnap = await db.collection("projects").doc(project.id).collection("costLog").orderBy("at", "desc").limit(80).get();
-  const costSettings = await readAppSettings();
-  const costSummary = liveCost({ cost: costSnap.data() || null, prices: costSettings.prices, items });
-  const costHistory = logSnap.docs.map((entry) => entry.data()).reverse();
-  sections.push({
-    title: "Nåværende kostnad",
-    items: [{
-      title: "Oversikt",
-      text: costReportText(costSummary, costHistory.map((entry) => ({
-        when: formatWhen(entry.at),
-        byName: entry.byName || "Einar",
-        text: entry.text || changeText(entry),
-      }))),
-      photos: [],
-      comments: [],
-    }],
-  });
+  if (customerSeesCost(project)) {
+    const costSnap = await db.collection("projects").doc(project.id).collection("quantities").doc("live").get();
+    const logSnap = await db.collection("projects").doc(project.id).collection("costLog").orderBy("at", "desc").limit(80).get();
+    const costSettings = await readAppSettings();
+    const costSummary = liveCost({ cost: costSnap.data() || null, prices: costSettings.prices, items });
+    const costHistory = logSnap.docs.map((entry) => entry.data()).reverse();
+    sections.push({
+      title: "Nåværende kostnad",
+      items: [{
+        title: "Oversikt",
+        text: costReportText(costSummary, costHistory.map((entry) => ({
+          when: formatWhen(entry.at),
+          byName: entry.byName || "Einar",
+          text: entry.text || changeText(entry),
+        }))),
+        photos: [],
+        comments: [],
+      }],
+    });
+  }
   const approvedOffers = approved.filter((item) => isOfferItem(item) && offerStatus(item) === "godkjent");
   if (approvedOffers.length) {
     const offerItems = [{
@@ -1195,6 +1198,7 @@ function mountOrder() {
         await ingestBlobs(project.id, "tilbud", input.blobs, { mode: "attach", itemId, title: fields.title, text: fields.text });
       }
       localStorage.setItem("lastProjectId", project.id);
+      if (input.fiken?.fikenProjectId) applyFikenOfferLines(project.id, input.fiken.fikenProjectId);
       const url = portalUrl(project.id, project.shareToken);
       const text = offerShareText(project, url);
       const shared = await shareText("Tilbud til kunde", text, url);
@@ -1313,7 +1317,7 @@ async function importFikenProject(card) {
     toast("Det prosjektet er allerede i Internkontroll.");
     return false;
   }
-  await db.collection("projects").add({
+  const ref = await db.collection("projects").add({
     name: fields.name,
     address: fields.address,
     customerName: fields.customerName,
@@ -1338,6 +1342,7 @@ async function importFikenProject(card) {
     createdBy: user?.email || "",
   });
   toast("Prosjektet er hentet fra Fiken");
+  applyFikenOfferLines(ref.id, fields.fikenProjectId);
   return true;
 }
 
@@ -1639,11 +1644,17 @@ function mountProject(route) {
         const next = patchCost(costDoc, priceTable, patch);
         const changes = costChanges(costDoc, next, priceTable);
         if (!changes.length) return;
-        costDoc = { agreedExVat: next.agreedExVat, lines: next.lines };
+        costDoc = {
+          ...costDoc,
+          agreedExVat: next.agreedExVat,
+          lines: next.lines,
+          fikenLines: next.fikenLines,
+        };
         draw();
         await db.collection("projects").doc(project.id).collection("quantities").doc("live").set({
           agreedExVat: next.agreedExVat,
           lines: next.lines,
+          fikenLines: next.fikenLines,
           updatedAt: stamp(),
         }, { merge: true });
         await Promise.all(changes.map((change) => db.collection("projects").doc(project.id).collection("costLog").add({
@@ -1663,6 +1674,33 @@ function mountProject(route) {
         toast("Kunne ikke lagre mengden");
       });
     };
+    const shareCost = el("input", { type: "checkbox" });
+    shareCost.checked = customerSeesCost(project);
+    shareCost.addEventListener("change", async () => {
+      try {
+        await db.collection("projects").doc(project.id).update({
+          showCostToCustomer: shareCost.checked === true,
+          updatedAt: stamp(),
+        });
+        toast(shareCost.checked ? "Kunden kan se kostnadsoversikten" : "Kostnadsoversikten er skjult for kunden");
+      } catch (error) {
+        console.error(error);
+        shareCost.checked = customerSeesCost(project);
+        toast("Kunne ikke lagre valget");
+      }
+    });
+    const costExtras = [
+      el("label", { class: "checkline" }, [
+        shareCost,
+        el("span", {}, "Vis kostnad for kunden i portalen"),
+      ]),
+    ];
+    if (project.fikenProjectId) {
+      costExtras.push(button("Hent linjer fra Fiken", {
+        class: "btn btn-ghost btn-block",
+        onClick: () => applyFikenOfferLines(project.id, project.fikenProjectId),
+      }));
+    }
     root.append(
       info,
       renderCostOverview({
@@ -1673,13 +1711,20 @@ function mountProject(route) {
           text: entry.text || changeText(entry),
         })),
         editable: true,
+        showToCustomer: customerSeesCost(project),
+        extras: costExtras,
         onAgreed: (value) => savePatch({ field: "agreedExVat", value }),
         onQuantity: (lineId, field, value) => savePatch({ lineId, field, value }),
       }),
       renderFikenProjectBox({
         project,
         onList: () => callFiken("listFikenProjects", {}),
-        onCreate: (payload) => callFiken("linkFikenProject", { projectId: project.id, ...payload }),
+        onCreate: async (payload) => {
+          const linked = await callFiken("linkFikenProject", { projectId: project.id, ...payload });
+          const linkedId = Number(linked?.fikenProjectId || payload?.fikenProjectId);
+          if (linkedId) await applyFikenOfferLines(project.id, linkedId);
+          return linked;
+        },
       }),
       customerBox(project),
       templateBox(project, () => setTimeout(draw, 0)),
@@ -1758,6 +1803,55 @@ async function readAppSettings() {
       byggforskReference: DEFAULT_BYGGFORSK_REFERENCE,
       fikenIncomeAccount: "3000",
     };
+  }
+}
+
+async function applyFikenOfferLines(projectId, fikenProjectId) {
+  const id = Number(fikenProjectId);
+  if (!projectId || !Number.isInteger(id) || id <= 0) return;
+  try {
+    const result = await callFiken("listFikenOfferLines", { fikenProjectId: id });
+    const incoming = result?.lines || [];
+    if (!incoming.length) {
+      toast("Fiken har ingen tilbud eller ordrebekreftelser på dette prosjektet.");
+      return;
+    }
+    const ref = db.collection("projects").doc(projectId).collection("quantities").doc("live");
+    const snap = await ref.get();
+    const current = snap.exists ? snap.data() : {};
+    let overwrite = false;
+    let merged = mergeFikenLines(current.fikenLines, incoming, { overwriteManual: false });
+    if (merged.conflicts.length) {
+      overwrite = window.confirm("Noen linjer fra Fiken er endret i Internkontroll. Vil du overskrive dem med tilbudet fra Fiken?");
+      if (overwrite) merged = mergeFikenLines(current.fikenLines, incoming, { overwriteManual: true });
+    }
+    const next = { ...current, fikenLines: merged.lines };
+    const changes = costChanges(current, next);
+    if (!changes.length) {
+      toast(merged.conflicts.length
+        ? "Linjer du har endret ble beholdt."
+        : "Tilbudslinjene fra Fiken er allerede hentet.");
+      return;
+    }
+    await ref.set({ fikenLines: merged.lines, updatedAt: stamp() }, { merge: true });
+    await Promise.all(changes.map((change) => ref.parent.parent.collection("costLog").add({
+      at: stamp(),
+      by: user?.uid || "",
+      byName: "Einar",
+      lineId: String(change.lineId).slice(0, 39),
+      label: String(change.label || "Linje").slice(0, 79),
+      field: change.field,
+      from: change.from,
+      to: change.to,
+      unit: change.unit || "",
+      text: changeText(change).slice(0, 299),
+    })));
+    toast(merged.conflicts.length && !overwrite
+      ? "Nye linjer fra Fiken er fylt inn. Linjer du har endret ble beholdt."
+      : "Linjene fra Fiken-tilbudet er fylt inn.");
+  } catch (error) {
+    console.error(error);
+    toast(fikenUnreachableMessage(error));
   }
 }
 
@@ -2710,6 +2804,7 @@ function mountForm(route) {
           createdBy: user?.email || "",
         });
         localStorage.setItem("lastProjectId", ref.id);
+        if (fikenPick?.fikenProjectId) applyFikenOfferLines(ref.id, fikenPick.fikenProjectId);
         toast("Prosjekt opprettet");
         reset({ name: "project", projectId: ref.id });
         return;
