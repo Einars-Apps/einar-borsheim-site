@@ -22,7 +22,19 @@ import {
   uploadBytes,
   getDownloadURL,
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-storage.js";
-import { approvalLine, formatDay, formatWhen, isCompleted } from "../www/js/logic.js";
+import {
+  PORTAL_PREVIEW_APP,
+  PORTAL_PREVIEW_BANNER,
+  applyPortalPreviewLock,
+  approvalLine,
+  customerOwnPending,
+  customerVisibleContent,
+  customerVisibleDocument,
+  formatDay,
+  formatWhen,
+  isCompleted,
+  isPortalPreview,
+} from "../www/js/logic.js";
 import {
   alternativeHeading,
   alternativePriceText,
@@ -41,7 +53,11 @@ import { canSpeak, dictate } from "../www/js/speech.js";
 import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem } from "../www/js/photos.js";
 import { openPhotoViewer } from "../www/js/photo-view.js";
 
-const app = initializeApp(firebaseConfig);
+const params = new URLSearchParams(window.location.search);
+const projectId = params.get("p");
+const token = params.get("t");
+const previewMode = isPortalPreview(params);
+const app = previewMode ? initializeApp(firebaseConfig, PORTAL_PREVIEW_APP) : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
@@ -49,10 +65,6 @@ const storage = getStorage(app);
 const viewLoading = document.getElementById("view-loading");
 const viewError = document.getElementById("view-error");
 const viewProject = document.getElementById("view-project");
-
-const params = new URLSearchParams(window.location.search);
-const projectId = params.get("p");
-const token = params.get("t");
 
 let uid = "";
 let project = null;
@@ -154,7 +166,9 @@ function mergedItems() {
   const map = new Map();
   for (const item of approvedItems) map.set(item.id, item);
   for (const item of ownItems) map.set(item.id, item);
-  return [...map.values()].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  return [...map.values()]
+    .filter((item) => customerVisibleContent(item, uid))
+    .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 }
 
 let renderAfterBlur = false;
@@ -230,6 +244,9 @@ function render() {
   const pdfSlot = el("p", { class: "muted" }, "Sluttrapporten legges her når den er klar.");
   const pdfPath = `projects/${projectId}/rapport/sluttrapport.pdf`;
   viewProject.replaceChildren();
+  if (previewMode) {
+    viewProject.append(el("p", { class: "preview-banner", role: "status" }, PORTAL_PREVIEW_BANNER));
+  }
   viewProject.append(el("section", { class: "k-card k-stack" }, [
     el("p", { class: "muted" }, "Ditt prosjekt"),
     el("h1", {}, project.name || "Prosjekt"),
@@ -323,6 +340,7 @@ function render() {
 
   paintPortalPhotos();
   for (const item of items) hydrate(item);
+  applyPortalPreviewLock(previewMode ? viewProject : null);
 }
 
 function itemCard(item, showStatus = false) {
@@ -349,6 +367,7 @@ function commentForm(itemId) {
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (previewMode) return;
     const text = input.value.trim();
     if (!text) return;
     form.querySelector("button").disabled = true;
@@ -397,10 +416,7 @@ function paintPortalPhotos() {
     const card = document.getElementById(`item-${itemId}`);
     if (!media) continue;
     const item = mergedItems().find((entry) => entry.id === itemId);
-    const keep = photos.filter((photo) => (
-      shown.has(photoKey(photo))
-      || (photo.createdBy === uid && photo.approved === false && !isTrashedPhoto(photo))
-    ));
+    const keep = photos.filter((photo) => shown.has(photoKey(photo)) || customerOwnPending(photo, uid));
     media.replaceChildren();
     const figures = portalFigures(keep);
     if (figures) media.append(figures);
@@ -428,7 +444,7 @@ async function hydrate(item) {
     paintPortalPhotos();
     const thread = await loadVisible(collection(db, "projects", projectId, "items", item.id, "comments"));
     if (generation !== portalGeneration || !comments) return;
-    for (const comment of thread) {
+    for (const comment of thread.filter((entry) => customerVisibleContent(entry, uid))) {
       comments.append(el("div", { class: "comment" }, [
         el("small", {}, `${comment.source === "kunde" ? "Deg" : "Einar"} · ${formatWhen(comment.createdAt)}${comment.approved === false ? " · venter" : ""}`),
         el("p", { class: "pre" }, comment.text || ""),
@@ -447,7 +463,7 @@ async function loadVisible(col) {
   const map = new Map();
   open.forEach((docSnap) => map.set(docSnap.id, { id: docSnap.id, ...docSnap.data() }));
   mine.forEach((docSnap) => map.set(docSnap.id, { id: docSnap.id, ...docSnap.data() }));
-  return [...map.values()];
+  return [...map.values()].filter((record) => customerVisibleContent(record, uid));
 }
 
 function submissionForm() {
@@ -468,6 +484,7 @@ function submissionForm() {
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (previewMode) return;
     const chosen = [...(files.files || [])].slice(0, 8);
     if (!text.value.trim() && !title.value.trim() && !chosen.length) {
       status.hidden = false;
@@ -532,6 +549,7 @@ function ratingForm() {
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (previewMode) return;
     if (!stars) {
       status.hidden = false;
       status.textContent = "Velg antall stjerner.";
@@ -571,6 +589,7 @@ function ratingForm() {
 }
 
 async function uploadPhoto(itemId, file, index) {
+  if (previewMode) return;
   const blob = await compressImage(file);
   const filename = `kunde-${Date.now()}-${index}.jpg`;
   const storagePath = `projects/${projectId}/media/${filename}`;
@@ -690,6 +709,7 @@ function offerCard(item) {
 }
 
 async function decide(item, status, alternativeId = "") {
+  if (previewMode) return;
   const name = String(project?.customerName || "Kunde").trim().slice(0, 79) || "Kunde";
   const error = customerDecisionError(item, status, alternativeId);
   if (error) {
@@ -716,7 +736,9 @@ function mergedDocs() {
   const map = new Map();
   for (const item of approvedDocs) map.set(item.id, item);
   for (const item of ownDocs) map.set(item.id, item);
-  return [...map.values()].sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  return [...map.values()]
+    .filter((item) => customerVisibleDocument(item))
+    .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 }
 
 function messageSection() {
@@ -743,6 +765,7 @@ function messageSection() {
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (previewMode) return;
     const text = input.value.trim();
     const chosen = file.files?.[0];
     if (!text && !chosen) return;
@@ -803,6 +826,7 @@ function documentSection() {
   ]);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (previewMode) return;
     const files = [...(file.files || [])];
     if (!files.length) return;
     form.querySelector("button").disabled = true;

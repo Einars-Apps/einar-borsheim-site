@@ -16,7 +16,9 @@ import {
   isTrashed,
   missingTemplateSteps,
   phaseLabel,
+  portalPreviewUrl,
   portalUrl,
+  previewOpenMode,
   projectShareText,
   randomToken,
   reminderPlan,
@@ -368,12 +370,53 @@ function openShareSheet({ title, text, url, phone, email }) {
   ]));
 }
 
+const tokenJobs = new Map();
+
 async function ensureToken(project) {
   if (project.shareToken) return project.shareToken;
-  const shareToken = randomToken(12);
-  await db.collection("projects").doc(project.id).update({ shareToken, updatedAt: stamp() });
-  project.shareToken = shareToken;
-  return shareToken;
+  if (tokenJobs.has(project.id)) return tokenJobs.get(project.id);
+  const job = (async () => {
+    const shareToken = randomToken(12);
+    await db.collection("projects").doc(project.id).update({ shareToken, updatedAt: stamp() });
+    project.shareToken = shareToken;
+    return shareToken;
+  })();
+  tokenJobs.set(project.id, job);
+  try {
+    return await job;
+  } finally {
+    if (tokenJobs.get(project.id) === job) tokenJobs.delete(project.id);
+  }
+}
+
+async function openPreviewUrl(url) {
+  const native = !!window.Capacitor?.isNativePlatform?.();
+  const hasBrowser = !!window.Capacitor?.Plugins?.Browser?.open;
+  const mode = previewOpenMode({ native, hasBrowser });
+  if (mode === "in-app") {
+    await window.Capacitor.Plugins.Browser.open({ url });
+    return;
+  }
+  if (mode === "tab") {
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (opened) return;
+  }
+  await copyLink(url);
+  toast(mode === "copy"
+    ? "Forhåndsvisningen er kopiert. Åpne den i nettleseren på telefonen."
+    : "Nettleseren blokkerte vinduet. Forhåndsvisningen er kopiert.");
+}
+
+async function previewAsCustomer(project) {
+  try {
+    const hadLink = !!project.shareToken;
+    const token = await ensureToken(project);
+    if (!hadLink) toast("Kundelenken er opprettet");
+    await openPreviewUrl(portalPreviewUrl(project.id, token));
+  } catch (error) {
+    console.error(error);
+    toast("Kunne ikke åpne forhåndsvisningen");
+  }
 }
 
 async function shareProject(project, year) {
@@ -1319,7 +1362,10 @@ function mountProjects() {
         ]),
       ]);
       card.addEventListener("click", () => openProject(project.id));
-      list.append(card);
+      list.append(el("div", { class: "project-entry" }, [
+        card,
+        button("Se som kunde", { class: "btn btn-ghost", onClick: () => previewAsCustomer(project) }),
+      ]));
     }
   };
   refresh = draw;
@@ -1579,6 +1625,7 @@ function mountProject(route) {
     const actions = [
       button("Rediger", { class: "btn btn-ghost", onClick: () => push({ name: "form", projectId: project.id }) }),
       button("Del med kunde", { class: "btn btn-ghost", icon: "share", onClick: () => shareProject(project) }),
+      button("Se som kunde", { class: "btn btn-ghost", onClick: () => previewAsCustomer(project) }),
       button(finished ? "Sett aktiv" : "Meld ferdig", {
         class: "btn btn-primary",
         onClick: () => toggleComplete(project),
@@ -2170,6 +2217,10 @@ function customerBox(project) {
         class: "btn btn-primary",
         icon: "share",
         onClick: () => shareProject(project),
+      }),
+      button("Se som kunde", {
+        class: "btn btn-ghost",
+        onClick: () => previewAsCustomer(project),
       }),
     ]),
   ]);
@@ -3441,6 +3492,7 @@ function mountDone() {
     "Ingen fullførte prosjekter ennå.",
     (project) => el("div", { class: "action-row" }, [
       button("Åpne", { class: "btn btn-primary", onClick: () => openProject(project.id) }),
+      button("Se som kunde", { class: "btn btn-ghost", onClick: () => previewAsCustomer(project) }),
     ])
   );
 }
@@ -3455,6 +3507,10 @@ function mountTrash() {
       return el("div", { class: "stack" }, [
         el("p", { class: "meta" }, left == null ? "" : `${left} dager igjen før alt slettes`),
         el("div", { class: "action-row" }, [
+          button("Se som kunde", {
+            class: "btn btn-ghost",
+            onClick: () => previewAsCustomer(project),
+          }),
           button("Legg tilbake", {
             class: "btn btn-ghost",
             onClick: async () => {
