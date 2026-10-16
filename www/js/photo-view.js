@@ -20,16 +20,23 @@ function iconButton(name, label, className, onClick) {
 }
 
 function shotButton(photo, onOpen) {
-  const image = photo.url
-    ? el("img", { class: "photo-shot", src: photo.url, alt: photo.caption || "Bilde" })
+  const full = photo.url || "";
+  const src = photo.thumbUrl || full;
+  const image = src
+    ? el("img", { class: "photo-shot", src, alt: photo.caption || "Bilde" })
     : null;
   if (image) {
     image.addEventListener("error", () => {
+      if (image.dataset.full !== "1" && full && image.src !== full && !image.src.endsWith(full)) {
+        image.dataset.full = "1";
+        image.src = full;
+        return;
+      }
       const tries = Number(image.dataset.tries || 0);
-      if (!photo.url || tries >= 3) return;
+      if (!full || tries >= 3) return;
       image.dataset.tries = String(tries + 1);
-      const join = String(photo.url).includes("?") ? "&" : "?";
-      image.src = `${photo.url}${join}retry=${tries + 1}`;
+      const join = full.includes("?") ? "&" : "?";
+      image.src = `${full}${join}retry=${tries + 1}`;
     });
   }
   const open = el("button", { type: "button", class: "photo-open", "aria-label": "Vis bildet stort" });
@@ -102,7 +109,7 @@ export function renderPhotoBoard(state, handlers) {
       el("p", { class: "meta" }, "Bildene kan hentes tilbake. De vises ikke i rapporten eller for kunden."),
     ]);
     for (const photo of trashed.slice().sort((a, b) => photoKey(a).localeCompare(photoKey(b)))) {
-      const thumb = photo.url ? el("img", { src: photo.url, alt: "" }) : el("span", {}, "Bilde");
+      const thumb = (photo.thumbUrl || photo.url) ? el("img", { src: photo.thumbUrl || photo.url, alt: "" }) : el("span", {}, "Bilde");
       bin.append(el("div", { class: "photo-bin-row" }, [
         thumb,
         el("div", { class: "stack" }, [

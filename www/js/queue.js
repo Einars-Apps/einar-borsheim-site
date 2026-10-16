@@ -1,5 +1,9 @@
-const DB_NAME = "internkontroll";
-const STORE = "queue";
+// Navn og butikk må være de samme som på telefoner som allerede har bilder på vent.
+export const QUEUE_DB = "internkontroll";
+export const QUEUE_STORE = "queue";
+
+const DB_NAME = QUEUE_DB;
+const STORE = QUEUE_STORE;
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -53,18 +57,23 @@ export async function updateQueue(id, patch) {
   const db = await openDb();
   const tx = db.transaction(STORE, "readwrite");
   const store = tx.objectStore(STORE);
-  const current = await new Promise((resolve, reject) => {
+  const next = await new Promise((resolve, reject) => {
     const request = store.get(id);
-    request.onsuccess = () => resolve(request.result || null);
     request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const current = request.result;
+      if (!current) {
+        resolve(null);
+        return;
+      }
+      const updated = { ...current, ...patch };
+      const put = store.put(updated);
+      put.onerror = () => reject(put.error);
+      put.onsuccess = () => resolve(updated);
+    };
   });
-  if (!current) {
-    await txDone(tx);
-    return null;
-  }
-  store.put({ ...current, ...patch });
   await txDone(tx);
-  return { ...current, ...patch };
+  return next;
 }
 
 export async function removeQueue(id) {

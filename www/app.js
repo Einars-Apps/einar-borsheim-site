@@ -29,8 +29,21 @@ import {
 } from "./js/logic.js";
 import { canSpeak, dictate } from "./js/speech.js";
 import { AI_DRAFT_URL, requestAiDraft } from "./js/ai.js";
-import { compressImage, blobToDataUrl } from "./js/image.js";
+import { blobToDataUrl, preparePhoto } from "./js/image.js";
 import { addToQueue, getQueueItem, listQueue, removeQueue, updateQueue } from "./js/queue.js";
+import {
+  MAX_PHOTOS,
+  UPLOAD_CONCURRENCY,
+  UPLOAD_TIMEOUT_MS,
+  canAttempt,
+  failureReason,
+  needsPrepare,
+  queueBanner,
+  retryDelay,
+  runUploadPool,
+  showRetryButton,
+  withTimeout,
+} from "./js/upload-queue.js";
 import { generatePdfBlob } from "./js/pdf.js";
 import {
   DEFAULT_BYGGFORSK_REFERENCE,
@@ -91,6 +104,8 @@ const topKicker = document.getElementById("top-kicker");
 const topAction = document.getElementById("top-action");
 const tabbar = document.getElementById("tabbar");
 const netBanner = document.getElementById("net-banner");
+const netBannerText = document.getElementById("net-banner-text");
+const netRetry = document.getElementById("net-retry");
 
 let auth;
 let db;
@@ -101,6 +116,10 @@ let queueItems = [];
 let stack = [{ name: "login" }];
 let online = navigator.onLine;
 let syncing = false;
+let syncGeneration = 0;
+let retryQueued = false;
+let retryTimer = 0;
+let uploadWatch = { active: false, done: 0, total: 0, phase: "" };
 let captureKind = "bilde";
 let captureStep = "";
 let templates = [];
@@ -260,16 +279,25 @@ function updateChrome() {
 
   const waiting = queueItems.filter((item) => !item.held);
   const failed = waiting.filter((item) => item.error);
-  let banner = "";
-  if (!online) {
-    banner = waiting.length
-      ? `Ingen nett. ${waiting.length} ${waiting.length === 1 ? "bilde ligger" : "bilder ligger"} på telefonen.`
-      : "Ingen nett. Notater lagres på telefonen og sendes når du er tilkoblet.";
-  } else if (syncing) banner = "Sender bilder…";
-  else if (failed.length) banner = `${failed.length} ble ikke sendt. Trykk for å prøve igjen.`;
-  else if (waiting.length) banner = `Venter på å sende ${waiting.length}…`;
+  const banner = queueBanner({
+    online,
+    active: uploadWatch.active,
+    phase: uploadWatch.phase,
+    done: uploadWatch.done,
+    total: uploadWatch.total,
+    waiting: waiting.length,
+    failed: failed.length,
+  });
   netBanner.hidden = !banner;
-  netBanner.textContent = banner;
+  if (netBannerText) netBannerText.textContent = banner;
+  if (netRetry) {
+    netRetry.hidden = !showRetryButton({
+      online,
+      active: uploadWatch.active,
+      waiting: waiting.length,
+      failed: failed.length,
+    });
+  }
   document.body.classList.toggle("has-banner", !!banner);
   const widePhotos = route.name === "item" || (route.name === "section" && route.kind === "bilde");
   document.body.classList.toggle("photo-wide", widePhotos);
@@ -453,7 +481,7 @@ function chooseFiles({ capture = false, multiple = false, accept = "image/*" } =
   });
 }
 
-async function blobsFromCamera(source) {
+async function cameraRefs(source) {
   const Camera = window.Capacitor?.Plugins?.Camera;
   if (!Camera) return chooseFiles({ capture: source === "camera", multiple: source !== "camera" });
   if (source === "camera") {
@@ -464,18 +492,62 @@ async function blobsFromCamera(source) {
       saveToGallery: true,
       correctOrientation: true,
     });
-    return [await (await fetch(photo.webPath)).blob()];
+    return [photo];
   }
-  const result = await Camera.pickImages({ quality: 85, limit: 12 });
-  return Promise.all(result.photos.map(async (photo) => (await fetch(photo.webPath)).blob()));
+  const result = await Camera.pickImages({ quality: 85, limit: 0 });
+  return result.photos || [];
 }
 
-async function ingestBlobs(projectId, kind, blobs, { title = "", text = "", step = "", mode = "create", itemId = "" } = {}) {
-  const limited = blobs.slice(0, 12);
-  if (blobs.length > 12) toast("De 12 første bildene blir med");
+async function blobFromRef(ref) {
+  if (ref instanceof Blob) return ref;
+  if (!ref?.webPath) throw new Error("Bildet mangler på telefonen");
+  return (await fetch(ref.webPath)).blob();
+}
+
+async function collectPrepared(source) {
+  let refs = await cameraRefs(source);
+  if (refs.length > MAX_PHOTOS) {
+    toast(`De ${MAX_PHOTOS} første bildene blir med`);
+    refs = refs.slice(0, MAX_PHOTOS);
+  }
+  const prepared = [];
+  let skipped = 0;
+  uploadWatch = { active: true, done: 0, total: refs.length, phase: "prepare" };
+  updateChrome();
+  try {
+    for (let index = 0; index < refs.length; index += 1) {
+      uploadWatch.done = index;
+      updateChrome();
+      try {
+        prepared.push(await preparePhoto(await blobFromRef(refs[index])));
+      } catch (error) {
+        console.error(error);
+        skipped += 1;
+      }
+    }
+  } finally {
+    uploadWatch = { active: false, done: 0, total: 0, phase: "" };
+    updateChrome();
+  }
+  if (skipped) toast(skipped === 1 ? "Ett bilde ble hoppet over" : `${skipped} bilder ble hoppet over`);
+  return prepared;
+}
+
+async function ingestBlobs(projectId, kind, photos, { title = "", text = "", step = "", mode = "create", itemId = "" } = {}) {
   const ids = [];
-  for (let index = 0; index < limited.length; index++) {
-    const compressed = await compressImage(limited[index]);
+  let skipped = 0;
+  for (let index = 0; index < photos.length; index += 1) {
+    const photo = photos[index];
+    let prepared = photo;
+    if (!(photo?.blob instanceof Blob) || !("takenAt" in (photo || {}))) {
+      try {
+        prepared = await preparePhoto(await blobFromRef(photo));
+      } catch (error) {
+        console.error(error);
+        skipped += 1;
+        continue;
+      }
+    }
     const id = crypto.randomUUID();
     await addToQueue({
       id,
@@ -487,17 +559,23 @@ async function ingestBlobs(projectId, kind, blobs, { title = "", text = "", step
       title: title || step || "",
       text,
       step: step || "",
-      blob: compressed,
+      blob: prepared.blob,
+      thumb: prepared.thumb || null,
+      prepared: true,
       filename: `${Date.now()}-${index}-${id.slice(0, 8)}.jpg`,
-      createdAt: Date.now(),
+      createdAt: prepared.takenAt || Date.now(),
       held: mode !== "attach",
       error: "",
+      attempts: 0,
+      nextAttemptAt: 0,
     });
     ids.push(id);
   }
   await refreshQueue();
+  if (skipped) toast(skipped === 1 ? "Ett bilde ble hoppet over" : `${skipped} bilder ble hoppet over`);
+  if (!ids.length) return;
   if (mode === "attach") {
-    toast("Bildet er lagret på telefonen");
+    toast(ids.length === 1 ? "Bildet er lagret på telefonen" : `${ids.length} bilder er lagret på telefonen`);
     syncQueue();
     return;
   }
@@ -512,8 +590,8 @@ async function startCapture(projectId, kind, source) {
   captureKind = kind || captureKind;
   localStorage.setItem("lastProjectId", projectId);
   try {
-    const blobs = await blobsFromCamera(source);
-    await ingestBlobs(projectId, captureKind, blobs, { step: captureStep, title: captureStep || "" });
+    const photos = await collectPrepared(source);
+    await ingestBlobs(projectId, captureKind, photos, { step: captureStep, title: captureStep || "" });
   } catch (error) {
     if (isCancel(error) || error?.code === "cancel") return;
     console.error(error);
@@ -521,27 +599,48 @@ async function startCapture(projectId, kind, source) {
   }
 }
 
+function putBlob(ref, blob) {
+  const task = ref.put(blob, { contentType: "image/jpeg" });
+  return withTimeout(task, UPLOAD_TIMEOUT_MS, () => {
+    try { task.cancel(); } catch { /* oppgaven kan allerede være ferdig */ }
+  });
+}
+
 async function uploadQueueItem(item) {
   let url = item.url || "";
   let storagePath = item.storagePath || "";
+  let thumbUrl = item.thumbUrl || "";
+  if (!item.blob && !url) throw new Error("Bildet mangler på telefonen");
   if (item.blob && !url) {
-    storagePath = `projects/${item.projectId}/media/${item.filename}`;
+    storagePath = storagePath || `projects/${item.projectId}/media/${item.filename}`;
     const ref = storage.ref(storagePath);
-    await ref.put(item.blob, { contentType: "image/jpeg" });
-    url = await ref.getDownloadURL();
+    await putBlob(ref, item.blob);
+    url = await withTimeout(ref.getDownloadURL(), UPLOAD_TIMEOUT_MS);
     await updateQueue(item.id, { url, storagePath });
   }
+  if (item.thumb && !thumbUrl) {
+    try {
+      const thumbPath = item.thumbPath || `projects/${item.projectId}/media/thumb-${item.filename}`;
+      const thumbRef = storage.ref(thumbPath);
+      await putBlob(thumbRef, item.thumb);
+      thumbUrl = await withTimeout(thumbRef.getDownloadURL(), UPLOAD_TIMEOUT_MS);
+      await updateQueue(item.id, { thumbUrl, thumbPath });
+    } catch (error) {
+      console.error(error);
+    }
+  }
+  const cover = thumbUrl || url;
   const itemRef = db.collection("projects").doc(item.projectId).collection("items").doc(item.itemId);
   if (item.mode === "attach") {
-    const existing = await itemRef.get();
+    const existing = await withTimeout(itemRef.get(), UPLOAD_TIMEOUT_MS);
     if (!existing.exists) throw new Error("Notatet finnes ikke ennå");
-    if (url && !existing.data().coverUrl) {
-      await itemRef.set({ coverUrl: url, updatedAt: stamp() }, { merge: true });
+    if (cover && !existing.data().coverUrl) {
+      await withTimeout(itemRef.set({ coverUrl: cover, updatedAt: stamp() }, { merge: true }), UPLOAD_TIMEOUT_MS);
     }
   } else {
-    const existing = await itemRef.get();
+    const existing = await withTimeout(itemRef.get(), UPLOAD_TIMEOUT_MS);
     if (!existing.exists) {
-      await itemRef.set({
+      await withTimeout(itemRef.set({
         kind: item.kind || "bilde",
         title: item.title || item.step || "",
         text: item.text || "",
@@ -552,54 +651,140 @@ async function uploadQueueItem(item) {
         source: "admin",
         createdBy: user?.uid || "",
         authorName: "Einar",
-        coverUrl: url || "",
+        coverUrl: cover || "",
         createdAt: firebase.firestore.Timestamp.fromDate(new Date(item.createdAt || Date.now())),
         updatedAt: stamp(),
-      });
-    } else if (url && !existing.data().coverUrl) {
-      await itemRef.set({ coverUrl: url, updatedAt: stamp() }, { merge: true });
+      }), UPLOAD_TIMEOUT_MS);
+    } else if (cover && !existing.data().coverUrl) {
+      await withTimeout(itemRef.set({ coverUrl: cover, updatedAt: stamp() }, { merge: true }), UPLOAD_TIMEOUT_MS);
     }
   }
   if (url) {
     const photoRef = itemRef.collection("photos").doc(item.photoId);
-    const photo = await photoRef.get();
+    const photo = await withTimeout(photoRef.get(), UPLOAD_TIMEOUT_MS);
     if (!photo.exists) {
-      await photoRef.set({
+      await withTimeout(photoRef.set({
         url,
         storagePath,
+        thumbUrl: thumbUrl || "",
         caption: item.text || "",
         approved: true,
         source: "admin",
         createdBy: user?.uid || "",
         createdAt: firebase.firestore.Timestamp.fromDate(new Date(item.createdAt || Date.now())),
+      }), UPLOAD_TIMEOUT_MS);
+    }
+  }
+}
+
+async function prepareStuckBlobs() {
+  const items = (await listQueue()).filter((item) => needsPrepare(item) && canAttempt(item));
+  if (!items.length) return;
+  uploadWatch = { active: true, done: 0, total: items.length, phase: "prepare" };
+  updateChrome();
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    uploadWatch.done = index;
+    updateChrome();
+    try {
+      const prepared = await preparePhoto(item.blob);
+      await updateQueue(item.id, {
+        blob: prepared.blob,
+        thumb: prepared.thumb,
+        prepared: true,
+        error: "",
+        createdAt: item.createdAt || prepared.takenAt || Date.now(),
+      });
+    } catch (error) {
+      console.error(error);
+      await updateQueue(item.id, {
+        error: failureReason(error),
+        attempts: (item.attempts || 0) + 1,
+        nextAttemptAt: Date.now() + retryDelay((item.attempts || 0) + 1),
       });
     }
   }
 }
 
+function scheduleRetry() {
+  clearTimeout(retryTimer);
+  if (!user || !online) return;
+  const times = queueItems
+    .filter((item) => !item.held && Number(item.nextAttemptAt) > Date.now())
+    .map((item) => Number(item.nextAttemptAt));
+  if (!times.length) return;
+  const wait = Math.max(250, Math.min(...times) - Date.now());
+  retryTimer = setTimeout(() => syncQueue(), wait);
+}
+
 async function syncQueue() {
-  if (syncing || !user || !online) {
+  if (!user || !online) {
     updateChrome();
     return;
   }
+  if (syncing) {
+    retryQueued = true;
+    updateChrome();
+    return;
+  }
+  const generation = ++syncGeneration;
   syncing = true;
+  uploadWatch = { active: false, done: 0, total: 0, phase: "" };
   updateChrome();
   try {
-    const items = await listQueue();
-    for (const item of items) {
-      if (item.held) continue;
+    await prepareStuckBlobs();
+    if (generation !== syncGeneration) return;
+    const items = (await listQueue()).filter((item) => canAttempt(item));
+    uploadWatch = { active: true, done: 0, total: items.length, phase: "upload" };
+    updateChrome();
+    await runUploadPool(items, async (item) => {
+      if (generation !== syncGeneration) return;
       try {
-        await uploadQueueItem(item);
+        const latest = await getQueueItem(item.id);
+        if (!latest || latest.held) return;
+        await uploadQueueItem(latest);
         await removeQueue(item.id);
       } catch (error) {
         console.error(error);
-        await updateQueue(item.id, { error: "Kunne ikke sende" });
+        const attempts = (item.attempts || 0) + 1;
+        await updateQueue(item.id, {
+          error: failureReason(error),
+          attempts,
+          nextAttemptAt: Date.now() + retryDelay(attempts),
+        });
+      }
+    }, {
+      concurrency: UPLOAD_CONCURRENCY,
+      isCancelled: () => generation !== syncGeneration,
+      onStart: (_item, index) => {
+        uploadWatch.done = index;
+        uploadWatch.active = true;
+        updateChrome();
+      },
+    });
+  } finally {
+    if (generation === syncGeneration) {
+      syncing = false;
+      uploadWatch = { active: false, done: 0, total: 0, phase: "" };
+      await refreshQueue();
+      scheduleRetry();
+      if (retryQueued) {
+        retryQueued = false;
+        syncQueue();
       }
     }
-  } finally {
-    syncing = false;
-    await refreshQueue();
   }
+}
+
+async function retryQueuedItems(id) {
+  const items = await listQueue();
+  for (const item of items) {
+    if (item.held) continue;
+    if (id && item.id !== id) continue;
+    await updateQueue(item.id, { nextAttemptAt: 0 });
+  }
+  await refreshQueue();
+  syncQueue();
 }
 
 async function migrateLegacyQueue() {
@@ -904,22 +1089,6 @@ async function fetchWithRetry(url) {
   }
 }
 
-function withTimeout(promise, ms) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout")), ms);
-    Promise.resolve(promise).then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
-}
-
 async function blobToBase64(blob) {
   const dataUrl = await blobToDataUrl(blob);
   const comma = String(dataUrl).indexOf(",");
@@ -1065,15 +1234,19 @@ function itemRow(projectId, item) {
 }
 
 function queueCard(item) {
-  return itemRow(item.projectId, {
-    queued: true,
-    kind: item.kind,
-    title: "",
-    text: item.text || "Bilde venter på sending",
-    createdAt: item.createdAt,
-    error: item.error,
-    coverUrl: "",
-  });
+  const card = el("article", { class: "card queue-card" });
+  card.append(
+    el("p", { class: "row-title" }, item.text || "Bilde"),
+    el("p", { class: item.error ? "field-error" : "meta" }, item.error || "Venter på sending"),
+    el("p", { class: "meta" }, formatWhen(item.createdAt) || ""),
+  );
+  if (item.error) {
+    card.append(button("Prøv igjen nå", {
+      class: "btn btn-ghost",
+      onClick: () => retryQueuedItems(item.id),
+    }));
+  }
+  return card;
 }
 
 function mountLogin() {
@@ -1223,7 +1396,7 @@ function fikenLinkPatch(fields) {
 function mountOrder() {
   main.append(renderQuickOrder({
     onLocate: locateAddress,
-    onPhotos: (source) => blobsFromCamera(source),
+    onPhotos: (source) => collectPrepared(source),
     onListFiken: () => callFiken("listFikenProjects", {}),
     isFikenLinked: (projectId) => isFikenLinked(projects, projectId),
     onSubmit: async (input) => {
@@ -3042,11 +3215,11 @@ function mountItem(route) {
 
 async function attachPhoto(projectId, itemId, kind) {
   try {
-    const blobs = await blobsFromCamera("camera").catch(async (error) => {
+    const photos = await collectPrepared("camera").catch(async (error) => {
       if (isCancel(error)) throw error;
       return chooseFiles({ capture: true });
     });
-    await ingestBlobs(projectId, kind || "bilde", blobs, { mode: "attach", itemId });
+    await ingestBlobs(projectId, kind || "bilde", photos, { mode: "attach", itemId });
   } catch (error) {
     if (isCancel(error) || error?.code === "cancel") return;
     console.error(error);
@@ -3089,7 +3262,7 @@ function mountReview(route) {
       return;
     }
     if (items.length === 1) {
-      const url = URL.createObjectURL(items[0].blob);
+      const url = URL.createObjectURL(items[0].thumb || items[0].blob);
       const input = el("textarea", { rows: "4", maxlength: "4000", placeholder: "Kommentar til bildet" });
       input.dataset.queueId = items[0].id;
       input.value = items[0].text || "";
@@ -3097,7 +3270,7 @@ function mountReview(route) {
       return;
     }
     for (const item of items) {
-      const url = URL.createObjectURL(item.blob);
+      const url = URL.createObjectURL(item.thumb || item.blob);
       const input = el("textarea", { rows: "2", maxlength: "4000", placeholder: "Kommentar" });
       input.dataset.queueId = item.id;
       input.value = item.text || "";
@@ -3612,15 +3785,15 @@ function messageBubble(data, adminView) {
 
 async function sendMessageImage(projectId, input) {
   try {
-    const blobs = await blobsFromCamera("gallery");
-    const blob = blobs[0];
-    if (!blob) return;
-    const compressed = await compressImage(blob);
+    const photos = await collectPrepared("gallery");
+    const prepared = photos[0];
+    if (!prepared?.blob) return;
+    const compressed = prepared.blob;
     const filename = `melding-${Date.now()}.jpg`;
     const imagePath = `projects/${projectId}/media/${filename}`;
     const ref = storage.ref(imagePath);
-    await ref.put(compressed, { contentType: "image/jpeg" });
-    const imageUrl = await ref.getDownloadURL();
+    await putBlob(ref, compressed);
+    const imageUrl = await withTimeout(ref.getDownloadURL(), UPLOAD_TIMEOUT_MS);
     await db.collection("projects").doc(projectId).collection("messages").add({
       text: input.value.trim(),
       sender: "admin",
@@ -3873,6 +4046,9 @@ function bindHardwareBack() {
     AppPlugin.addListener("backButton", () => {
       requestBack(true);
     });
+    AppPlugin.addListener("appStateChange", (state) => {
+      if (state?.isActive) syncQueue();
+    });
     return true;
   };
   if (attach()) return;
@@ -3886,7 +4062,7 @@ function bindHardwareBack() {
 function bindChrome() {
   bindHardwareBack();
   backBtn.addEventListener("click", () => requestBack(false));
-  netBanner.addEventListener("click", () => syncQueue());
+  netRetry?.addEventListener("click", () => retryQueuedItems());
   window.addEventListener("popstate", async (event) => {
     if (!user) {
       if (current().name !== "login") {
@@ -3911,6 +4087,9 @@ function bindChrome() {
     updateChrome();
     syncQueue();
   });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") syncQueue();
+  });
   window.addEventListener("offline", () => {
     online = false;
     updateChrome();
@@ -3925,6 +4104,7 @@ function bindChrome() {
     Network.getStatus().then((status) => {
       online = !!status.connected;
       updateChrome();
+      if (online) syncQueue();
     }).catch(() => {});
   }
 }
