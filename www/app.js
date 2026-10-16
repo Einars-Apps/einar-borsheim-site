@@ -98,8 +98,19 @@ import {
   uploadTimestamps,
 } from "./js/photos.js";
 import { mapAnchor, mountPhotoBoard } from "./js/photo-view.js";
+import {
+  HMS_ACCEPT,
+  HMS_MAX_BYTES,
+  activeHmsDocs,
+  hmsContentType,
+  hmsCountLabel,
+  hmsStoragePath,
+  isHmsFileName,
+  newHmsDoc,
+} from "./js/hms.js";
+import { renderHmsBoard } from "./js/hms-view.js";
 
-const ROUTES = new Set(["projects", "reminders", "capture", "project", "section", "item", "review", "form", "report", "done", "trash", "messages", "documents", "templates", "drainage", "offers", "order"]);
+const ROUTES = new Set(["projects", "reminders", "capture", "project", "section", "item", "review", "form", "report", "done", "trash", "messages", "documents", "templates", "drainage", "offers", "order", "hms"]);
 
 const main = document.getElementById("main");
 const topbar = document.getElementById("topbar");
@@ -239,6 +250,7 @@ function updateChrome() {
     trash: ["Papirkurv", ""],
     messages: ["Meldinger", projectName(route.projectId)],
     documents: ["Dokumenter", projectName(route.projectId)],
+    hms: ["HMS", projectName(route.projectId)],
     templates: ["Bildemaler", ""],
     drainage: [route.docId ? "Strekk" : "Drenering", projectName(route.projectId)],
     offers: ["Tilbud og endringer", projectName(route.projectId)],
@@ -328,6 +340,7 @@ function render() {
     trash: mountTrash,
     messages: mountMessages,
     documents: mountDocuments,
+    hms: mountHms,
     templates: mountTemplates,
     drainage: mountDrainage,
     offers: mountOffers,
@@ -1867,6 +1880,7 @@ function mountProject(route) {
   let items = [];
   let legacy = [];
   let drainageCount = 0;
+  let hmsCount = 0;
   let fikenQuotes = [];
   let costDoc = null;
   let costLog = [];
@@ -1970,6 +1984,15 @@ function mountProject(route) {
     ]);
     report.addEventListener("click", () => push({ name: "report", projectId: project.id }));
     tiles.append(report);
+    const hmsTile = el("button", { type: "button", class: "tile tile-hms" }, [
+      el("span", { class: "tile-ico" }, [icon("file")]),
+      el("span", { class: "tile-copy" }, [
+        el("span", { class: "tile-label" }, "HMS"),
+        el("span", { class: "tile-count" }, hmsCountLabel(hmsCount)),
+      ]),
+    ]);
+    hmsTile.addEventListener("click", () => push({ name: "hms", projectId: project.id }));
+    tiles.append(hmsTile);
     const extra = el("div", { class: "action-row" }, [
       button("Meldinger", { class: "btn btn-ghost", onClick: () => push({ name: "messages", projectId: project.id }) }),
       button("Dokumenter", { class: "btn btn-ghost", onClick: () => push({ name: "documents", projectId: project.id }) }),
@@ -2088,6 +2111,10 @@ function mountProject(route) {
   }));
   subs.push(db.collection("projects").doc(route.projectId).collection("drainage").onSnapshot((snap) => {
     drainageCount = snap.size;
+    draw();
+  }, (error) => console.error(error)));
+  subs.push(db.collection("projects").doc(route.projectId).collection("hmsDocs").onSnapshot((snap) => {
+    hmsCount = activeHmsDocs(snap.docs.map((entry) => entry.data())).length;
     draw();
   }, (error) => console.error(error)));
   let toldCostRead = false;
@@ -2564,6 +2591,11 @@ async function permanentlyDeleteProject(projectId) {
   }
   const documents = await root.collection("documents").get();
   for (const entry of documents.docs) {
+    if (entry.data().storagePath) await storage.ref(entry.data().storagePath).delete().catch(() => {});
+    await entry.ref.delete();
+  }
+  const hmsDocs = await root.collection("hmsDocs").get();
+  for (const entry of hmsDocs.docs) {
     if (entry.data().storagePath) await storage.ref(entry.data().storagePath).delete().catch(() => {});
     await entry.ref.delete();
   }
@@ -3989,6 +4021,110 @@ async function sendMessageImage(projectId, input) {
     console.error(error);
     toast("Kunne ikke sende bildet");
   }
+}
+
+function openStoredFile(url) {
+  const Browser = window.Capacitor?.Plugins?.Browser;
+  if (Browser?.open) {
+    Browser.open({ url }).catch(() => window.open(url, "_blank", "noopener"));
+    return;
+  }
+  window.open(url, "_blank", "noopener");
+}
+
+function mountHms(route) {
+  const list = el("div", { class: "stack" });
+  const status = el("p", { class: "meta" }, "");
+  main.append(el("div", { class: "screen" }, [
+    el("p", { class: "lead" }, "HMS-dokumenter for dette prosjektet. Kunden ser et dokument bare når «Vis for kunde» er på."),
+    button("Last opp HMS", {
+      class: "btn btn-primary btn-block",
+      icon: "file",
+      onClick: () => uploadHms(route.projectId, status),
+    }),
+    status,
+    list,
+  ]));
+  const col = db.collection("projects").doc(route.projectId).collection("hmsDocs");
+  subs.push(col.orderBy("createdAt", "desc").onSnapshot((snap) => {
+    const docs = snap.docs.map((entry) => ({ id: entry.id, ref: entry.ref, ...entry.data() }));
+    list.replaceChildren(renderHmsBoard(docs, {
+      onOpen: openStoredFile,
+      async onToggle(doc, visible) {
+        try {
+          await doc.ref.update({ visibleToCustomer: visible === true });
+          toast(visible ? "Kunden kan se dokumentet" : "Skjult for kunden");
+        } catch (error) {
+          console.error(error);
+          toast("Kunne ikke lagre valget");
+        }
+      },
+      async onTrash(doc) {
+        try {
+          await doc.ref.update({ trashed: true, trashedAt: stamp() });
+          toast("Lagt i papirkurven");
+        } catch (error) {
+          console.error(error);
+          toast("Kunne ikke slette dokumentet");
+        }
+      },
+      async onRestore(doc) {
+        try {
+          await doc.ref.update({ trashed: false, trashedAt: null });
+          toast("Dokumentet er tilbake");
+        } catch (error) {
+          console.error(error);
+          toast("Kunne ikke hente dokumentet tilbake");
+        }
+      },
+    }));
+  }, (error) => {
+    console.error(error);
+    toast("Kunne ikke hente HMS-dokumentene");
+  }));
+}
+
+async function uploadHms(projectId, status) {
+  let files = [];
+  try {
+    files = await chooseFiles({ multiple: true, accept: HMS_ACCEPT });
+  } catch (error) {
+    if (isCancel(error) || error?.code === "cancel") return;
+    throw error;
+  }
+  if (!files?.length) return;
+  const col = db.collection("projects").doc(projectId).collection("hmsDocs");
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    status.textContent = `Laster opp ${index + 1} av ${files.length}…`;
+    if (!isHmsFileName(file.name) || file.size > HMS_MAX_BYTES) {
+      toast(`${file.name || "Filen"} må være PDF, Word eller bilde under 25 MB`);
+      continue;
+    }
+    const docRef = col.doc();
+    const storagePath = hmsStoragePath(projectId, docRef.id, file.name);
+    try {
+      const contentType = hmsContentType(file.name);
+      const stored = storage.ref(storagePath);
+      await stored.put(file, { contentType });
+      const url = await stored.getDownloadURL();
+      await docRef.set({
+        ...newHmsDoc({
+          name: file.name,
+          url,
+          storagePath,
+          contentType,
+          uploadedBy: user?.email || "",
+        }),
+        createdAt: stamp(),
+      });
+    } catch (error) {
+      console.error(error);
+      await storage.ref(storagePath).delete().catch(() => {});
+      toast(`Kunne ikke laste opp ${file.name || "filen"}`);
+    }
+  }
+  status.textContent = "Ferdig lastet opp";
 }
 
 function mountDocuments(route) {
