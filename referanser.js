@@ -8,6 +8,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 import { firebaseConfig } from "./kunde/firebase-config.js";
 import { formatDay } from "./www/js/logic.js";
+import { applyPublicSections, realReviewQuotes } from "./www/js/public-refs.js";
 
 const KIND = {
   bilde: "Bilde",
@@ -24,33 +25,26 @@ if (lists.length) {
     query(collection(db, "references"), orderBy("updatedAt", "desc")),
     (snap) => {
       const items = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      for (const list of lists) {
-        const limit = Number(list.dataset.limit || 0);
-        draw(list, limit ? items.slice(0, limit) : items, limit ? 4 : 12);
-      }
-      if (document.body.dataset.page === "referanser") writeJsonLd(items);
+      showReferences(items);
     },
     (error) => {
       console.error(error);
-      for (const list of lists) {
-        list.replaceChildren();
-        const note = document.createElement("p");
-        note.textContent = "Referansene kunne ikke lastes akkurat nå.";
-        list.append(note);
-      }
+      showReferences([]);
     }
   );
 }
 
-function draw(list, items, photoLimit) {
-  list.replaceChildren();
-  if (!items.length) {
-    const note = document.createElement("p");
-    note.textContent = "Referanser legges ut etter hvert som oppdrag blir godkjent for visning.";
-    list.append(note);
-    return;
+function showReferences(items) {
+  const { references } = applyPublicSections(document, items);
+  for (const list of lists) {
+    list.replaceChildren();
+    if (!references) continue;
+    const limit = Number(list.dataset.limit || 0);
+    const shown = limit ? items.slice(0, limit) : items;
+    for (const item of shown) list.append(card(item, limit ? 4 : 12));
   }
-  for (const item of items) list.append(card(item, photoLimit));
+  if (references && document.body.dataset.page === "referanser") writeJsonLd(items);
+  else document.getElementById("referanse-jsonld")?.remove();
 }
 
 function card(item, photoLimit) {
@@ -114,7 +108,7 @@ function card(item, photoLimit) {
     article.append(list);
   }
 
-  const quotes = (item.ratings || []).filter((rating) => rating.text).slice(0, 2);
+  const quotes = realReviewQuotes(item.ratings).slice(0, 2);
   for (const rating of quotes) {
     const quote = document.createElement("blockquote");
     quote.textContent = `${"★".repeat(rating.stars || 0)} ${rating.text}`;
@@ -138,7 +132,7 @@ function writeJsonLd(items) {
         name: item.name || "Oppdrag",
         description: item.summary || "",
         image: (item.photos || []).find((photo) => String(photo.url || "").startsWith("https://"))?.url,
-        review: (item.ratings || []).slice(0, 3).map((rating) => ({
+        review: realReviewQuotes(item.ratings).slice(0, 3).map((rating) => ({
           "@type": "Review",
           reviewBody: rating.text || "",
           reviewRating: {
