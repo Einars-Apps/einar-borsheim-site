@@ -1,24 +1,18 @@
 import { frostObservationsUrl, frostSourcesUrl, parseFrostSource, dailyPrecipitation, rainWindows, shiftIsoDate } from "./drainage.js";
+import { capacitorHttpPlugin, nativeHttpGet } from "./native-http.js";
 
 // Frost krever Basic auth (klient-ID som brukernavn, tomt passord). Nettleseren stopper
-// kallet på grunn av CORS. I Android-appen er CapacitorHttp slått på, og kallet går
-// gjennom telefonens HTTP-bibliotek, uten nettleserens CORS-sperre.
-export async function frostGet(url, clientId) {
+// kallet på grunn av CORS. På telefonen kalles CapacitorHttp.request direkte.
+// Den globale XHR-lappen er av, så Firestore og Storage bruker WebView sin egen strøm.
+export async function frostGet(url, clientId, http = {}) {
   const headers = {
     Authorization: `Basic ${btoa(`${clientId}:`)}`,
     Accept: "application/json",
   };
-  const plugin = window.Capacitor?.Plugins?.CapacitorHttp;
-  if (plugin?.get) {
-    const response = await plugin.get({ url, headers });
-    const status = response.status || 0;
-    const data = typeof response.data === "string" ? JSON.parse(response.data) : response.data;
-    if (status >= 400) throw frostError(data, status);
-    return data;
-  }
-  const response = await fetch(url, { headers });
-  if (!response.ok) throw frostError(await response.json().catch(() => ({})), response.status);
-  return response.json();
+  const plugin = http.plugin === undefined ? capacitorHttpPlugin() : http.plugin;
+  const { status, data } = await nativeHttpGet(url, headers, { plugin, fetchImpl: http.fetchImpl });
+  if (status >= 400) throw frostError(data, status);
+  return data;
 }
 
 function frostError(data, status) {
