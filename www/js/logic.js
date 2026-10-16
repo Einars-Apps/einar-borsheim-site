@@ -305,7 +305,7 @@ export function buildLocalDraft(project, items, extras = {}) {
   ];
 
   for (const [kind, heading] of groups) {
-    const list = (items || []).filter((item) => item.kind === kind && item.approved !== false);
+    const list = (items || []).filter((item) => item.kind === kind && item.approved !== false && item.fikenBase !== true);
     if (!list.length) continue;
     lines.push(heading);
     for (const item of list) {

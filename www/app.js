@@ -62,7 +62,8 @@ import { renderFikenProjectBox, renderOfferEditor, renderOfferList, renderQuickO
 import { renderFikenPicker } from "./js/fiken-import-view.js";
 import { fieldsFromFiken, fikenUnreachableMessage, isFikenLinked, unimportedFikenProjects } from "./js/fiken-import.js";
 import { firestoreReadMessage, firestoreTransportSettings, readDocWithRetry } from "./js/firestore-read.js";
-import { mergeFikenLines, offerDocumentsFromLines, planFikenOfferSync } from "./js/fiken-offers.js";
+import { fikenQuoteRecord, mergeFikenLines, quotesFromFikenResult } from "./js/fiken-offers.js";
+import { renderFikenQuoteList } from "./js/fiken-quote-view.js";
 import { changeText, costChanges, costReportText, customerSeesCost, liveCost, newExtraId, patchCost, persistableCost } from "./js/cost.js";
 import { renderCostOverview } from "./js/cost-view.js";
 import { fetchFrostRain } from "./js/frost.js";
@@ -738,7 +739,7 @@ async function saveReportPdf(project, reportText) {
       }],
     });
   }
-  const approvedOffers = approved.filter((item) => isOfferItem(item) && offerStatus(item) === "godkjent");
+  const approvedOffers = approved.filter((item) => isOfferItem(item) && item.fikenBase !== true && offerStatus(item) === "godkjent");
   if (approvedOffers.length) {
     const offerItems = [{
       title: "Sum godkjent",
@@ -1536,6 +1537,7 @@ function mountProject(route) {
   let items = [];
   let legacy = [];
   let drainageCount = 0;
+  let fikenQuotes = [];
   let costDoc = null;
   let costLog = [];
   let priceTable = pricesFromSettings(null);
@@ -1586,7 +1588,7 @@ function mountProject(route) {
       el("div", { class: "action-row" }, actions),
     ]);
     const tiles = el("div", { class: "dash" });
-    const offerItems = items.filter(isOfferItem);
+    const offerItems = items.filter((item) => isOfferItem(item) && item.fikenBase !== true);
     const offerSum = approvedChoiceSum(offerItems);
     const offersTile = el("button", { type: "button", class: "tile tile-tilbud" }, [
       el("span", { class: "tile-ico" }, [icon("file")]),
@@ -1612,14 +1614,16 @@ function mountProject(route) {
       ["kunde", "user", "Fra kunde", count("kunde")],
       ["endring", "edit", "Endringer", count("endring")],
       ["avvik", "alert", "Avvik", count("avvik")],
-      ["tilbud", "file", "Tilbud", count("tilbud")],
+      ["tilbud", "file", "Tilbud", fikenQuotes.length],
     ];
     for (const [kind, ic, label, total] of tileSpec) {
       const tile = el("button", { type: "button", class: kind === "bilde" ? "tile" : `tile tile-${kind}` }, [
         el("span", { class: "tile-ico" }, [icon(ic)]),
         el("span", {}, [
           el("span", { class: "tile-label" }, label),
-          el("span", { class: "tile-count" }, `${total} ${total === 1 ? "punkt" : "punkter"}`),
+          el("span", { class: "tile-count" }, kind === "tilbud"
+            ? (total ? `${total} fra Fiken` : "Ingen fra Fiken")
+            : `${total} ${total === 1 ? "punkt" : "punkter"}`),
         ]),
       ]);
       tile.addEventListener("click", () => push({ name: "section", projectId: project.id, kind }));
@@ -1743,6 +1747,10 @@ function mountProject(route) {
     items = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     draw();
   }));
+  subs.push(db.collection("projects").doc(route.projectId).collection("fikenOffers").onSnapshot((snap) => {
+    fikenQuotes = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    draw();
+  }, (error) => console.error(error)));
   subs.push(db.collection("projects").doc(route.projectId).collection("photos").onSnapshot((snap) => {
     legacy = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     draw();
@@ -1834,9 +1842,8 @@ async function applyFikenOfferLines(projectId, fikenProjectId) {
   try {
     const result = await callFiken("listFikenOfferLines", { fikenProjectId: id });
     const incoming = result?.lines || [];
-    const fromFunction = (result?.offers || []).filter((doc) => doc?.kind === "tilbud");
-    const offerDocs = fromFunction.length ? fromFunction : offerDocumentsFromLines(incoming);
-    if (!incoming.length && !offerDocs.length) {
+    const quotes = quotesFromFikenResult(result);
+    if (!incoming.length && !quotes.length) {
       toast("Fiken har ingen tilbud eller ordrebekreftelser på dette prosjektet.");
       return;
     }
@@ -1876,7 +1883,7 @@ async function applyFikenOfferLines(projectId, fikenProjectId) {
           : "Tilbudslinjene fra Fiken er allerede hentet.";
       }
     }
-    const offerNote = await syncFikenBaseOffers(projectId, offerDocs);
+    const offerNote = quotes.length ? await saveFikenQuotes(projectId, quotes) : "";
     const note = [lineNote, offerNote].filter(Boolean).join(" ");
     toast(note || "Tilbudet fra Fiken er allerede hentet.");
   } catch (error) {
@@ -1885,40 +1892,22 @@ async function applyFikenOfferLines(projectId, fikenProjectId) {
   }
 }
 
-async function syncFikenBaseOffers(projectId, offerDocs) {
-  if (!offerDocs.length) return "";
-  const itemSnap = await db.collection("projects").doc(projectId).collection("items").get();
-  const existing = itemSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  let actions = planFikenOfferSync(existing, offerDocs);
-  if (actions.some((action) => action.reason === "manual")) {
-    const overwrite = window.confirm("Tilbudet fra Fiken er endret i Internkontroll. Vil du oppdatere Tilbud og endringer med tilbudet fra Fiken?");
-    if (overwrite) actions = planFikenOfferSync(existing, offerDocs, { overwriteManual: true });
+async function saveFikenQuotes(projectId, quotes) {
+  const col = db.collection("projects").doc(projectId).collection("fikenOffers");
+  const records = quotes.map(fikenQuoteRecord).filter((quote) => quote.key);
+  const keys = new Set(records.map((quote) => quote.key));
+  const existing = await col.get();
+  for (const doc of existing.docs) {
+    if (!keys.has(doc.id)) await doc.ref.delete();
   }
-  let wrote = false;
-  let keptManual = false;
-  for (const action of actions) {
-    if (action.op === "skip" && action.reason === "manual") keptManual = true;
-    if (action.op !== "create" && action.op !== "update") continue;
-    const ref = db.collection("projects").doc(projectId).collection("items").doc(action.id);
-    const payload = action.op === "create"
-      ? {
-        ...action.data,
-        stars: null,
-        reference: false,
-        createdBy: user?.uid || "",
-        authorName: "Einar",
-        coverUrl: "",
-        createdAt: stamp(),
-        updatedAt: stamp(),
-      }
-      : { ...action.data, updatedAt: stamp() };
-    await ref.set(payload, { merge: true });
-    wrote = true;
+  for (const record of records) {
+    await col.doc(record.key).set({ ...record, updatedAt: stamp() });
   }
-  if (wrote && keptManual) return "Tilbudet fra Fiken ligger i Tilbud og endringer. Tilbud du har endret ble beholdt.";
-  if (wrote) return "Tilbudet fra Fiken ligger i Tilbud og endringer.";
-  if (keptManual) return "Tilbud du har endret i Tilbud og endringer ble beholdt.";
-  return "";
+  const items = await db.collection("projects").doc(projectId).collection("items").get();
+  for (const doc of items.docs) {
+    if (doc.data().fikenBase === true) await doc.ref.delete();
+  }
+  return "Hele tilbudet ligger under Tilbud.";
 }
 
 async function callFiken(name, data) {
@@ -2246,6 +2235,10 @@ function purgeOldTrash() {
 
 function mountSection(route) {
   const { projectId, kind } = route;
+  if (kind === "tilbud") {
+    mountFikenQuoteSection(projectId);
+    return;
+  }
   const meta = KIND_META[kind] || KIND_META.bilde;
   const list = el("div", { class: "stack" });
   const composer = el("form", { class: "card continue", hidden: true });
@@ -2355,6 +2348,41 @@ function mountSection(route) {
       draw();
     }));
   }
+}
+
+function mountFikenQuoteSection(projectId) {
+  const root = el("div", { class: "screen" });
+  main.append(root);
+  let quotes = [];
+  let notes = [];
+  const draw = () => {
+    const project = projectById(projectId);
+    const view = renderFikenQuoteList({
+      quotes,
+      linked: Boolean(project?.fikenProjectId),
+      onRefresh: () => applyFikenOfferLines(projectId, project?.fikenProjectId),
+    });
+    if (notes.length) {
+      view.append(el("h2", { class: "h-app" }, "Eldre notater"));
+      for (const item of notes) view.append(itemRow(projectId, item));
+    }
+    root.replaceChildren(view);
+  };
+  subs.push(db.collection("projects").doc(projectId).collection("fikenOffers").onSnapshot((snap) => {
+    quotes = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    quotes.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    draw();
+  }, (error) => {
+    console.error(error);
+    toast("Kunne ikke hente tilbudet");
+  }));
+  subs.push(db.collection("projects").doc(projectId).collection("items").onSnapshot((snap) => {
+    notes = snap.docs
+      .map((doc) => ({ id: doc.id, ...doc.data() }))
+      .filter((item) => item.kind === "tilbud" && !isOfferItem(item) && item.fikenBase !== true);
+    draw();
+  }, (error) => console.error(error)));
+  draw();
 }
 
 function mountItem(route) {
