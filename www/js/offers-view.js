@@ -1,4 +1,6 @@
 import { button, el, field } from "./dom.js";
+import { renderFikenPicker } from "./fiken-import-view.js";
+import { fieldsFromFiken, fikenUnreachableMessage } from "./fiken-import.js";
 import { canSpeak, dictate } from "./speech.js";
 import {
   alternativeHeading,
@@ -303,7 +305,7 @@ export function renderFikenProjectBox({ project, onList, onCreate }) {
       );
       note.textContent = `${projects.length} åpne prosjekter i Fiken.`;
     } catch (error) {
-      note.textContent = error.message || "Fiken-funksjonen er ikke tilgjengelig.";
+      note.textContent = fikenUnreachableMessage(error);
     }
   }
 
@@ -331,7 +333,7 @@ export function renderFikenProjectBox({ project, onList, onCreate }) {
   ]);
 }
 
-export function renderQuickOrder({ onLocate, onPhotos, onSubmit }) {
+export function renderQuickOrder({ onLocate, onPhotos, onSubmit, onListFiken, isFikenLinked }) {
   const customerName = el("input", { type: "text", maxlength: "120", autocomplete: "name", placeholder: "Navn" });
   const phone = el("input", { type: "tel", maxlength: "40", autocomplete: "tel", placeholder: "Telefon" });
   const email = el("input", { type: "email", maxlength: "120", autocomplete: "email", placeholder: "E-post" });
@@ -373,8 +375,31 @@ export function renderQuickOrder({ onLocate, onPhotos, onSubmit }) {
     }
   }
 
+  let fiken = null;
+  const picker = onListFiken
+    ? renderFikenPicker({
+      onList: onListFiken,
+      pickLabel: "Bruk",
+      onPick: (card) => {
+        if (isFikenLinked?.(card.projectId)) {
+          status.textContent = "Det prosjektet er allerede i Internkontroll.";
+          return false;
+        }
+        const fields = fieldsFromFiken(card);
+        fiken = fields;
+        customerName.value = fields.customerName;
+        phone.value = fields.customerPhone;
+        email.value = fields.customerEmail;
+        address.value = fields.address;
+        status.textContent = `Hentet «${fields.name}» fra Fiken. Kunden er fylt inn.`;
+        return true;
+      },
+    })
+    : null;
+
   const form = el("form", { class: "screen stack quick-order" }, [
     el("p", { class: "lead" }, "Ett skjermbilde: kunde, sted, hva som skal gjøres, og send tilbudet."),
+    picker,
     field("Kundenavn", customerName),
     field("Telefon", phone),
     field("E-post", email),
@@ -415,7 +440,7 @@ export function renderQuickOrder({ onLocate, onPhotos, onSubmit }) {
     submit.disabled = true;
     status.textContent = "Oppretter tilbudet…";
     try {
-      await onSubmit({
+      const result = await onSubmit({
         customerName: customerName.value.trim(),
         phone: phone.value.trim(),
         email: email.value.trim(),
@@ -423,7 +448,12 @@ export function renderQuickOrder({ onLocate, onPhotos, onSubmit }) {
         description: description.value.trim(),
         priceExVat: price.value.trim(),
         blobs: photos.slice(),
+        fiken,
       });
+      if (result?.ok === false) {
+        status.textContent = result.message || "Kunne ikke opprette tilbudet. Prøv igjen.";
+        submit.disabled = false;
+      }
     } catch (error) {
       console.error(error);
       status.textContent = "Kunne ikke opprette tilbudet. Prøv igjen.";

@@ -327,7 +327,19 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .photo-chip { margin: 0; width: 104px; }
 .photo-chip img { width: 104px; height: 104px; object-fit: cover; border-radius: 12px; display: block; }
 .cost-fallback { width: 100%; }
-.fiken-project, .fiken-status, .cost-box { overflow-wrap: anywhere; }
+.fiken-project, .fiken-status, .fiken-picker, .fiken-pick, .cost-box { overflow-wrap: anywhere; max-width: 100%; }
+.fiken-picker { display: flex; flex-direction: column; gap: 10px; }
+.fiken-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: white;
+  max-width: 100%;
+}
+.fiken-pick .row-body { padding: 0; }
 .cost-box { display: flex; flex-direction: column; gap: 10px; }
 .cost-money, .cost-line-title, .qty-label { margin: 0; }
 .cost-line-title, .qty-label { font-weight: 700; }
