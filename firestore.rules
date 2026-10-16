@@ -291,8 +291,13 @@ service cloud.firestore {
       }
 
       // Eldre bilder (foer feltnotat-modellen). Beholdes saa eksisterende prosjekter virker.
+      // get skjuler bilder i papirkurven (trashed). list slipper fortsatt approved == true,
+      // ellers feiler portalens spoerring for bilder som ikke har feltet trashed.
       match /photos/{photoId} {
-        allow read: if isAdmin()
+        allow get: if isAdmin()
+          || (hasAccess(projectId) && resource.data.approved == true && resource.data.trashed != true)
+          || (isPublic(projectId) && resource.data.approved == true && resource.data.trashed != true);
+        allow list: if isAdmin()
           || (hasAccess(projectId) && resource.data.approved == true)
           || (isPublic(projectId) && resource.data.approved == true);
         allow create: if isAdmin()
@@ -306,7 +311,8 @@ service cloud.firestore {
           allow create: if isAdmin()
             || (hasAccess(projectId)
                 && validCustomerComment()
-                && get(/databases/$(database)/documents/projects/$(projectId)/photos/$(photoId)).data.approved == true);
+                && get(/databases/$(database)/documents/projects/$(projectId)/photos/$(photoId)).data.approved == true
+                && get(/databases/$(database)/documents/projects/$(projectId)/photos/$(photoId)).data.trashed != true);
           allow update, delete: if isAdmin();
         }
       }
@@ -322,7 +328,10 @@ service cloud.firestore {
         allow delete: if isAdmin();
 
         match /photos/{photoId} {
-          allow read: if isAdmin()
+          allow get: if isAdmin()
+            || (hasAccess(projectId) && resource.data.approved == true && resource.data.trashed != true)
+            || (hasAccess(projectId) && resource.data.createdBy == request.auth.uid && resource.data.trashed != true);
+          allow list: if isAdmin()
             || (hasAccess(projectId) && resource.data.approved == true)
             || (hasAccess(projectId) && resource.data.createdBy == request.auth.uid);
           allow create: if isAdmin()

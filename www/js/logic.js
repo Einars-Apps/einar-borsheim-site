@@ -1,5 +1,6 @@
 import { PORTAL_BASE } from "./company.js";
 import { isOfferItem, offerDecisionText } from "./offers.js";
+import { photoKey, publishedPhotoKeys, representativeKeys } from "./photos.js";
 
 export const KIND_META = {
   bilde: {
@@ -233,6 +234,7 @@ function httpsUrl(value) {
 // Delingskode, kundekontakt, adresse og PDF-lenke skal aldri med.
 export function buildReferenceDoc(project, items, photosByItem = {}) {
   const chosen = (items || []).filter((item) => item && item.approved === true && item.reference === true);
+  const visiblePhotos = publishedPhotoKeys(items, photosByItem);
   const photos = [];
   const tasks = [];
   const ratings = [];
@@ -256,6 +258,13 @@ export function buildReferenceDoc(project, items, photosByItem = {}) {
     for (const photo of ownPhotos) {
       if (photos.length >= 24) break;
       if (!photo || photo.approved === false) continue;
+      const marked = {
+        ...photo,
+        itemId: item.id,
+        step: photo.step || item.step || "",
+        comment: photo.caption || item.text || "",
+      };
+      if (!visiblePhotos.has(photoKey(marked))) continue;
       const url = httpsUrl(photo.url);
       if (!url) continue;
       photos.push({
@@ -286,6 +295,7 @@ export function buildReferenceDoc(project, items, photosByItem = {}) {
 export function buildLocalDraft(project, items, extras = {}) {
   const photosByItem = extras.photosByItem || {};
   const commentsByItem = extras.commentsByItem || {};
+  const shownPhotos = representativeKeys(items, photosByItem);
   const lines = [];
   lines.push(`Oppdrag: ${project?.name || "Uten navn"}`);
   if (project?.address) lines.push(`Adresse: ${project.address}`);
@@ -320,7 +330,12 @@ export function buildLocalDraft(project, items, extras = {}) {
       if (isOfferItem(item)) {
         for (const line of offerDecisionText(item).split("\n")) lines.push(`  ${line}`);
       }
-      const photos = photosByItem[item.id] || [];
+      const photos = (photosByItem[item.id] || []).filter((photo) => shownPhotos.has(photoKey({
+        ...photo,
+        itemId: item.id,
+        step: photo.step || item.step || "",
+        comment: photo.caption || item.text || "",
+      })));
       if (photos.length) {
         const captions = photos.map((photo) => clip(photo.caption, 180)).filter(Boolean);
         lines.push(`  Bilder: ${photos.length}${captions.length ? ` (${captions.join("; ")})` : ""}`);

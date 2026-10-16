@@ -7,7 +7,10 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
+  query,
   serverTimestamp,
+  where,
   setDoc,
   updateDoc,
 } from "firebase/firestore";
@@ -528,6 +531,57 @@ test("e-postkø og maler er bare for admin", async () => {
   }));
   await assertFails(getDoc(doc(strangerDb(), "photoTemplates/drenering")));
   await assertSucceeds(setDoc(doc(adminDb(), "photoTemplates/drenering"), { name: "Drenering", steps: ["Før"] }));
+});
+
+test("kunde kan ikke hente et bilde som ligger i papirkurven", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "projects/p1/items/admin-item"), {
+      kind: "bilde",
+      title: "",
+      text: "Grøft",
+      approved: true,
+      source: "admin",
+      createdBy: "admin-user",
+    });
+    await setDoc(doc(db, "projects/p1/items/admin-item/photos/ok"), {
+      url: "https://firebasestorage.googleapis.com/v0/b/demo/o/ok.jpg",
+      approved: true,
+      source: "admin",
+      createdBy: "admin-user",
+    });
+    await setDoc(doc(db, "projects/p1/items/admin-item/photos/gone"), {
+      url: "https://firebasestorage.googleapis.com/v0/b/demo/o/gone.jpg",
+      approved: true,
+      trashed: true,
+      source: "admin",
+      createdBy: "admin-user",
+    });
+    await setDoc(doc(db, "projects/p1/photos/legacy-ok"), {
+      url: "https://cdn.example/ok.jpg",
+      approved: true,
+    });
+    await setDoc(doc(db, "projects/p1/photos/legacy-gone"), {
+      url: "https://cdn.example/gone.jpg",
+      approved: true,
+      trashed: true,
+    });
+  });
+  const db = customerDb();
+  await setDoc(doc(db, "projects/p1/access/kunde1"), { token: "TOK123456" });
+  await assertSucceeds(getDoc(doc(db, "projects/p1/items/admin-item/photos/ok")));
+  await assertFails(getDoc(doc(db, "projects/p1/items/admin-item/photos/gone")));
+  await assertSucceeds(getDoc(doc(db, "projects/p1/photos/legacy-ok")));
+  await assertFails(getDoc(doc(db, "projects/p1/photos/legacy-gone")));
+  await assertFails(getDoc(doc(strangerDb(), "projects/p1/photos/legacy-gone")));
+  await assertSucceeds(getDoc(doc(strangerDb(), "projects/p1/photos/legacy-ok")));
+  const listed = await assertSucceeds(getDocs(query(
+    collection(db, "projects/p1/items/admin-item/photos"),
+    where("approved", "==", true),
+  )));
+  assert.equal(listed.size, 2);
+  await assertSucceeds(getDoc(doc(adminDb(), "projects/p1/items/admin-item/photos/gone")));
 });
 
 test("storage: dokumenter er ikke offentlige", async () => {
