@@ -61,6 +61,7 @@ import {
 import { renderFikenProjectBox, renderOfferEditor, renderOfferList, renderQuickOrder } from "./js/offers-view.js";
 import { renderFikenPicker } from "./js/fiken-import-view.js";
 import { fieldsFromFiken, fikenUnreachableMessage, isFikenLinked, unimportedFikenProjects } from "./js/fiken-import.js";
+import { firestoreReadMessage, firestoreTransportSettings, readDocWithRetry } from "./js/firestore-read.js";
 import { mergeFikenLines } from "./js/fiken-offers.js";
 import { changeText, costChanges, costReportText, customerSeesCost, liveCost, patchCost } from "./js/cost.js";
 import { renderCostOverview } from "./js/cost-view.js";
@@ -1746,14 +1747,31 @@ function mountProject(route) {
     drainageCount = snap.size;
     draw();
   }, (error) => console.error(error)));
+  let toldCostRead = false;
+  let costSeen = false;
+  let costTimer;
+  const onCostReadError = (error) => {
+    console.error(error);
+    clearTimeout(costTimer);
+    costTimer = setTimeout(() => {
+      if (costSeen || toldCostRead) return;
+      toldCostRead = true;
+      toast(firestoreReadMessage(error));
+    }, 1500);
+  };
   subs.push(db.collection("projects").doc(route.projectId).collection("quantities").doc("live").onSnapshot((snap) => {
+    costSeen = true;
+    clearTimeout(costTimer);
     costDoc = snap.exists ? snap.data() : null;
     draw();
-  }, (error) => console.error(error)));
+  }, onCostReadError));
   subs.push(db.collection("projects").doc(route.projectId).collection("costLog").orderBy("at", "desc").limit(40).onSnapshot((snap) => {
+    costSeen = true;
+    clearTimeout(costTimer);
     costLog = snap.docs.map((entry) => entry.data());
     draw();
-  }, (error) => console.error(error)));
+  }, onCostReadError));
+  subs.push(() => clearTimeout(costTimer));
   readAppSettings().then((settings) => {
     priceTable = settings.prices;
     draw();
@@ -1817,7 +1835,7 @@ async function applyFikenOfferLines(projectId, fikenProjectId) {
       return;
     }
     const ref = db.collection("projects").doc(projectId).collection("quantities").doc("live");
-    const snap = await ref.get();
+    const snap = await readDocWithRetry((options) => (options ? ref.get(options) : ref.get()));
     const current = snap.exists ? snap.data() : {};
     let overwrite = false;
     let merged = mergeFikenLines(current.fikenLines, incoming, { overwriteManual: false });
@@ -1851,7 +1869,7 @@ async function applyFikenOfferLines(projectId, fikenProjectId) {
       : "Linjene fra Fiken-tilbudet er fylt inn.");
   } catch (error) {
     console.error(error);
-    toast(fikenUnreachableMessage(error));
+    toast(error?.name === "FirestoreReadError" ? error.message : fikenUnreachableMessage(error));
   }
 }
 
@@ -3542,6 +3560,8 @@ async function boot() {
   firebase.initializeApp(firebaseConfig);
   auth = firebase.auth();
   db = firebase.firestore();
+  const transport = firestoreTransportSettings(window.Capacitor);
+  if (transport.experimentalForceLongPolling) db.settings(transport);
   storage = firebase.storage();
   try {
     await db.enablePersistence();
