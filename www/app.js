@@ -59,6 +59,8 @@ import {
   shareTargets,
 } from "./js/offers.js";
 import { renderFikenProjectBox, renderOfferEditor, renderOfferList, renderQuickOrder } from "./js/offers-view.js";
+import { renderFikenPicker } from "./js/fiken-import-view.js";
+import { fieldsFromFiken, isFikenLinked, unimportedFikenProjects } from "./js/fiken-import.js";
 import { changeText, costChanges, costReportText, liveCost, patchCost } from "./js/cost.js";
 import { renderCostOverview } from "./js/cost-view.js";
 import { fetchFrostRain } from "./js/frost.js";
@@ -1143,18 +1145,33 @@ function mountOffers(route) {
   draw();
 }
 
+function fikenLinkPatch(fields) {
+  if (!fields?.fikenProjectId) return {};
+  return {
+    fikenProjectId: fields.fikenProjectId,
+    fikenProjectName: fields.fikenProjectName || "",
+    fikenProjectNumber: fields.fikenProjectNumber || "",
+  };
+}
+
 function mountOrder() {
   main.append(renderQuickOrder({
     onLocate: locateAddress,
     onPhotos: (source) => blobsFromCamera(source),
+    onListFiken: () => callFiken("listFikenProjects", {}),
+    isFikenLinked: (projectId) => isFikenLinked(projects, projectId),
     onSubmit: async (input) => {
+      if (input.fiken?.fikenProjectId && isFikenLinked(projects, input.fiken.fikenProjectId)) {
+        return { ok: false, message: "Det prosjektet er allerede i Internkontroll." };
+      }
       const projectRef = await db.collection("projects").add({
-        name: quickProjectName(input),
+        name: input.fiken?.fikenProjectId ? input.fiken.name : quickProjectName(input),
         address: input.address,
         customerName: input.customerName,
         customerPhone: input.phone,
         customerEmail: input.email,
         description: input.description,
+        ...fikenLinkPatch(input.fiken),
         templateId: "",
         publicLocation: "",
         publicSummary: "",
@@ -1209,6 +1226,18 @@ function mountProjects() {
       class: "btn btn-ghost btn-block",
       onClick: () => push({ name: "form" }),
     }),
+    renderFikenPicker({
+      buttonLabel: "Hent fra Fiken",
+      pickLabel: "Importer",
+      intro: "Disse ligger i Fiken, men ikke i Internkontroll.",
+      emptyText: "Alle åpne Fiken-prosjekter ligger allerede i Internkontroll.",
+      removeOnPick: true,
+      onList: async () => {
+        const result = await callFiken("listFikenProjects", {});
+        return { projects: unimportedFikenProjects(result?.projects, projects) };
+      },
+      onPick: (card) => importFikenProject(card),
+    }),
     el("div", { class: "action-row" }, [
       button("Fullførte", { class: "btn btn-ghost", onClick: () => push({ name: "done" }) }),
       button("Papirkurv", { class: "btn btn-ghost", onClick: () => push({ name: "trash" }) }),
@@ -1234,6 +1263,7 @@ function mountProjects() {
         el("p", { class: "meta" }, "Fortsett"),
         el("h2", {}, first.name),
         el("p", { class: "meta" }, [first.address, first.customerName].filter(Boolean).join(" · ") || "Åpne prosjektet eller ta et bilde"),
+        first.fikenProjectId ? el("div", { class: "pills" }, [pill("Fiken")]) : null,
         el("div", { class: "action-row" }, [
           button("Ta bilde", {
             class: "btn btn-primary",
@@ -1258,6 +1288,7 @@ function mountProjects() {
           el("span", { class: "row-text" }, [project.customerName, project.address].filter(Boolean).join(" · ")),
           el("span", { class: "pills" }, [
             pill(phaseLabel(project), project.status === "tilbud" ? "pill-warn" : ""),
+            project.fikenProjectId ? pill("Fiken") : null,
             project.public ? pill("Referanse") : null,
             waiting ? pill(`${waiting} venter`, "pill-warn") : null,
           ]),
@@ -1270,6 +1301,44 @@ function mountProjects() {
   refresh = draw;
   watchQueue(draw);
   draw();
+}
+
+async function importFikenProject(card) {
+  const fields = fieldsFromFiken(card);
+  if (!fields.fikenProjectId) {
+    toast("Fiken-prosjektet mangler id og kan ikke importeres.");
+    return false;
+  }
+  if (isFikenLinked(projects, fields.fikenProjectId)) {
+    toast("Det prosjektet er allerede i Internkontroll.");
+    return false;
+  }
+  await db.collection("projects").add({
+    name: fields.name,
+    address: fields.address,
+    customerName: fields.customerName,
+    customerPhone: fields.customerPhone,
+    customerEmail: fields.customerEmail,
+    description: "",
+    templateId: "",
+    ...fikenLinkPatch(fields),
+    publicLocation: "",
+    publicSummary: "",
+    reportText: "",
+    shareToken: randomToken(12),
+    public: false,
+    status: "aktiv",
+    completedAt: null,
+    pdfUrl: "",
+    pdfPath: "",
+    reminder1Done: false,
+    reminder2Done: false,
+    createdAt: stamp(),
+    updatedAt: stamp(),
+    createdBy: user?.email || "",
+  });
+  toast("Prosjektet er hentet fra Fiken");
+  return true;
 }
 
 function openProject(projectId) {
@@ -2522,7 +2591,30 @@ function mountForm(route) {
   const isPublic = el("input", { type: "checkbox" });
   const save = button("Lagre", { type: "submit", class: "btn btn-primary btn-block" });
   if (route.projectId) save.disabled = true;
+  let fikenPick = null;
+  const fikenPicker = route.projectId
+    ? null
+    : renderFikenPicker({
+      onList: () => callFiken("listFikenProjects", {}),
+      pickLabel: "Bruk",
+      onPick: (card) => {
+        if (isFikenLinked(projects, card.projectId)) {
+          toast("Det prosjektet er allerede i Internkontroll.");
+          return false;
+        }
+        const fields = fieldsFromFiken(card);
+        fikenPick = fields;
+        name.value = fields.name;
+        address.value = fields.address;
+        customerName.value = fields.customerName;
+        customerPhone.value = fields.customerPhone;
+        customerEmail.value = fields.customerEmail;
+        toast(`Hentet «${fields.name}» fra Fiken`);
+        return true;
+      },
+    });
   const form = el("form", { class: "screen stack" }, [
+    fikenPicker,
     field("Prosjektnavn", name),
     field("Adresse", address),
     field("Kundenavn", customerName),
@@ -2595,8 +2687,14 @@ function mountForm(route) {
     };
     try {
       if (!route.projectId) {
+        if (fikenPick?.fikenProjectId && isFikenLinked(projects, fikenPick.fikenProjectId)) {
+          toast("Det prosjektet er allerede i Internkontroll.");
+          save.disabled = false;
+          return;
+        }
         const ref = await db.collection("projects").add({
           ...common,
+          ...fikenLinkPatch(fikenPick),
           publicLocation: "",
           publicSummary: "",
           reportText: "",

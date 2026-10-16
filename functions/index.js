@@ -6,6 +6,7 @@ const { initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const billable = require("./fiken-billable");
+const fikenImport = require("./fiken-import");
 
 const fikenToken = defineSecret("FIKEN_API_TOKEN");
 const fikenCompany = defineSecret("FIKEN_COMPANY_SLUG");
@@ -372,18 +373,28 @@ function fikenCallable() {
   return { secrets: [fikenToken, fikenCompany], region: "europe-west1" };
 }
 
+async function fikenContact(token, slug, contactId) {
+  try {
+    const got = await fikenRequest(token, `/companies/${encodeURIComponent(slug)}/contacts/${contactId}`);
+    return got.body && typeof got.body === "object" ? got.body : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 exports.listFikenProjects = onCall(fikenCallable(), async (request) => {
   assertFikenAdmin(request);
   const { token, slug } = fikenSecrets();
   const list = await listOpenProjects(token, slug);
-  return {
-    projects: list.map((project) => ({
-      projectId: project.projectId,
-      name: project.name || "",
-      number: project.number || "",
-      contactName: project.contact?.name || "",
-    })).filter((project) => project.projectId),
-  };
+  const projects = [];
+  for (const project of list) {
+    if (!project?.projectId) continue;
+    const contactId = fikenImport.contactNeedsFetch(project);
+    const contact = contactId ? await fikenContact(token, slug, contactId) : null;
+    const card = fikenImport.cardFromFikenProject(project, contact);
+    if (card.projectId) projects.push(card);
+  }
+  return { projects };
 });
 
 exports.linkFikenProject = onCall(fikenCallable(), async (request) => {
