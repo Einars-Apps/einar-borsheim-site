@@ -23,21 +23,68 @@
 .k-photo {
   width: 100%;
   border-radius: 12px;
-  max-height: 420px;
+  max-height: 85dvh;
   object-fit: contain;
   background: #17242b;
+  cursor: zoom-in;
+  display: block;
 }
 .k-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 0.7rem;
+  grid-template-columns: 1fr;
+  gap: 0.8rem;
 }
-.k-grid img {
+.k-grid img, .k-grid .k-photo {
   width: 100%;
-  height: 140px;
-  object-fit: cover;
+  height: auto;
+  max-height: 85dvh;
+  object-fit: contain;
   border-radius: 12px;
   display: block;
+}
+
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: #0c1210;
+  color: white;
+  display: flex;
+  flex-direction: column;
+}
+.viewer-bar, .viewer-nav {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+}
+.viewer-bar { padding-top: calc(8px + env(safe-area-inset-top)); }
+.viewer-nav { justify-content: center; flex-wrap: wrap; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+.viewer-count { margin: 0; font-weight: 700; }
+.viewer-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  touch-action: none;
+}
+.viewer-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transform-origin: center center;
+  touch-action: none;
+}
+.viewer .btn {
+  min-height: 48px;
+  border-radius: 12px;
+  border: 1px solid #ffffff44;
+  background: transparent;
+  color: white;
+  padding: 10px 14px;
+  font-weight: 700;
 }
 
 label.field { display: flex; flex-direction: column; gap: 0.35rem; font-weight: 600; }

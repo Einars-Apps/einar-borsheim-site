@@ -38,6 +38,8 @@ import { drainageReportText, reportIsPublished, verdictLabel } from "../www/js/d
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
 import { renderCostOverview } from "../www/js/cost-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
+import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem } from "../www/js/photos.js";
+import { openPhotoViewer } from "../www/js/photo-view.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -156,6 +158,29 @@ function mergedItems() {
 }
 
 let renderAfterBlur = false;
+let portalGeneration = 0;
+const portalPhotos = new Map();
+
+function annotatePortalPhoto(photo, item) {
+  return {
+    ...photo,
+    itemId: item?.id || photo.itemId || "",
+    step: photo.step || item?.step || "",
+    comment: photo.caption || item?.text || "",
+    itemText: item?.text || "",
+    itemTitle: item?.title || "",
+  };
+}
+
+function legacyAnnotated() {
+  return legacyPhotos
+    .filter((photo) => !isTrashedPhoto(photo))
+    .map((photo) => annotatePortalPhoto(photo, { id: `legacy-${photo.id}`, text: photo.caption || "", step: "" }));
+}
+
+function portalFlat() {
+  return [...portalPhotos.values()].flat().concat(legacyAnnotated());
+}
 let notice = "";
 
 function paintCost() {
@@ -198,6 +223,8 @@ function render() {
     }
     return;
   }
+  portalGeneration += 1;
+  portalPhotos.clear();
   const items = mergedItems();
   const finished = isCompleted(project);
   const pdfSlot = el("p", { class: "muted" }, "Sluttrapporten legges her når den er klar.");
@@ -264,18 +291,10 @@ function render() {
   for (const [kind, title] of groups) {
     const rows = items.filter((item) => item.kind === kind && item.approved === true && !isOfferItem(item));
     const section = el("section", { class: "k-card k-stack" }, [el("h2", {}, title)]);
-    if (!rows.length && !(kind === "bilde" && legacyPhotos.length)) section.append(el("p", { class: "muted" }, "Ingenting er lagt ut her ennå."));
+    const liveLegacy = legacyPhotos.filter((photo) => !isTrashedPhoto(photo));
+    if (!rows.length && !(kind === "bilde" && liveLegacy.length)) section.append(el("p", { class: "muted" }, "Ingenting er lagt ut her ennå."));
     for (const item of rows) section.append(itemCard(item));
-    if (kind === "bilde") {
-      for (const photo of legacyPhotos) {
-        const src = displayUrl(photo.url);
-        if (!src) continue;
-        section.append(el("figure", {}, [
-          el("img", { class: "k-photo", src, alt: photo.caption || "Bilde", loading: "lazy" }),
-          photo.caption ? el("figcaption", { class: "muted" }, photo.caption) : null,
-        ]));
-      }
-    }
+    if (kind === "bilde") section.append(el("div", { id: "legacy-photos", class: "k-stack" }));
     viewProject.append(section);
   }
 
@@ -302,6 +321,7 @@ function render() {
   viewProject.append(rate);
   paintCost();
 
+  paintPortalPhotos();
   for (const item of items) hydrate(item);
 }
 
@@ -352,27 +372,62 @@ function commentForm(itemId) {
   return form;
 }
 
+function portalFigures(photos) {
+  const usable = photos
+    .map((photo) => ({ ...photo, url: displayUrl(photo.url) }))
+    .filter((photo) => photo.url);
+  if (!usable.length) return null;
+  const grid = el("div", { class: usable.length > 1 ? "k-grid" : "k-stack" });
+  usable.forEach((photo, index) => {
+    const image = el("img", { class: "k-photo", src: photo.url, alt: photo.caption || "Bilde", loading: "lazy" });
+    image.addEventListener("click", () => openPhotoViewer(usable, index));
+    grid.append(el("figure", {}, [
+      image,
+      photo.caption ? el("figcaption", { class: "muted" }, photo.caption) : null,
+    ]));
+  });
+  return grid;
+}
+
+function paintPortalPhotos() {
+  const flat = portalFlat();
+  const shown = new Set(publicPhotos(flat).map(photoKey));
+  for (const [itemId, photos] of portalPhotos) {
+    const media = document.getElementById(`media-${itemId}`);
+    const card = document.getElementById(`item-${itemId}`);
+    if (!media) continue;
+    const item = mergedItems().find((entry) => entry.id === itemId);
+    const keep = photos.filter((photo) => (
+      shown.has(photoKey(photo))
+      || (photo.createdBy === uid && photo.approved === false && !isTrashedPhoto(photo))
+    ));
+    media.replaceChildren();
+    const figures = portalFigures(keep);
+    if (figures) media.append(figures);
+    if (card && item) card.hidden = redundantPhotoItem(item, flat);
+  }
+  const legacySlot = document.getElementById("legacy-photos");
+  if (legacySlot) {
+    const keep = legacyAnnotated().filter((photo) => shown.has(photoKey(photo)));
+    legacySlot.replaceChildren();
+    const figures = portalFigures(keep);
+    if (figures) legacySlot.append(figures);
+  }
+}
+
 async function hydrate(item) {
+  const generation = portalGeneration;
   const media = document.getElementById(`media-${item.id}`);
   const comments = document.getElementById(`comments-${item.id}`);
   if (!media || media.dataset.loaded) return;
   media.dataset.loaded = "1";
   try {
     const photos = await loadVisible(collection(db, "projects", projectId, "items", item.id, "photos"));
-    if (photos.length) {
-      const grid = el("div", { class: photos.length > 1 ? "k-grid" : "k-stack" });
-      for (const photo of photos) {
-        const src = displayUrl(photo.url);
-        if (!src) continue;
-        const fig = el("figure", {}, [
-          el("img", { class: photos.length > 1 ? "" : "k-photo", src, alt: photo.caption || "Bilde", loading: "lazy" }),
-          photo.caption ? el("figcaption", { class: "muted" }, photo.caption) : null,
-        ]);
-        grid.append(fig);
-      }
-      media.append(grid);
-    }
+    if (generation !== portalGeneration) return;
+    portalPhotos.set(item.id, photos.filter((photo) => !isTrashedPhoto(photo)).map((photo) => annotatePortalPhoto(photo, item)));
+    paintPortalPhotos();
     const thread = await loadVisible(collection(db, "projects", projectId, "items", item.id, "comments"));
+    if (generation !== portalGeneration || !comments) return;
     for (const comment of thread) {
       comments.append(el("div", { class: "comment" }, [
         el("small", {}, `${comment.source === "kunde" ? "Deg" : "Einar"} · ${formatWhen(comment.createdAt)}${comment.approved === false ? " · venter" : ""}`),

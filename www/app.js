@@ -68,6 +68,16 @@ import { changeText, costChanges, costReportText, customerSeesCost, liveCost, ne
 import { renderCostOverview } from "./js/cost-view.js";
 import { fetchFrostRain } from "./js/frost.js";
 import { button, el, field, icon, sheet, toast } from "./js/dom.js";
+import {
+  annotatePhotos,
+  groupPhotos,
+  isTrashedPhoto,
+  newGroupId,
+  photoKey,
+  publishedPhotoKeys,
+  redundantPhotoItem,
+} from "./js/photos.js";
+import { mountPhotoBoard } from "./js/photo-view.js";
 
 const ROUTES = new Set(["projects", "reminders", "capture", "project", "section", "item", "review", "form", "report", "done", "trash", "messages", "documents", "templates", "drainage", "offers", "order"]);
 
@@ -259,6 +269,8 @@ function updateChrome() {
   netBanner.hidden = !banner;
   netBanner.textContent = banner;
   document.body.classList.toggle("has-banner", !!banner);
+  const widePhotos = route.name === "item" || (route.name === "section" && route.kind === "bilde");
+  document.body.classList.toggle("photo-wide", widePhotos);
 }
 
 function render() {
@@ -679,6 +691,30 @@ async function saveReportPdf(project, reportText) {
   ];
   const sections = [];
   let skipped = 0;
+  const annotated = annotatePhotos(items, photosByItem);
+  const visibleKeys = publishedPhotoKeys(items, photosByItem);
+  async function photosForPdf(item) {
+    const photos = [];
+    for (const photo of photosByItem[item.id] || []) {
+      const marked = {
+        ...photo,
+        itemId: item.id,
+        step: photo.step || item.step || "",
+        comment: photo.caption || item.text || "",
+        itemText: item.text || "",
+        itemTitle: item.title || "",
+      };
+      if (!photo.url || photo.approved === false || isTrashedPhoto(photo) || !visibleKeys.has(photoKey(marked))) continue;
+      try {
+        photos.push({ dataUrl: await fetchWithRetry(photo.url), caption: photo.caption || "" });
+      } catch (error) {
+        console.error(error);
+        skipped += 1;
+        photos.push({ caption: photo.caption ? `${photo.caption} (bildet mangler)` : "Bildet kunne ikke hentes inn i PDF-en." });
+      }
+    }
+    return photos;
+  }
   const template = templateFor(project);
   if (template?.steps?.length) {
     const missing = missingTemplateSteps(template.steps, items);
@@ -748,17 +784,7 @@ async function saveReportPdf(project, reportText) {
       comments: [],
     }];
     for (const item of approvedOffers) {
-      const photos = [];
-      for (const photo of photosByItem[item.id] || []) {
-        if (photo.approved === false || !photo.url) continue;
-        try {
-          photos.push({ dataUrl: await fetchWithRetry(photo.url), caption: photo.caption || "" });
-        } catch (error) {
-          console.error(error);
-          skipped += 1;
-          photos.push({ caption: photo.caption ? `${photo.caption} (bildet mangler)` : "Bildet kunne ikke hentes inn i PDF-en." });
-        }
-      }
+      const photos = await photosForPdf(item);
       offerItems.push({
         title: `${offerTypeLabel(item.kind)}: ${item.title || "Post"}`,
         text: [item.text || "", offerDecisionText(item), approvalLine(item)].filter(Boolean).join("\n"),
@@ -772,24 +798,16 @@ async function saveReportPdf(project, reportText) {
   for (const [kind, title] of groups) {
     const group = [];
     for (const item of approved.filter((entry) => entry.kind === kind && !(isOfferItem(entry) && offerStatus(entry) === "godkjent"))) {
-      const photos = [];
-      for (const photo of photosByItem[item.id] || []) {
-        if (photo.approved === false || !photo.url) continue;
-        try {
-          photos.push({ dataUrl: await fetchWithRetry(photo.url), caption: photo.caption || "" });
-        } catch (error) {
-          console.error(error);
-          skipped += 1;
-          photos.push({ caption: photo.caption ? `${photo.caption} (bildet mangler)` : "Bildet kunne ikke hentes inn i PDF-en." });
-        }
-      }
+      const comments = (commentsByItem[item.id] || []).filter((comment) => comment.approved !== false && comment.text);
+      if (redundantPhotoItem(item, annotated, { hasComments: comments.length > 0 })) continue;
+      const photos = await photosForPdf(item);
       const decision = approvalLine(item);
       group.push({
         title: item.title || item.step || "",
         text: [item.text || "", decision].filter(Boolean).join("\n"),
         createdAt: item.createdAt,
         photos,
-        comments: (commentsByItem[item.id] || []).filter((comment) => comment.approved !== false && comment.text),
+        comments,
       });
     }
     if (group.length) sections.push({ title, items: group });
@@ -1798,19 +1816,38 @@ async function loadDrainagePhotos(projectId) {
     const sub = await item.ref.collection("photos").get();
     for (const photo of sub.docs) {
       const data = photo.data();
-      if (!data.url) continue;
+      if (!data.url || isTrashedPhoto(data)) continue;
       photos.push({
         id: `${item.id}/${photo.id}`,
+        itemId: item.id,
         url: data.url,
         caption: data.caption || item.data().title || item.data().text || "",
+        comment: data.caption || item.data().text || "",
+        step: item.data().step || "",
+        createdAt: data.createdAt || item.data().createdAt,
+        approved: data.approved,
+        best: data.best,
+        groupId: data.groupId || "",
+        trashed: data.trashed === true,
       });
     }
   }
   const legacy = await db.collection("projects").doc(projectId).collection("photos").get();
   for (const doc of legacy.docs) {
     const data = doc.data();
-    if (!data.url) continue;
-    photos.push({ id: `legacy/${doc.id}`, url: data.url, caption: data.caption || "" });
+    if (!data.url || isTrashedPhoto(data)) continue;
+    photos.push({
+      id: `legacy/${doc.id}`,
+      itemId: `legacy-${doc.id}`,
+      url: data.url,
+      caption: data.caption || "",
+      comment: data.caption || "",
+      createdAt: data.createdAt,
+      approved: data.approved,
+      best: data.best,
+      groupId: data.groupId || "",
+      trashed: false,
+    });
   }
   return photos;
 }
@@ -2233,10 +2270,286 @@ function purgeOldTrash() {
   }
 }
 
+function onceUnsub(stop) {
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    stop();
+  };
+}
+
+function photoHandlers(projectId, getPhotos) {
+  async function updateCovers(itemIds, photos) {
+    const stacks = groupPhotos(photos);
+    await Promise.all([...itemIds].map(async (itemId) => {
+      if (!itemId || String(itemId).startsWith("legacy-")) return;
+      const stack = stacks.find((entry) => entry.photos.some((photo) => photo.itemId === itemId && !photo.legacy));
+      const coverUrl = stack?.best?.url || "";
+      try {
+        await db.collection("projects").doc(projectId).collection("items").doc(itemId).update({
+          coverUrl,
+          updatedAt: stamp(),
+        });
+      } catch (error) {
+        console.error(error);
+      }
+    }));
+  }
+
+  return {
+    async onBest(photo, stack) {
+      try {
+        const batch = db.batch();
+        let writes = 0;
+        for (const member of stack.photos) {
+          if (!member.ref) continue;
+          batch.update(member.ref, { best: photoKey(member) === photoKey(photo) });
+          writes += 1;
+        }
+        if (writes) await batch.commit();
+        const inStack = new Set(stack.photos.map(photoKey));
+        const next = getPhotos().map((entry) => ({
+          ...entry,
+          best: inStack.has(photoKey(entry)) ? photoKey(entry) === photoKey(photo) : entry.best,
+        }));
+        await updateCovers(new Set(stack.photos.map((entry) => entry.itemId)), next);
+        toast("Beste bilde er valgt");
+      } catch (error) {
+        console.error(error);
+        toast("Kunne ikke velge beste bilde");
+      }
+    },
+    async onTrash(photo) {
+      if (!photo?.ref) return;
+      try {
+        await photo.ref.update({ trashed: true, trashedAt: stamp() });
+        const next = getPhotos().map((entry) => (
+          photoKey(entry) === photoKey(photo) ? { ...entry, trashed: true } : entry
+        ));
+        await updateCovers(new Set([photo.itemId]), next);
+        toast("Bildet er lagt i papirkurven");
+      } catch (error) {
+        console.error(error);
+        toast("Kunne ikke slette bildet");
+      }
+    },
+    async onTrashOthers(stack) {
+      try {
+        const batch = db.batch();
+        const drop = new Set();
+        for (const member of stack.others) {
+          if (!member.ref) continue;
+          batch.update(member.ref, { trashed: true, trashedAt: stamp() });
+          drop.add(photoKey(member));
+        }
+        if (drop.size) await batch.commit();
+        const next = getPhotos().map((entry) => (
+          drop.has(photoKey(entry)) ? { ...entry, trashed: true } : entry
+        ));
+        await updateCovers(new Set(stack.photos.map((entry) => entry.itemId)), next);
+        toast("De andre bildene er lagt i papirkurven");
+      } catch (error) {
+        console.error(error);
+        toast("Kunne ikke slette bildene");
+      }
+    },
+    async onRestore(photo) {
+      if (!photo?.ref) return;
+      try {
+        await photo.ref.update({ trashed: false, trashedAt: null });
+        const next = getPhotos().map((entry) => (
+          photoKey(entry) === photoKey(photo) ? { ...entry, trashed: false } : entry
+        ));
+        await updateCovers(new Set([photo.itemId]), next);
+        toast("Bildet er tilbake");
+      } catch (error) {
+        console.error(error);
+        toast("Kunne ikke hente bildet tilbake");
+      }
+    },
+    async onCaption(photo, value) {
+      if (!photo?.ref) return;
+      try {
+        await photo.ref.update({ caption: value });
+      } catch (error) {
+        console.error(error);
+        toast("Kunne ikke lagre bildeteksten");
+      }
+    },
+    async onGroup(chosen) {
+      if (!chosen || chosen.length < 2) return;
+      try {
+        const groupId = newGroupId();
+        const batch = db.batch();
+        let writes = 0;
+        for (const photo of chosen) {
+          if (!photo.ref) continue;
+          batch.update(photo.ref, { groupId });
+          writes += 1;
+        }
+        if (writes) await batch.commit();
+        toast("Bildene er gruppert");
+      } catch (error) {
+        console.error(error);
+        toast("Kunne ikke gruppere bildene");
+      }
+    },
+    onOpenItem(photo) {
+      if (!photo) return;
+      if (photo.legacy) {
+        push({ name: "item", projectId, itemId: photo.legacyId || photo.id, legacy: true });
+        return;
+      }
+      if (photo.itemId) push({ name: "item", projectId, itemId: photo.itemId, legacy: false });
+    },
+  };
+}
+
+function mountPhotoSection(projectId) {
+  const queueSlot = el("div", { class: "stack" });
+  const photoSlot = el("div");
+  const noteSlot = el("div", { class: "stack" });
+  main.append(el("div", { class: "screen" }, [
+    el("div", { class: "action-row" }, [
+      button("Ta bilde", {
+        class: "btn btn-primary",
+        icon: "camera",
+        onClick: () => startCapture(projectId, "bilde", "camera"),
+      }),
+      button("Fra bilder", {
+        class: "btn btn-ghost",
+        icon: "image",
+        onClick: () => startCapture(projectId, "bilde", "gallery"),
+      }),
+    ]),
+    queueSlot,
+    photoSlot,
+    noteSlot,
+  ]));
+
+  let items = [];
+  let legacy = [];
+  let itemsReady = false;
+  let legacyReady = false;
+  let latest = [];
+  const photosByItem = new Map();
+  const seenPhotos = new Set();
+  const photoUnsubs = new Map();
+  subs.push(() => {
+    for (const stop of photoUnsubs.values()) stop();
+    photoUnsubs.clear();
+  });
+  const board = mountPhotoBoard(photoSlot, photoHandlers(projectId, () => latest));
+
+  function watchItems() {
+    const wanted = new Set(items.filter((item) => item.kind === "bilde").map((item) => item.id));
+    for (const [id, stop] of photoUnsubs) {
+      if (wanted.has(id)) continue;
+      stop();
+      photoUnsubs.delete(id);
+      photosByItem.delete(id);
+      seenPhotos.delete(id);
+    }
+    for (const id of wanted) {
+      if (photoUnsubs.has(id)) continue;
+      const stop = onceUnsub(db.collection("projects").doc(projectId).collection("items").doc(id).collection("photos").onSnapshot((snap) => {
+        photosByItem.set(id, snap.docs.map((doc) => ({ ...doc.data(), id: doc.id, ref: doc.ref })));
+        seenPhotos.add(id);
+        draw();
+      }, (error) => {
+        console.error(error);
+        seenPhotos.add(id);
+        draw();
+      }));
+      photoUnsubs.set(id, stop);
+    }
+  }
+
+  function pending() {
+    if (!itemsReady || !legacyReady) return true;
+    return items.some((item) => item.kind === "bilde" && !seenPhotos.has(item.id));
+  }
+
+  function collect() {
+    const flat = [];
+    for (const item of items) {
+      if (item.kind !== "bilde") continue;
+      for (const photo of photosByItem.get(item.id) || []) {
+        flat.push({
+          ...photo,
+          itemId: item.id,
+          legacy: false,
+          step: item.step || "",
+          comment: photo.caption || item.text || "",
+          itemText: item.text || "",
+          itemTitle: item.title || "",
+        });
+      }
+    }
+    for (const photo of legacy) {
+      flat.push({
+        ...photo,
+        ref: db.collection("projects").doc(projectId).collection("photos").doc(photo.id),
+        itemId: `legacy-${photo.id}`,
+        legacy: true,
+        legacyId: photo.id,
+        step: "",
+        comment: photo.caption || "",
+        itemText: photo.caption || "",
+      });
+    }
+    return flat;
+  }
+
+  const draw = () => {
+    queueSlot.replaceChildren();
+    const queued = queueItems.filter((item) => item.projectId === projectId && item.kind === "bilde" && item.mode !== "attach");
+    for (const item of queued) queueSlot.append(queueCard(item));
+    if (pending()) {
+      photoSlot.replaceChildren(el("p", { class: "empty" }, "Henter bilder…"));
+      noteSlot.replaceChildren();
+      return;
+    }
+    latest = collect();
+    const lonely = items.filter((item) => item.kind === "bilde" && !(photosByItem.get(item.id) || []).length);
+    board.update(latest, {
+      showNote: true,
+      emptyText: queued.length || lonely.length ? "" : KIND_META.bilde.empty,
+    });
+    noteSlot.replaceChildren();
+    for (const item of lonely) noteSlot.append(itemRow(projectId, item));
+  };
+  refresh = draw;
+  watchQueue(draw);
+  subs.push(db.collection("projects").doc(projectId).collection("items").orderBy("createdAt", "desc").onSnapshot((snap) => {
+    items = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    itemsReady = true;
+    watchItems();
+    draw();
+  }, (error) => {
+    console.error(error);
+    toast("Kunne ikke hente bildene");
+  }));
+  subs.push(db.collection("projects").doc(projectId).collection("photos").onSnapshot((snap) => {
+    legacy = snap.docs.map((doc) => ({ ...doc.data(), id: doc.id }));
+    legacyReady = true;
+    draw();
+  }, (error) => {
+    console.error(error);
+    legacyReady = true;
+    draw();
+  }));
+}
+
 function mountSection(route) {
   const { projectId, kind } = route;
   if (kind === "tilbud") {
     mountFikenQuoteSection(projectId);
+    return;
+  }
+  if (kind === "bilde") {
+    mountPhotoSection(projectId);
     return;
   }
   const meta = KIND_META[kind] || KIND_META.bilde;
@@ -2401,14 +2714,36 @@ function mountItem(route) {
   let shape = "";
   let titleInput = null;
   let textInput = null;
+  let itemData = {};
+  let latestPhotos = [];
+  const photoBoard = mountPhotoBoard(photosEl, photoHandlers(route.projectId, () => latestPhotos));
+  function showItemPhotos(list) {
+    latestPhotos = list;
+    photoBoard.update(list, { showNote: false, emptyText: "" });
+  }
 
   subs.push(ref.onSnapshot((snap) => {
     if (!snap.exists) {
       shape = "gone";
+      itemData = {};
       head.replaceChildren(el("p", { class: "empty" }, "Notatet er slettet."));
+      if (route.legacy) showItemPhotos([]);
       return;
     }
     const data = snap.data();
+    itemData = data;
+    if (route.legacy) {
+      showItemPhotos(data.url ? [{
+        ...data,
+        id: route.itemId,
+        ref,
+        itemId: `legacy-${route.itemId}`,
+        legacy: true,
+        legacyId: route.itemId,
+        comment: data.caption || "",
+        step: "",
+      }] : []);
+    }
     const textValue = route.legacy ? data.caption || "" : data.text || "";
     const nextShape = [data.approved, data.kind, data.reference, data.source, data.stars, data.approvalStatus, data.selectedAlternativeId, data.fikenSynced, data.fikenDraftId, data.fikenError, route.legacy].join("|");
     if (nextShape !== shape) {
@@ -2524,40 +2859,27 @@ function mountItem(route) {
     head.append(button("Slett", { class: "btn btn-danger", onClick: () => removeItem() }));
   }
 
-  const photoNodes = new Map();
   function renderPhotos(snap) {
-    const seen = new Set();
-    snap.forEach((docSnap) => {
-      seen.add(docSnap.id);
-      const currentBlock = photoNodes.get(docSnap.id);
-      if (!currentBlock) {
-        const block = photoBlock(docSnap, true);
-        photoNodes.set(docSnap.id, block);
-        photosEl.append(block.node);
-      } else {
-        currentBlock.sync(docSnap.data());
-      }
-    });
-    for (const [id, block] of photoNodes) {
-      if (seen.has(id)) continue;
-      block.node.remove();
-      photoNodes.delete(id);
-    }
+    showItemPhotos(snap.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        ...data,
+        id: doc.id,
+        ref: doc.ref,
+        itemId: route.itemId,
+        legacy: false,
+        step: itemData.step || "",
+        comment: data.caption || itemData.text || "",
+        itemText: itemData.text || "",
+        itemTitle: itemData.title || "",
+      };
+    }));
   }
   if (photoCol) {
     subs.push(photoCol.orderBy("createdAt", "desc").onSnapshot((snap) => {
       renderPhotos(snap);
     }, () => {
       photoCol.get().then(renderPhotos).catch(() => {});
-    }));
-  } else {
-    subs.push(ref.onSnapshot((snap) => {
-      photosEl.replaceChildren();
-      if (snap.exists && snap.data().url) {
-        const image = el("img", { class: "preview-img", src: snap.data().url, alt: "Dokumentasjonsbilde" });
-        bindImageRetry(image, snap.data().url);
-        photosEl.append(image);
-      }
     }));
   }
 
@@ -2619,41 +2941,6 @@ function mountItem(route) {
       card.append(row);
       commentsEl.append(card);
     });
-  }
-
-  function photoBlock(doc, canEdit) {
-    const data = doc.data();
-    const caption = el("input", { type: "text", value: data.caption || "", maxlength: "300", placeholder: "Bildetekst" });
-    caption.addEventListener("change", () => doc.ref.update({ caption: caption.value }));
-    const image = data.url ? el("img", { src: data.url, alt: data.caption || "Bilde" }) : null;
-    if (image) bindImageRetry(image, data.url);
-    const pending = data.approved === false ? pill("Venter", "pill-warn") : null;
-    const node = el("div", { class: "photo-block" }, [
-      image || el("p", {}, "Bilde uten lenke"),
-      pending,
-      canEdit ? caption : null,
-      button("Slett bilde", {
-        class: "btn btn-danger",
-        onClick: async () => {
-          if (!window.confirm("Slette dette bildet?")) return;
-          try {
-            const latest = (await doc.ref.get()).data() || data;
-            if (latest.storagePath) await storage.ref(latest.storagePath).delete().catch(() => {});
-            await doc.ref.delete();
-          } catch (error) {
-            console.error(error);
-            toast("Kunne ikke slette bildet");
-          }
-        },
-      }),
-    ]);
-    return {
-      node,
-      sync(next) {
-        if (document.activeElement === caption) return;
-        if (caption.value !== (next.caption || "")) caption.value = next.caption || "";
-      },
-    };
   }
 
   function schedule(run) {
@@ -3508,7 +3795,7 @@ function requestBack(hardware = false) {
   const action = backAction({
     route: current().name,
     depth: stack.length,
-    overlay: !!document.querySelector(".sheet-back"),
+    overlay: !!document.querySelector(".sheet-back, .viewer"),
     native,
   });
   if (action === "minimize") {

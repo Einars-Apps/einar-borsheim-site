@@ -19,6 +19,9 @@ const ICONS = {
   account:
     '<circle cx="12" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 19.5c1.1-3 3.2-4.5 6.5-4.5s5.4 1.5 6.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   drop: '<path d="M12 3.2c2.6 3.3 5.6 6.4 5.6 10a5.6 5.6 0 0 1-11.2 0c0-3.6 3-6.7 5.6-10Z" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+  trash:
+    '<path d="M5 7h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7 7l.8 12.2A1.5 1.5 0 0 0 9.3 20.5h5.4a1.5 1.5 0 0 0 1.5-1.3L17 7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 11v6M14 11v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  star: '<path d="m12 3.6 2.1 4.6 5 .6-3.7 3.4.9 5-4.3-2.4L7.7 17.2l.9-5L4.9 8.8l5-.6L12 3.6Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
 };
 
 export function el(tag, attrs = {}, children = []) {

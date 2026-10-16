@@ -90,6 +90,41 @@ test("offentlig referanse tar ikke med kundekontakt, token eller PDF", () => {
   assert.equal(Object.hasOwn(doc, "pdfUrl"), false);
 });
 
+test("offentlig referanse og utkast viser bare beste bilde", () => {
+  const item = {
+    id: "a",
+    kind: "bilde",
+    title: "",
+    text: "Grøft",
+    step: "Grøft",
+    approved: true,
+    reference: true,
+    createdAt: "2024-06-01T12:00:00.000Z",
+  };
+  const photos = {
+    a: [
+      { id: "1", url: "https://cdn.example/skjevt.jpg", caption: "skjevt", approved: true, createdAt: "2024-06-01T12:00:00.000Z" },
+      { id: "2", url: "https://cdn.example/beste.jpg", caption: "Grøft", approved: true, best: true, createdAt: "2024-06-01T12:00:20.000Z" },
+      { id: "3", url: "https://cdn.example/slettet.jpg", caption: "borte", approved: true, trashed: true, best: true, createdAt: "2024-06-01T12:00:30.000Z" },
+    ],
+  };
+  const doc = buildReferenceDoc(secretProject, [item], photos);
+  assert.deepEqual(doc.photos.map((photo) => photo.url), ["https://cdn.example/beste.jpg"]);
+  const onlyAlternate = buildReferenceDoc(secretProject, [
+    item,
+    { id: "b", kind: "bilde", text: "Grøft", step: "Grøft", approved: true, reference: false },
+  ], {
+    a: [{ id: "1", url: "https://cdn.example/skjevt.jpg", caption: "Grøft", approved: true, createdAt: "2024-06-01T12:00:00.000Z" }],
+    b: [{ id: "2", url: "https://cdn.example/beste.jpg", caption: "Grøft", approved: true, best: true, createdAt: "2024-06-01T12:00:10.000Z" }],
+  });
+  assert.equal(onlyAlternate.photos.length, 0);
+  const draft = buildLocalDraft({ name: "Grøft" }, [item], { photosByItem: photos });
+  assert.match(draft, /Bilder: 1/);
+  assert.equal(draft.includes("skjevt"), false);
+  assert.equal(draft.includes("borte"), false);
+  assert.equal(draft.includes("slettet.jpg"), false);
+});
+
 test("påminnelser faller ett og to år etter ferdigdato", () => {
   const completed = new Date("2024-01-15T12:00:00");
   const project = { completedAt: completed, reminder1Done: false, reminder2Done: false };
