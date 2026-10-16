@@ -475,6 +475,18 @@ test("kunde kan lese mengder bare når Einar har skrudd det på, og kan ikke skr
     unit: "m",
     text: "Grøft, utført: 28 → 30 m",
   }));
+  await assertSucceeds(addDoc(collection(adminDb(), "projects/p1/costLog"), {
+    at: serverTimestamp(),
+    by: "admin-user",
+    byName: "Einar",
+    lineId: "ta-en",
+    label: "Ekstra kumlokk",
+    field: "quantity",
+    from: 0,
+    to: 2,
+    unit: "stk",
+    text: "Ekstra kumlokk, antall: 0 → 2 stk",
+  }));
   await assertFails(addDoc(collection(adminDb(), "projects/p1/costLog"), {
     at: serverTimestamp(),
     by: "noen-annen",

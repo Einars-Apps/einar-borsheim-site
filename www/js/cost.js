@@ -54,7 +54,11 @@ export function emptyCost(prices = DEFAULT_PRICES) {
       unitPrice: rate != null && rate >= 0 ? round2(rate) : 0,
     };
   }
-  return { agreedExVat: 0, lines, fikenLines: [] };
+  return { agreedExVat: 0, lines, fikenLines: [], extras: [] };
+}
+
+export function newExtraId() {
+  return `ta-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export function customerSeesCost(project) {
@@ -84,6 +88,24 @@ export function normalizeFikenLines(raw) {
   return lines;
 }
 
+export function normalizeExtras(raw) {
+  const list = Array.isArray(raw?.extras) ? raw.extras : [];
+  const seen = new Set();
+  const extras = [];
+  for (const line of list) {
+    const id = String(line?.id || "").trim().slice(0, 39);
+    if (!id || seen.has(id) || !id.startsWith("ta")) continue;
+    seen.add(id);
+    extras.push({
+      id,
+      description: String(line?.description || "").replace(/\s+/g, " ").trim().slice(0, 200),
+      unitPrice: clampQty(line?.unitPrice),
+      quantity: clampQty(line?.quantity),
+    });
+  }
+  return extras;
+}
+
 export function normalizeCost(raw, prices = DEFAULT_PRICES) {
   const next = emptyCost(prices);
   next.agreedExVat = clampQty(raw?.agreedExVat);
@@ -97,7 +119,22 @@ export function normalizeCost(raw, prices = DEFAULT_PRICES) {
     };
   }
   next.fikenLines = normalizeFikenLines(raw);
+  next.extras = normalizeExtras(raw);
   return next;
+}
+
+export function persistableCost(next) {
+  const state = normalizeCost(next);
+  const lines = {};
+  for (const [id, line] of Object.entries(state.lines)) {
+    if (line.planned > 0 || line.done > 0) lines[id] = line;
+  }
+  return {
+    agreedExVat: state.agreedExVat,
+    lines,
+    fikenLines: state.fikenLines,
+    extras: state.extras,
+  };
 }
 
 export function pricedCost(raw, prices = DEFAULT_PRICES) {
@@ -119,7 +156,7 @@ export function offerContribution(items, previewChoices = null) {
   let previewExVat = 0;
   const rows = [];
   for (const item of items || []) {
-    if (!isOfferItem(item) || item.approved === false) continue;
+    if (!isOfferItem(item) || item.approved === false || item.fikenBase === true) continue;
     const status = offerStatus(item);
     if (status === "godkjent") {
       const exVat = choiceExVat(item);
@@ -182,7 +219,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       source: "",
       manual: false,
     };
-  });
+  }).filter((line) => line.planned > 0 || line.done > 0);
   const fiken = state.fikenLines.map((line) => {
     const plannedSum = round2(line.planned * line.unitPrice);
     const doneSum = round2(line.done * line.unitPrice);
@@ -196,6 +233,13 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       fromFiken: true,
     };
   });
+  const extras = state.extras.map((line) => {
+    const sum = round2(line.quantity * line.unitPrice);
+    plannedEx += sum;
+    doneEx += sum;
+    return { ...line, sum };
+  });
+  const extrasExVat = round2(extras.reduce((sum, line) => sum + line.sum, 0));
   const lines = [...catalog, ...fiken];
   const estimated = withVat(state.agreedExVat + offers.approvedExVat + plannedEx);
   const incurred = withVat(state.agreedExVat + offers.approvedExVat + doneEx);
@@ -204,6 +248,8 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   return {
     agreedExVat: state.agreedExVat,
     lines,
+    extras,
+    extrasExVat,
     offers,
     estimated,
     incurred,
@@ -219,9 +265,11 @@ const FIELD_LABEL = {
   done: "utført",
   unitPrice: "enhetspris",
   agreedExVat: "avtalt pris",
+  quantity: "antall",
 };
 
-export function patchCost(raw, prices, { lineId, field, value } = {}) {
+export function patchCost(raw, prices, patch = {}) {
+  const { lineId, field, value } = patch;
   const next = pricedCost(raw, prices);
   if (field === "agreedExVat") next.agreedExVat = clampQty(value);
   if ((field === "planned" || field === "done") && next.lines[lineId]) {
@@ -231,6 +279,22 @@ export function patchCost(raw, prices, { lineId, field, value } = {}) {
   if (fiken && (field === "planned" || field === "done" || field === "unitPrice")) {
     fiken[field] = clampQty(value);
     fiken.manual = true;
+  }
+  if (patch.addExtra) {
+    const id = String(patch.extraId || newExtraId()).slice(0, 39);
+    if (id.startsWith("ta") && !next.extras.some((line) => line.id === id)) {
+      next.extras.push({ id, description: "", unitPrice: 0, quantity: 0 });
+    }
+  }
+  if (patch.deleteExtraId) {
+    next.extras = next.extras.filter((line) => line.id !== patch.deleteExtraId);
+  }
+  const extra = next.extras.find((line) => line.id === patch.extraId);
+  if (extra && field === "description") {
+    extra.description = String(value || "").replace(/\s+/g, " ").trim().slice(0, 200);
+  }
+  if (extra && (field === "quantity" || field === "unitPrice")) {
+    extra[field] = clampQty(value);
   }
   return next;
 }
@@ -279,6 +343,19 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
       changes.push({ lineId: id, label, field: "unitPrice", from: left.unitPrice, to: right.unitPrice, unit: "kr" });
     }
   }
+  const beforeExtra = new Map(before.extras.map((line) => [line.id, line]));
+  const afterExtra = new Map(after.extras.map((line) => [line.id, line]));
+  for (const id of new Set([...beforeExtra.keys(), ...afterExtra.keys()])) {
+    const left = beforeExtra.get(id) || { description: "", quantity: 0, unitPrice: 0 };
+    const right = afterExtra.get(id) || { description: left.description, quantity: 0, unitPrice: 0 };
+    const label = String(right.description || left.description || "Tillegg").slice(0, 79);
+    if (left.quantity !== right.quantity) {
+      changes.push({ lineId: id, label, field: "quantity", from: left.quantity, to: right.quantity, unit: "stk" });
+    }
+    if (left.unitPrice !== right.unitPrice) {
+      changes.push({ lineId: id, label, field: "unitPrice", from: left.unitPrice, to: right.unitPrice, unit: "kr" });
+    }
+  }
   return changes;
 }
 
@@ -310,6 +387,13 @@ export function costReportText(summary, history = []) {
     const source = line.source ? ` (${line.source})` : "";
     lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva. Enhetspris ${formatKr(line.unitPrice)}.`);
   }
+  lines.push("", "Tilleggsarbeider");
+  const extras = (summary?.extras || []).filter((line) => line.description || line.quantity || line.unitPrice);
+  if (!extras.length) lines.push("Ingen tilleggsarbeider.");
+  for (const line of extras) {
+    lines.push(`${line.description || "Tillegg"}: ${formatQty(line.quantity)} à ${formatKr(line.unitPrice)} eks. mva. Linjesum ${formatKr(line.sum)} eks. mva.`);
+  }
+  if (extras.length) lines.push(`Sum tilleggsarbeider ${formatKr(summary?.extrasExVat || 0)} eks. mva.`);
   lines.push("", "Historikk");
   if (!history.length) lines.push("Ingen endringer er logget.");
   for (const entry of history) {
