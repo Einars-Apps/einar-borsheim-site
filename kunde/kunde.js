@@ -50,8 +50,9 @@ import { drainageReportText, reportIsPublished, verdictLabel } from "../www/js/d
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
 import { renderCostOverview } from "../www/js/cost-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
-import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem } from "../www/js/photos.js";
-import { openPhotoViewer } from "../www/js/photo-view.js";
+import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem, sortPhotos } from "../www/js/photos.js";
+import { gpsLabel, photoWhen, showGpsInReport } from "../www/js/place.js";
+import { mapAnchor, openPhotoViewer } from "../www/js/photo-view.js";
 
 const params = new URLSearchParams(window.location.search);
 const projectId = params.get("p");
@@ -174,6 +175,8 @@ function mergedItems() {
 let renderAfterBlur = false;
 let portalGeneration = 0;
 const portalPhotos = new Map();
+let gpsById = new Map();
+let stopGps = null;
 
 function annotatePortalPhoto(photo, item) {
   return {
@@ -273,6 +276,9 @@ function render() {
       el("p", { class: "pre" }, project.reportText.trim()),
     ]));
   }
+  viewProject.append(el("section", { id: "report-photos", class: "k-card k-stack", hidden: true }, [
+    el("h2", {}, "Bilder"),
+  ]));
 
   if (reportIsPublished(project) && drainagePoints.length) {
     const drainage = el("section", { class: "k-card k-stack" }, [
@@ -300,7 +306,6 @@ function render() {
   }
 
   const groups = [
-    ["bilde", "Bilder"],
     ["tilbud", "Tilbud"],
     ["endring", "Endringer"],
     ["avvik", "Avvik"],
@@ -308,10 +313,8 @@ function render() {
   for (const [kind, title] of groups) {
     const rows = items.filter((item) => item.kind === kind && item.approved === true && !isOfferItem(item));
     const section = el("section", { class: "k-card k-stack" }, [el("h2", {}, title)]);
-    const liveLegacy = legacyPhotos.filter((photo) => !isTrashedPhoto(photo));
-    if (!rows.length && !(kind === "bilde" && liveLegacy.length)) section.append(el("p", { class: "muted" }, "Ingenting er lagt ut her ennå."));
+    if (!rows.length) section.append(el("p", { class: "muted" }, "Ingenting er lagt ut her ennå."));
     for (const item of rows) section.append(itemCard(item));
-    if (kind === "bilde") section.append(el("div", { id: "legacy-photos", class: "k-stack" }));
     viewProject.append(section);
   }
 
@@ -391,43 +394,67 @@ function commentForm(itemId) {
   return form;
 }
 
+function withPortalPlace(photo) {
+  if (!showGpsInReport(project)) return photo;
+  const place = gpsById.get(photo.id);
+  return place ? { ...photo, ...place } : photo;
+}
+
 function portalFigures(photos) {
   const usable = photos
-    .map((photo) => ({ ...photo, url: displayUrl(photo.url) }))
+    .map((photo) => withPortalPlace({ ...photo, url: displayUrl(photo.url) }))
     .filter((photo) => photo.url);
   if (!usable.length) return null;
   const grid = el("div", { class: usable.length > 1 ? "k-grid" : "k-stack" });
   usable.forEach((photo, index) => {
     const image = el("img", { class: "k-photo", src: photo.url, alt: photo.caption || "Bilde", loading: "lazy" });
     image.addEventListener("click", () => openPhotoViewer(usable, index));
+    const when = photoWhen(photo);
+    const caption = photo.caption || photo.comment || "";
+    const place = showGpsInReport(project) ? gpsLabel(photo) : null;
+    const text = [when, caption].filter(Boolean).join(" · ");
     grid.append(el("figure", {}, [
       image,
-      photo.caption ? el("figcaption", { class: "muted" }, photo.caption) : null,
+      text || place ? el("figcaption", { class: "muted photo-meta" }, [
+        text || null,
+        text && place ? " · " : null,
+        place ? mapAnchor(place) : null,
+      ]) : null,
     ]));
   });
   return grid;
 }
 
+function reportGalleryPhotos() {
+  const flat = portalFlat().filter((photo) => photo.approved !== false && !isTrashedPhoto(photo));
+  return sortPhotos(publicPhotos(flat), "oldest");
+}
+
 function paintPortalPhotos() {
   const flat = portalFlat();
+  const gallery = reportGalleryPhotos();
+  const galleryKeys = new Set(gallery.map(photoKey));
+  const host = document.getElementById("report-photos");
+  if (host) {
+    host.hidden = gallery.length === 0;
+    host.replaceChildren(el("h2", {}, "Bilder"));
+    const figures = portalFigures(gallery);
+    if (figures) host.append(figures);
+  }
   const shown = new Set(publicPhotos(flat).map(photoKey));
   for (const [itemId, photos] of portalPhotos) {
     const media = document.getElementById(`media-${itemId}`);
     const card = document.getElementById(`item-${itemId}`);
     if (!media) continue;
     const item = mergedItems().find((entry) => entry.id === itemId);
-    const keep = photos.filter((photo) => shown.has(photoKey(photo)) || customerOwnPending(photo, uid));
+    const keep = photos.filter((photo) => (
+      !galleryKeys.has(photoKey(photo))
+      && (shown.has(photoKey(photo)) || customerOwnPending(photo, uid))
+    ));
     media.replaceChildren();
     const figures = portalFigures(keep);
     if (figures) media.append(figures);
     if (card && item) card.hidden = redundantPhotoItem(item, flat);
-  }
-  const legacySlot = document.getElementById("legacy-photos");
-  if (legacySlot) {
-    const keep = legacyAnnotated().filter((photo) => shown.has(photoKey(photo)));
-    legacySlot.replaceChildren();
-    const figures = portalFigures(keep);
-    if (figures) legacySlot.append(figures);
   }
 }
 
@@ -867,6 +894,20 @@ function documentSection() {
   ]);
 }
 
+function watchGps() {
+  if (!showGpsInReport(project)) {
+    stopGps?.();
+    stopGps = null;
+    if (gpsById.size) gpsById = new Map();
+    return;
+  }
+  if (stopGps) return;
+  stopGps = onSnapshot(collection(db, "projects", projectId, "photoGps"), (snap) => {
+    gpsById = new Map(snap.docs.map((entry) => [entry.id, entry.data()]));
+    paintPortalPhotos();
+  }, (error) => console.error(error));
+}
+
 async function init() {
   if (!projectId || !token) {
     show(viewError);
@@ -885,6 +926,7 @@ async function init() {
     document.title = `${project.name || "Prosjekt"} | Einar A Børsheim`;
     show(viewProject);
     watchCost();
+    watchGps();
     render();
     const items = collection(db, "projects", projectId, "items");
     onSnapshot(query(items, where("approved", "==", true)), (snap) => {
@@ -899,6 +941,7 @@ async function init() {
       if (!snap.exists()) return;
       project = { id: snap.id, ...snap.data() };
       watchCost();
+      watchGps();
       render();
     });
     watchCost();

@@ -25,6 +25,29 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/projects/$(projectId)).data.showCostToCustomer == true;
     }
 
+    // GPS i rapporten er på når feltet mangler. Kunden ser den bare da. Offentlig lesing er aldri tillatt.
+    function gpsShownInReport(projectId) {
+      return get(/databases/$(database)/documents/projects/$(projectId)).data.showGpsInReport != false;
+    }
+
+    function validPhotoGps() {
+      return request.resource.data.keys().hasOnly(['lat', 'lon', 'accuracyM'])
+        && request.resource.data.lat is number
+        && request.resource.data.lat >= -90
+        && request.resource.data.lat <= 90
+        && request.resource.data.lon is number
+        && request.resource.data.lon >= -180
+        && request.resource.data.lon <= 180
+        && (
+          !request.resource.data.keys().hasAny(['accuracyM'])
+          || (
+            request.resource.data.accuracyM is number
+            && request.resource.data.accuracyM >= 0
+            && request.resource.data.accuracyM <= 100000
+          )
+        );
+    }
+
     function itemPath(projectId, itemId) {
       return /databases/$(database)/documents/projects/$(projectId)/items/$(itemId);
     }
@@ -385,6 +408,13 @@ service cloud.firestore {
         allow read: if isAdmin() || customerMayReadCost(projectId);
         allow create: if isAdmin() && validCostLog();
         allow update, delete: if false;
+      }
+
+      // Posisjon for ett bilde. Ligger ikke på bildedokumentet, som offentlige referanser kan lese.
+      match /photoGps/{photoId} {
+        allow read: if isAdmin() || (hasAccess(projectId) && gpsShownInReport(projectId));
+        allow create, update: if isAdmin() && validPhotoGps();
+        allow delete: if isAdmin();
       }
 
       // Toveis meldinger mellom admin og kunde. Ikke offentlig, selv om prosjektet er en referanse.

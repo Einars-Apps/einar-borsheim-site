@@ -68,7 +68,7 @@ test("offentlig referanse tar ikke med kundekontakt, token eller PDF", () => {
       },
     ],
     {
-      a: [{ url: "https://cdn.example/a.jpg", caption: "Beddet", approved: true }],
+      a: [{ url: "https://cdn.example/a.jpg", caption: "Beddet", approved: true, lat: 59.8335, lon: 10.4352, accuracyM: 5 }],
       b: [{ url: "https://cdn.example/hemmelig.jpg", caption: "Skal ikke med", approved: true }],
       a2: [{ url: "http://usikker.example/a.jpg", approved: true }],
     }
@@ -88,6 +88,8 @@ test("offentlig referanse tar ikke med kundekontakt, token eller PDF", () => {
   assert.equal(Object.hasOwn(doc, "shareToken"), false);
   assert.equal(Object.hasOwn(doc, "customerEmail"), false);
   assert.equal(Object.hasOwn(doc, "pdfUrl"), false);
+  assert.equal(raw.includes("59.8335"), false);
+  assert.equal(raw.includes("10.4352"), false);
 });
 
 test("offentlig referanse og utkast viser bare beste bilde", () => {

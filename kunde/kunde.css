@@ -81,6 +81,15 @@ select:disabled {
 .viewer-bar { padding-top: calc(8px + env(safe-area-inset-top)); }
 .viewer-nav { justify-content: center; flex-wrap: wrap; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
 .viewer-count { margin: 0; font-weight: 700; }
+.viewer-facts {
+  margin: 0;
+  padding: 0 12px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+.photo-map { color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.viewer .photo-map { color: #f4fbf7; }
 .viewer-stage {
   flex: 1;
   min-height: 0;

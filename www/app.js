@@ -30,6 +30,8 @@ import {
 import { canSpeak, dictate } from "./js/speech.js";
 import { AI_DRAFT_URL, requestAiDraft } from "./js/ai.js";
 import { blobToDataUrl, preparePhoto } from "./js/image.js";
+import { readDevicePosition } from "./js/geo.js";
+import { formatCapture, gpsLabel, photoWhen, placeFields, showGpsInReport, withDevicePosition } from "./js/place.js";
 import { addToQueue, getQueueItem, listQueue, removeQueue, updateQueue } from "./js/queue.js";
 import {
   MAX_PHOTOS,
@@ -91,8 +93,9 @@ import {
   photoKey,
   publishedPhotoKeys,
   redundantPhotoItem,
+  sortPhotos,
 } from "./js/photos.js";
-import { mountPhotoBoard } from "./js/photo-view.js";
+import { mapAnchor, mountPhotoBoard } from "./js/photo-view.js";
 
 const ROUTES = new Set(["projects", "reminders", "capture", "project", "section", "item", "review", "form", "report", "done", "trash", "messages", "documents", "templates", "drainage", "offers", "order"]);
 
@@ -505,6 +508,7 @@ async function blobFromRef(ref) {
 }
 
 async function collectPrepared(source) {
+  const positionTask = source === "camera" ? readDevicePosition() : Promise.resolve(null);
   let refs = await cameraRefs(source);
   if (refs.length > MAX_PHOTOS) {
     toast(`De ${MAX_PHOTOS} første bildene blir med`);
@@ -529,8 +533,33 @@ async function collectPrepared(source) {
     uploadWatch = { active: false, done: 0, total: 0, phase: "" };
     updateChrome();
   }
+  const position = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), 8000);
+    positionTask.then((value) => {
+      clearTimeout(timer);
+      resolve(value || null);
+    }, () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+  if (position) {
+    for (let index = 0; index < prepared.length; index += 1) {
+      prepared[index] = withDevicePosition(prepared[index], position);
+    }
+  }
   if (skipped) toast(skipped === 1 ? "Ett bilde ble hoppet over" : `${skipped} bilder ble hoppet over`);
   return prepared;
+}
+
+function queuePlace(prepared) {
+  const place = placeFields(prepared);
+  return {
+    takenAt: prepared?.takenAt || null,
+    lat: place?.lat ?? null,
+    lon: place?.lon ?? null,
+    accuracyM: place?.accuracyM ?? null,
+  };
 }
 
 async function ingestBlobs(projectId, kind, photos, { title = "", text = "", step = "", mode = "create", itemId = "" } = {}) {
@@ -564,6 +593,7 @@ async function ingestBlobs(projectId, kind, photos, { title = "", text = "", ste
       prepared: true,
       filename: `${Date.now()}-${index}-${id.slice(0, 8)}.jpg`,
       createdAt: prepared.takenAt || Date.now(),
+      ...queuePlace(prepared),
       held: mode !== "attach",
       error: "",
       attempts: 0,
@@ -663,6 +693,7 @@ async function uploadQueueItem(item) {
     const photoRef = itemRef.collection("photos").doc(item.photoId);
     const photo = await withTimeout(photoRef.get(), UPLOAD_TIMEOUT_MS);
     if (!photo.exists) {
+      const takenAt = item.takenAt ? firebase.firestore.Timestamp.fromDate(new Date(item.takenAt)) : null;
       await withTimeout(photoRef.set({
         url,
         storagePath,
@@ -672,8 +703,16 @@ async function uploadQueueItem(item) {
         source: "admin",
         createdBy: user?.uid || "",
         createdAt: firebase.firestore.Timestamp.fromDate(new Date(item.createdAt || Date.now())),
+        ...(takenAt ? { takenAt } : {}),
       }), UPLOAD_TIMEOUT_MS);
     }
+  }
+  const place = placeFields(item);
+  if (place && item.photoId) {
+    await withTimeout(
+      db.collection("projects").doc(item.projectId).collection("photoGps").doc(item.photoId).set(place),
+      UPLOAD_TIMEOUT_MS,
+    );
   }
 }
 
@@ -688,12 +727,19 @@ async function prepareStuckBlobs() {
     updateChrome();
     try {
       const prepared = await preparePhoto(item.blob);
+      const place = queuePlace({
+        takenAt: item.takenAt || prepared.takenAt || null,
+        lat: item.lat ?? prepared.lat,
+        lon: item.lon ?? prepared.lon,
+        accuracyM: item.accuracyM ?? prepared.accuracyM,
+      });
       await updateQueue(item.id, {
         blob: prepared.blob,
         thumb: prepared.thumb,
         prepared: true,
         error: "",
         createdAt: item.createdAt || prepared.takenAt || Date.now(),
+        ...place,
       });
     } catch (error) {
       console.error(error);
@@ -883,9 +929,17 @@ async function collectContent(projectId) {
       reference: data.reference === true,
       createdAt: data.createdAt || null,
     });
-    photosByItem[id] = [{ url: data.url, caption: data.caption || "", approved: data.approved !== false }];
+    photosByItem[id] = [{ id: doc.id, url: data.url, caption: data.caption || "", approved: data.approved !== false, createdAt: data.createdAt || null, takenAt: data.takenAt || null }];
     const comments = await root.collection("photos").doc(doc.id).collection("comments").get();
     commentsByItem[id] = comments.docs.map((entry) => entry.data());
+  }
+  const gpsSnap = await root.collection("photoGps").get();
+  const gps = new Map(gpsSnap.docs.map((doc) => [doc.id, doc.data()]));
+  for (const id of Object.keys(photosByItem)) {
+    photosByItem[id] = photosByItem[id].map((photo) => {
+      const place = gps.get(photo.id);
+      return place ? { ...photo, ...place } : photo;
+    });
   }
   return { items, photosByItem, commentsByItem };
 }
@@ -921,8 +975,32 @@ async function saveReportPdf(project, reportText) {
   let skipped = 0;
   const annotated = annotatePhotos(items, photosByItem);
   const visibleKeys = publishedPhotoKeys(items, photosByItem);
+  const reportShots = [];
+  const seenShots = new Set();
+  const includeGps = showGpsInReport(project);
+  async function keepShot(photo) {
+    const key = photoKey(photo);
+    if (!photo?.url || seenShots.has(key)) return;
+    seenShots.add(key);
+    const shot = {
+      id: photo.id || key,
+      url: photo.url,
+      caption: photo.caption || "",
+      when: photoWhen(photo),
+      place: includeGps ? gpsLabel(photo) : null,
+      takenAt: photo.takenAt || null,
+      createdAt: photo.createdAt || null,
+    };
+    try {
+      shot.dataUrl = await fetchWithRetry(photo.url);
+    } catch (error) {
+      console.error(error);
+      skipped += 1;
+      shot.caption = photo.caption ? `${photo.caption} (bildet mangler)` : "Bildet kunne ikke hentes inn i PDF-en.";
+    }
+    reportShots.push(shot);
+  }
   async function photosForPdf(item) {
-    const photos = [];
     for (const photo of photosByItem[item.id] || []) {
       const marked = {
         ...photo,
@@ -933,15 +1011,9 @@ async function saveReportPdf(project, reportText) {
         itemTitle: item.title || "",
       };
       if (!photo.url || photo.approved === false || isTrashedPhoto(photo) || !visibleKeys.has(photoKey(marked))) continue;
-      try {
-        photos.push({ dataUrl: await fetchWithRetry(photo.url), caption: photo.caption || "" });
-      } catch (error) {
-        console.error(error);
-        skipped += 1;
-        photos.push({ caption: photo.caption ? `${photo.caption} (bildet mangler)` : "Bildet kunne ikke hentes inn i PDF-en." });
-      }
+      await keepShot(marked);
     }
-    return photos;
+    return [];
   }
   const template = templateFor(project);
   if (template?.steps?.length) {
@@ -962,22 +1034,20 @@ async function saveReportPdf(project, reportText) {
     const drainageItems = [];
     for (const doc of drainageSnap.docs) {
       const data = doc.data();
-      const photos = [];
       for (const photo of data.photos || []) {
         if (!photo.url) continue;
-        try {
-          photos.push({ dataUrl: await fetchWithRetry(photo.url), caption: photo.caption || "" });
-        } catch (error) {
-          console.error(error);
-          skipped += 1;
-          photos.push({ caption: photo.caption ? `${photo.caption} (bildet mangler)` : "Bildet kunne ikke hentes inn i PDF-en." });
-        }
+        await keepShot({
+          ...photo,
+          id: photo.id || photo.url,
+          caption: photo.caption || data.name || "",
+          createdAt: photo.createdAt || data.updatedAt || data.createdAt,
+        });
       }
       drainageItems.push({
         title: data.name || "Strekk",
         text: drainageReportText(data),
         createdAt: data.updatedAt || data.createdAt,
-        photos,
+        photos: [],
         comments: [],
       });
     }
@@ -1053,7 +1123,12 @@ async function saveReportPdf(project, reportText) {
       })),
     });
   }
-  const result = await generatePdfBlob({ project, reportText, sections });
+  const result = await generatePdfBlob({
+    project,
+    reportText,
+    sections,
+    photos: sortPhotos(reportShots, "oldest"),
+  });
   const path = `projects/${project.id}/rapport/sluttrapport.pdf`;
   await storage.ref(path).put(result.blob, { contentType: "application/pdf" });
   const pdfUrl = await storage.ref(path).getDownloadURL();
@@ -1417,6 +1492,7 @@ function mountOrder() {
         reportText: "",
         shareToken: randomToken(12),
         public: false,
+        showGpsInReport: true,
         status: "tilbud",
         completedAt: null,
         pdfUrl: "",
@@ -1570,6 +1646,7 @@ async function importFikenProject(card) {
     reportText: "",
     shareToken: randomToken(12),
     public: false,
+    showGpsInReport: true,
     status: "aktiv",
     completedAt: null,
     pdfUrl: "",
@@ -2657,6 +2734,7 @@ function mountPhotoSection(projectId) {
   let itemsReady = false;
   let legacyReady = false;
   let latest = [];
+  let places = new Map();
   const photosByItem = new Map();
   const seenPhotos = new Set();
   const photoUnsubs = new Map();
@@ -2700,7 +2778,7 @@ function mountPhotoSection(projectId) {
     for (const item of items) {
       if (item.kind !== "bilde") continue;
       for (const photo of photosByItem.get(item.id) || []) {
-        flat.push({
+        flat.push(withPlace({
           ...photo,
           itemId: item.id,
           legacy: false,
@@ -2708,11 +2786,11 @@ function mountPhotoSection(projectId) {
           comment: photo.caption || item.text || "",
           itemText: item.text || "",
           itemTitle: item.title || "",
-        });
+        }, places));
       }
     }
     for (const photo of legacy) {
-      flat.push({
+      flat.push(withPlace({
         ...photo,
         ref: db.collection("projects").doc(projectId).collection("photos").doc(photo.id),
         itemId: `legacy-${photo.id}`,
@@ -2721,7 +2799,7 @@ function mountPhotoSection(projectId) {
         step: "",
         comment: photo.caption || "",
         itemText: photo.caption || "",
-      });
+      }, places));
     }
     return flat;
   }
@@ -2764,6 +2842,16 @@ function mountPhotoSection(projectId) {
     legacyReady = true;
     draw();
   }));
+  subs.push(db.collection("projects").doc(projectId).collection("photoGps").onSnapshot((snap) => {
+    places = new Map(snap.docs.map((doc) => [doc.id, doc.data()]));
+    draw();
+  }, (error) => console.error(error)));
+}
+
+function withPlace(photo, places) {
+  const place = places?.get(photo?.id);
+  if (!place) return photo;
+  return { ...photo, lat: place.lat, lon: place.lon, accuracyM: place.accuracyM };
 }
 
 function mountSection(route) {
@@ -2940,10 +3028,11 @@ function mountItem(route) {
   let textInput = null;
   let itemData = {};
   let latestPhotos = [];
+  let itemPlaces = new Map();
   const photoBoard = mountPhotoBoard(photosEl, photoHandlers(route.projectId, () => latestPhotos));
   function showItemPhotos(list) {
-    latestPhotos = list;
-    photoBoard.update(list, { showNote: false, emptyText: "" });
+    latestPhotos = list.map((photo) => withPlace(photo, itemPlaces));
+    photoBoard.update(latestPhotos, { showNote: false, emptyText: "" });
   }
 
   subs.push(ref.onSnapshot((snap) => {
@@ -3106,6 +3195,10 @@ function mountItem(route) {
       photoCol.get().then(renderPhotos).catch(() => {});
     }));
   }
+  subs.push(db.collection("projects").doc(route.projectId).collection("photoGps").onSnapshot((snap) => {
+    itemPlaces = new Map(snap.docs.map((doc) => [doc.id, doc.data()]));
+    if (latestPhotos.length) showItemPhotos(latestPhotos);
+  }, (error) => console.error(error)));
 
   subs.push(commentCol.orderBy("createdAt", "asc").onSnapshot((snap) => {
     renderComments(snap);
@@ -3266,7 +3359,12 @@ function mountReview(route) {
       const input = el("textarea", { rows: "4", maxlength: "4000", placeholder: "Kommentar til bildet" });
       input.dataset.queueId = items[0].id;
       input.value = items[0].text || "";
-      list.append(el("img", { class: "preview-img", src: url, alt: "Nytt bilde" }), field("Kommentar", input), micButton(input));
+      list.append(
+        el("img", { class: "preview-img", src: url, alt: "Nytt bilde" }),
+        reviewFacts(items[0]),
+        field("Kommentar", input),
+        micButton(input),
+      );
       return;
     }
     for (const item of items) {
@@ -3276,13 +3374,25 @@ function mountReview(route) {
       input.value = item.text || "";
       list.append(el("div", { class: "review-row" }, [
         el("img", { src: url, alt: "" }),
-        input,
+        el("div", { class: "stack" }, [reviewFacts(item), input]),
       ]), micButton(input));
     }
   })().catch((error) => {
     console.error(error);
     list.append(el("p", { class: "empty" }, "Kunne ikke vise bildet."));
   });
+}
+
+function reviewFacts(item) {
+  const line = el("p", { class: "meta photo-meta" });
+  const when = photoWhen(item) || formatCapture(item.createdAt);
+  if (when) line.append(document.createTextNode(when));
+  const place = gpsLabel(item);
+  if (place) {
+    if (when) line.append(document.createTextNode(" · "));
+    line.append(mapAnchor(place));
+  }
+  return when || place ? line : null;
 }
 
 function mountForm(route) {
@@ -3301,6 +3411,8 @@ function mountForm(route) {
   const publicSummary = el("textarea", { rows: "4", maxlength: "1200", placeholder: "Kort omtale uten kundens navn og adresse" });
   const completed = el("input", { type: "date" });
   const isPublic = el("input", { type: "checkbox" });
+  const showGps = el("input", { type: "checkbox" });
+  showGps.checked = true;
   const save = button("Lagre", { type: "submit", class: "btn btn-primary btn-block" });
   if (route.projectId) save.disabled = true;
   let fikenPick = null;
@@ -3344,6 +3456,10 @@ function mountForm(route) {
         isPublic,
         el("span", {}, "Offentlig referanse. Bare innhold du krysser av blir synlig på nettsiden."),
       ]),
+      el("label", { class: "checkline" }, [
+        showGps,
+        el("span", {}, "Vis GPS i rapport. Offentlige referanser viser ikke posisjon."),
+      ]),
     );
   }
   form.append(save);
@@ -3367,6 +3483,7 @@ function mountForm(route) {
       fill(publicLocation, data.publicLocation);
       fill(publicSummary, data.publicSummary);
       if (document.activeElement !== isPublic) isPublic.checked = data.public === true;
+      if (document.activeElement !== showGps) showGps.checked = data.showGpsInReport !== false;
       if (document.activeElement !== templateSelect) templateSelect.value = data.templateId || "";
       save.disabled = false;
       const day = toDate(data.completedAt);
@@ -3412,6 +3529,7 @@ function mountForm(route) {
           reportText: "",
           shareToken: randomToken(12),
           public: false,
+          showGpsInReport: true,
           status: "aktiv",
           completedAt: null,
           pdfUrl: "",
@@ -3432,6 +3550,7 @@ function mountForm(route) {
         publicLocation: publicLocation.value.trim(),
         publicSummary: publicSummary.value.trim(),
         public: isPublic.checked,
+        showGpsInReport: showGps.checked,
       };
       if (completed.value) {
         patch.completedAt = firebase.firestore.Timestamp.fromDate(new Date(`${completed.value}T12:00:00`));

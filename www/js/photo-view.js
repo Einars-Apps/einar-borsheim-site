@@ -1,4 +1,5 @@
 import { button, el, icon } from "./dom.js";
+import { gpsLabel, photoWhen } from "./place.js";
 import {
   DELETE_OTHERS_CONFIRM,
   DELETE_PHOTO_CONFIRM,
@@ -6,7 +7,6 @@ import {
   isTrashedPhoto,
   moreLabel,
   photoKey,
-  photoMillis,
 } from "./photos.js";
 
 function iconButton(name, label, className, onClick) {
@@ -113,7 +113,7 @@ export function renderPhotoBoard(state, handlers) {
       bin.append(el("div", { class: "photo-bin-row" }, [
         thumb,
         el("div", { class: "stack" }, [
-          el("p", { class: "meta" }, photo.caption || photo.comment || "Uten tekst"),
+          el("p", { class: "meta" }, [photoWhen(photo), photo.caption || photo.comment || "Uten tekst"].filter(Boolean).join(" · ")),
           button("Gjenopprett", {
             class: "btn btn-ghost",
             onClick: () => handlers.onRestore(photo),
@@ -160,7 +160,7 @@ function stackCard(stack, ui, handlers) {
     shotButton(best, () => openAt(best)),
     tools,
     captionField(best, handlers.onCaption),
-    el("p", { class: "meta" }, [best.step, whenLabel(best.createdAt), best.approved === false ? "Venter" : ""].filter(Boolean).join(" · ")),
+    photoMeta(best),
   ]);
   if (ui.expanded) {
     const more = el("div", { class: "photo-more stack" });
@@ -176,6 +176,7 @@ function stackCard(stack, ui, handlers) {
         shotButton(photo, () => openAt(photo)),
         rowTools,
         captionField(photo, handlers.onCaption),
+        photoMeta(photo),
       ]));
     }
     card.append(more);
@@ -183,15 +184,41 @@ function stackCard(stack, ui, handlers) {
   return card;
 }
 
-function whenLabel(value) {
-  const time = photoMillis(value);
-  if (time == null) return "";
-  return new Intl.DateTimeFormat("nb-NO", {
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(time));
+function openMap(url) {
+  const Browser = window.Capacitor?.Plugins?.Browser;
+  if (Browser?.open) {
+    Browser.open({ url }).catch(() => window.open(url, "_blank", "noopener"));
+    return;
+  }
+  window.open(url, "_blank", "noopener");
+}
+
+export function mapAnchor(place) {
+  const node = el("a", {
+    class: "photo-map",
+    href: place.href,
+    target: "_blank",
+    rel: "noopener",
+  }, place.text);
+  node.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openMap(place.href);
+  });
+  return node;
+}
+
+function photoMeta(photo) {
+  const line = el("p", { class: "meta photo-meta" });
+  const bits = [photo.step, photoWhen(photo), photo.approved === false ? "Venter" : ""].filter(Boolean);
+  if (bits.length) line.append(document.createTextNode(bits.join(" · ")));
+  const place = gpsLabel(photo);
+  if (place) {
+    if (bits.length) line.append(document.createTextNode(" · "));
+    line.append(mapAnchor(place));
+  }
+  if (!bits.length && !place) return null;
+  return line;
 }
 
 function bestButton(photo, pressed, onClick) {
@@ -277,6 +304,7 @@ export function openPhotoViewer(photos, startIndex = 0) {
   const image = el("img", { class: "viewer-img", alt: "" });
   const stage = el("div", { class: "viewer-stage" });
   const count = el("p", { class: "viewer-count" }, "");
+  const facts = el("p", { class: "viewer-facts" });
   const overlay = el("div", { class: "viewer", role: "dialog", "aria-modal": "true", "aria-label": "Bildefremviser" });
   stage.append(image);
 
@@ -294,6 +322,13 @@ export function openPhotoViewer(photos, startIndex = 0) {
     image.src = photo.url;
     image.alt = photo.caption || "Bilde";
     count.textContent = list.length > 1 ? `${index + 1} / ${list.length}` : "";
+    const bits = [];
+    if (photoWhen(photo)) bits.push(el("span", {}, photoWhen(photo)));
+    if (photo.caption) bits.push(el("span", {}, photo.caption));
+    const place = gpsLabel(photo);
+    if (place) bits.push(mapAnchor(place));
+    facts.replaceChildren(...bits);
+    facts.hidden = bits.length === 0;
     overlay.dataset.index = String(index);
     resetZoom();
   }
@@ -405,7 +440,7 @@ export function openPhotoViewer(photos, startIndex = 0) {
     button("Mindre", { class: "btn btn-ghost", onClick: () => zoomBy(1 / 1.2) }),
     button("Neste", { class: "btn btn-ghost", onClick: () => step(1) }),
   ]);
-  overlay.append(bar, stage, nav);
+  overlay.append(bar, stage, facts, nav);
   const previous = history.state && typeof history.state === "object" ? history.state : {};
   history.pushState({ ...previous, viewer: true }, "");
   closeViewer = close;

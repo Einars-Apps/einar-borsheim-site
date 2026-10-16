@@ -54,11 +54,28 @@ function manualGroup(photo) {
   return String(photo?.groupId || "").trim();
 }
 
-function newestFirst(a, b) {
-  const left = photoMillis(a?.createdAt) ?? -1;
-  const right = photoMillis(b?.createdAt) ?? -1;
-  if (right !== left) return right - left;
+export function captureMillis(photo) {
+  return photoMillis(photo?.takenAt) ?? photoMillis(photo?.createdAt);
+}
+
+function compareCapture(a, b, oldest) {
+  const left = captureMillis(a);
+  const right = captureMillis(b);
+  if (left == null && right == null) return photoKey(a).localeCompare(photoKey(b));
+  if (left == null) return 1;
+  if (right == null) return -1;
+  if (left !== right) return oldest ? left - right : right - left;
   return photoKey(a).localeCompare(photoKey(b));
+}
+
+function newestFirst(a, b) {
+  return compareCapture(a, b, false);
+}
+
+export function sortPhotos(photos, direction = "newest") {
+  const list = (photos || []).filter((photo) => photo && photoKey(photo));
+  const oldest = direction === "oldest";
+  return list.slice().sort((a, b) => compareCapture(a, b, oldest));
 }
 
 function pickBest(sortedNewestFirst) {
@@ -119,7 +136,7 @@ export function groupPhotos(photos) {
   }
 
   const timed = auto
-    .map((index) => ({ index, time: photoMillis(list[index].createdAt) }))
+    .map((index) => ({ index, time: captureMillis(list[index]) }))
     .filter((entry) => entry.time != null)
     .sort((a, b) => a.time - b.time || photoKey(list[a.index]).localeCompare(photoKey(list[b.index])));
   for (let index = 1; index < timed.length; index += 1) {
