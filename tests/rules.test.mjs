@@ -597,6 +597,90 @@ test("storage: dokumenter er ikke offentlige", async () => {
   await assertFails(getBytes(ref(stranger.storage(), "projects/p1/documents/tegning.pdf")));
 });
 
+test("HMS er skjult for kunden til dokumentet er delt, og papirkurven skjuler det", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(db, "projects/p1/hmsDocs/skjult"), {
+      name: "Intern.pdf",
+      visibleToCustomer: false,
+      trashed: false,
+    });
+    await setDoc(doc(db, "projects/p1/hmsDocs/delt"), {
+      name: "Delt.pdf",
+      visibleToCustomer: true,
+      trashed: false,
+    });
+    await setDoc(doc(db, "projects/p1/hmsDocs/borte"), {
+      name: "Borte.pdf",
+      visibleToCustomer: true,
+      trashed: true,
+    });
+  });
+  const kunde = customerDb();
+  await assertFails(getDoc(doc(kunde, "projects/p1/hmsDocs/skjult")));
+  await assertSucceeds(getDoc(doc(kunde, "projects/p1/hmsDocs/delt")));
+  await assertFails(getDoc(doc(kunde, "projects/p1/hmsDocs/borte")));
+  await assertFails(getDoc(doc(strangerDb(), "projects/p1/hmsDocs/delt")));
+  await assertFails(getDocs(collection(kunde, "projects/p1/hmsDocs")));
+  await assertFails(getDocs(query(
+    collection(kunde, "projects/p1/hmsDocs"),
+    where("visibleToCustomer", "==", true),
+  )));
+  const listed = await assertSucceeds(getDocs(query(
+    collection(kunde, "projects/p1/hmsDocs"),
+    where("visibleToCustomer", "==", true),
+    where("trashed", "==", false),
+  )));
+  assert.equal(listed.size, 1);
+  assert.equal(listed.docs[0].id, "delt");
+  await assertFails(updateDoc(doc(kunde, "projects/p1/hmsDocs/delt"), { trashed: true }));
+  await assertFails(setDoc(doc(kunde, "projects/p1/hmsDocs/ny"), {
+    name: "Nei",
+    visibleToCustomer: true,
+    trashed: false,
+  }));
+  await assertSucceeds(getDoc(doc(adminDb(), "projects/p1/hmsDocs/skjult")));
+  await assertSucceeds(updateDoc(doc(adminDb(), "projects/p1/hmsDocs/skjult"), { visibleToCustomer: true }));
+});
+
+test("storage: HMS-filer leses av kunden bare når dokumentet er delt", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(db, "projects/p1/hmsDocs/delt"), { visibleToCustomer: true, trashed: false });
+    await setDoc(doc(db, "projects/p1/hmsDocs/skjult"), { visibleToCustomer: false, trashed: false });
+    await setDoc(doc(db, "projects/p1/hmsDocs/borte"), { visibleToCustomer: true, trashed: true });
+  });
+  const admin = env.authenticatedContext("admin-user", { email: "e.bors@hotmail.com" });
+  const kunde = env.authenticatedContext("kunde1", { firebase: { sign_in_provider: "anonymous" } });
+  const stranger = env.unauthenticatedContext();
+  await assertSucceeds(uploadString(ref(admin.storage(), "projects/p1/hms/delt/plan.pdf"), "pdf", "raw", {
+    contentType: "application/pdf",
+  }));
+  await assertSucceeds(uploadString(ref(admin.storage(), "projects/p1/hms/skjult/intern.docx"), "doc", "raw", {
+    contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  }));
+  await assertSucceeds(uploadString(ref(admin.storage(), "projects/p1/hms/delt/bilde.jpg"), "img", "raw", {
+    contentType: "image/jpeg",
+  }));
+  await assertFails(uploadString(ref(kunde.storage(), "projects/p1/hms/delt/kunde.pdf"), "pdf", "raw", {
+    contentType: "application/pdf",
+  }));
+  await assertFails(uploadString(ref(admin.storage(), "projects/p1/hms/delt/virus.exe"), "x", "raw", {
+    contentType: "application/octet-stream",
+  }));
+  await assertSucceeds(getBytes(ref(kunde.storage(), "projects/p1/hms/delt/plan.pdf")));
+  await assertFails(getBytes(ref(kunde.storage(), "projects/p1/hms/skjult/intern.docx")));
+  await assertFails(getBytes(ref(stranger.storage(), "projects/p1/hms/delt/plan.pdf")));
+  await assertSucceeds(uploadString(ref(admin.storage(), "projects/p1/hms/borte/slettet.pdf"), "pdf", "raw", {
+    contentType: "application/pdf",
+  }));
+  await assertFails(getBytes(ref(kunde.storage(), "projects/p1/hms/borte/slettet.pdf")));
+});
+
 test("regelfilene slipper ikke gjennom åpen skriving", () => {
   const firestore = readFileSync("firestore.rules", "utf8");
   const storage = readFileSync("storage.rules", "utf8");

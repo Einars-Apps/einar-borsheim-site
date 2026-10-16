@@ -376,6 +376,15 @@ service cloud.firestore {
         }
       }
 
+      // HMS. Bare admin skriver. Kunden leser ett dokument bare når det er delt og ikke i papirkurven.
+      match /hmsDocs/{docId} {
+        allow read: if isAdmin()
+          || (hasAccess(projectId)
+              && resource.data.visibleToCustomer == true
+              && resource.data.trashed == false);
+        allow create, update, delete: if isAdmin();
+      }
+
       // Dokumenter, tegninger, oppdateringer og tilbud. Ikke synlig for hele internett.
       match /documents/{docId} {
         allow read: if isAdmin()

@@ -296,8 +296,11 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .tile-endring .tile-ico { background: #e7eef8; color: #24507a; }
 .tile-avvik .tile-ico { background: #f8eee4; color: var(--warn); }
 .tile-drenering .tile-ico { background: #e5f3f8; color: #1a5f78; }
-.tile-rapport { grid-column: 1 / -1; min-height: 92px; flex-direction: row; align-items: center; gap: 12px; }
-.tile-rapport .tile-copy { display: flex; flex-direction: column; gap: 2px; }
+.tile-rapport, .tile-hms { grid-column: 1 / -1; min-height: 92px; flex-direction: row; align-items: center; gap: 12px; }
+.tile-rapport .tile-copy, .tile-hms .tile-copy { display: flex; flex-direction: column; gap: 2px; }
+.tile-hms .tile-ico { background: #f8efe0; color: var(--warn); }
+.hms-preview { width: 100%; max-height: 240px; object-fit: contain; border-radius: 12px; background: #141c18; }
+.hms-doc .action-row a { font-weight: 700; min-height: 44px; display: inline-flex; align-items: center; }
 .tile-label { font-size: 1.05rem; font-weight: 700; overflow-wrap: anywhere; }
 .tile-count, .row-title, .row-text, .pre, .why-row, .offer-alt { overflow-wrap: anywhere; }
 .tile-count { color: var(--muted); font-size: 0.88rem; font-weight: 600; }

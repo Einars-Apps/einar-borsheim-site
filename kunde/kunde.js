@@ -53,6 +53,7 @@ import { canSpeak, dictate } from "../www/js/speech.js";
 import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem, sortPhotos } from "../www/js/photos.js";
 import { gpsLabel, photoWhen, showGpsInReport } from "../www/js/place.js";
 import { mapAnchor, openPhotoViewer } from "../www/js/photo-view.js";
+import { renderCustomerHms } from "../www/js/hms-view.js";
 
 const params = new URLSearchParams(window.location.search);
 const projectId = params.get("p");
@@ -74,6 +75,7 @@ let ownItems = [];
 let legacyPhotos = [];
 let approvedDocs = [];
 let ownDocs = [];
+let hmsDocs = [];
 let thread = [];
 let drainagePoints = [];
 let costState = null;
@@ -329,6 +331,8 @@ function render() {
   viewProject.append(inbox);
   viewProject.append(messageSection());
   viewProject.append(documentSection());
+  const hms = renderCustomerHms(hmsDocs);
+  if (hms) viewProject.append(hms);
 
   const rate = el("section", { class: "k-card k-stack" }, [el("h2", {}, "Vurdering")]);
   const ratings = items.filter((item) => item.kind === "vurdering" && item.createdBy === uid);
@@ -957,6 +961,14 @@ async function init() {
       ownDocs = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       render();
     });
+    onSnapshot(query(
+      collection(db, "projects", projectId, "hmsDocs"),
+      where("visibleToCustomer", "==", true),
+      where("trashed", "==", false),
+    ), (snap) => {
+      hmsDocs = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      render();
+    }, (error) => console.error(error));
     onSnapshot(collection(db, "projects", projectId, "drainage"), (snap) => {
       drainagePoints = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       drainagePoints.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));

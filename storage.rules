@@ -21,6 +21,25 @@ service firebase.storage {
         && request.resource.contentType.matches('image/(jpeg|png|webp)');
     }
 
+    function hmsDoc(projectId, docId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId)/hmsDocs/$(docId)).data;
+    }
+
+    function hmsShared(projectId, docId) {
+      return hmsDoc(projectId, docId).visibleToCustomer == true
+        && hmsDoc(projectId, docId).trashed == false;
+    }
+
+    function isHmsUpload() {
+      return request.resource.size < 25 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('application/pdf')
+          || request.resource.contentType.matches('application/msword')
+          || request.resource.contentType.matches('application/vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document')
+          || request.resource.contentType.matches('image/(jpeg|png|webp|gif|heic|heif)')
+        );
+    }
+
     // Eldre bilder laa flatt under prosjektmappen. Beholdes for eksisterende filer.
     match /projects/{projectId}/{fileName} {
       allow read: if isAdmin() || hasAccess(projectId) || isPublic(projectId);
@@ -43,6 +62,14 @@ service firebase.storage {
         && request.resource.contentType == 'application/pdf'
         && fileName.matches('^[A-Za-z0-9_.-]+\\.pdf$');
       allow delete: if isAdmin();
+    }
+
+    // HMS. Bare admin laster opp. Kunde med tilgang leser filen bare når dokumentet er delt.
+    match /projects/{projectId}/hms/{docId}/{fileName} {
+      allow read: if isAdmin() || (hasAccess(projectId) && hmsShared(projectId, docId));
+      allow create: if isAdmin() && isHmsUpload()
+        && fileName.matches('^[A-Za-z0-9._-]{1,120}$');
+      allow update, delete: if isAdmin();
     }
 
     // Tegninger, tilbud og andre dokumenter. Ikke offentlig, selv om prosjektet er en referanse.
