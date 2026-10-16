@@ -347,7 +347,9 @@ export function renderQuickOrder({ onLocate, onPhotos, onSubmit, onListFiken, is
 
   function showPhotos() {
     strip.replaceChildren();
-    photos.forEach((blob, index) => {
+    photos.forEach((photo, index) => {
+      const blob = photo instanceof Blob ? photo : photo?.blob;
+      if (!blob) return;
       const url = URL.createObjectURL(blob);
       const remove = button("Fjern", {
         class: "btn btn-ghost",
