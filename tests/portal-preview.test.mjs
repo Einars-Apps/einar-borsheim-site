@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   PORTAL_PREVIEW_APP,
   PORTAL_PREVIEW_BANNER,
@@ -8,9 +9,11 @@ import {
   customerVisibleContent,
   customerVisibleDocument,
   isPortalPreview,
+  portalAccessStep,
   portalPreviewUrl,
   portalUrl,
   previewOpenMode,
+  shareTokenPlan,
 } from "../www/js/logic.js";
 
 const adminUid = "einar-uid";
@@ -79,6 +82,49 @@ test("dokumenter følger kunderegelen", () => {
   assert.equal(customerVisibleDocument({ approved: true, source: "admin" }), true);
   assert.equal(customerVisibleDocument({ approved: false, source: "admin" }), false);
   assert.equal(customerVisibleDocument({ approved: false, source: "customer", name: "Tegning" }), true);
+});
+
+test("prosjekt uten kundelenke får en kode, og en lagret kode blir brukt", () => {
+  assert.deepEqual(shareTokenPlan({}), { action: "create", token: "" });
+  assert.deepEqual(shareTokenPlan({ serverToken: "  ", localToken: "" }), { action: "create", token: "" });
+  assert.deepEqual(shareTokenPlan({ localToken: "  lokal  " }), { action: "save", token: "lokal" });
+  assert.deepEqual(shareTokenPlan({
+    serverToken: "fra-server",
+    localToken: "gammel",
+  }), { action: "use", token: "fra-server" });
+});
+
+test("nytt besøk oppretter ikke tilgang på nytt", () => {
+  assert.equal(portalAccessStep({ token: "" }), "missing");
+  assert.equal(portalAccessStep({ token: "   " }), "missing");
+  assert.equal(portalAccessStep({ accessExists: false, token: "tok 1" }), "create");
+  assert.equal(portalAccessStep({ accessExists: true, token: "tok 1" }), "ready");
+});
+
+test("forhåndsvisningen krever prosjekt og kode", () => {
+  assert.throws(() => portalPreviewUrl("", "tok 1"), /mangler prosjekt eller kode/);
+  assert.throws(() => portalPreviewUrl("prosjekt-1", "  "), /mangler prosjekt eller kode/);
+  const preview = new URL(portalPreviewUrl("  prosjekt-1  ", "  tok 1  "));
+  assert.equal(preview.searchParams.get("p"), "prosjekt-1");
+  assert.equal(preview.searchParams.get("t"), "tok 1");
+  assert.equal(preview.searchParams.get("vis"), "forhandsvisning");
+});
+
+test("portalen hopper over ny tilgang når dokumentet finnes, og appen bekrefter koden", () => {
+  const portal = readFileSync("kunde/kunde.js", "utf8");
+  const init = portal.slice(portal.indexOf("async function openPortalAccess"), portal.indexOf("\ninit();"));
+  const step = init.indexOf("portalAccessStep");
+  const write = init.indexOf("setDoc(accessRef");
+  assert.ok(step > 0 && write > step);
+  assert.match(init, /if \(!again\.exists\(\)\) throw error/);
+  assert.match(portal, /PORTAL_PREVIEW_BANNER/);
+  assert.match(portal, /applyPortalPreviewLock\(previewMode \? viewProject : null\)/);
+
+  const app = readFileSync("www/app.js", "utf8");
+  const preview = app.slice(app.indexOf("async function previewAsCustomer"), app.indexOf("async function shareProject"));
+  assert.match(preview, /ensureToken\(project, \{ confirm: true \}\)/);
+  assert.match(preview, /portalPreviewUrl\(project\.id, token\)/);
+  assert.match(app.slice(app.indexOf("async function ensureToken"), app.indexOf("async function openPreviewUrl")), /shareTokenPlan/);
 });
 
 test("forhåndsvisning låser knapper og felt, og lar alternativene stå", () => {

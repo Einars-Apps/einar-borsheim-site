@@ -148,6 +148,22 @@ export function portalUrl(projectId, token, base = PORTAL_BASE) {
   return url.toString();
 }
 
+// Tom streng betyr at prosjektet ikke har en kundelenke ennå.
+export function shareTokenPlan({ serverToken = "", localToken = "" } = {}) {
+  const server = String(serverToken ?? "").trim();
+  if (server) return { action: "use", token: server };
+  const local = String(localToken ?? "").trim();
+  if (local) return { action: "save", token: local };
+  return { action: "create", token: "" };
+}
+
+// Tilgangsdokumentet kan bare opprettes. Et nytt besøk med samme anonyme bruker
+// er en oppdatering, og den blir avvist. Da skal portalen bruke dokumentet som finnes.
+export function portalAccessStep({ accessExists = false, token = "" } = {}) {
+  if (!String(token ?? "").trim()) return "missing";
+  return accessExists ? "ready" : "create";
+}
+
 export const PORTAL_PREVIEW_APP = "kunde-forhandsvisning";
 export const PORTAL_PREVIEW_BANNER = "Forhåndsvisning – slik ser kunden det";
 
@@ -160,7 +176,10 @@ export function isPortalPreview(search) {
 }
 
 export function portalPreviewUrl(projectId, token, base = PORTAL_BASE) {
-  const url = new URL(portalUrl(projectId, token, base));
+  const id = String(projectId ?? "").trim();
+  const code = String(token ?? "").trim();
+  if (!id || !code) throw new Error("Forhåndsvisningen mangler prosjekt eller kode");
+  const url = new URL(portalUrl(id, code, base));
   url.searchParams.set("vis", "forhandsvisning");
   return url.toString();
 }

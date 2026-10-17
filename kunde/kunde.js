@@ -34,6 +34,7 @@ import {
   formatWhen,
   isCompleted,
   isPortalPreview,
+  portalAccessStep,
 } from "../www/js/logic.js";
 import {
   alternativeHeading,
@@ -914,23 +915,20 @@ function watchGps() {
   }, (error) => console.error(error));
 }
 
-async function init() {
-  if (!projectId || !token) {
-    show(viewError);
-    return;
-  }
+async function openPortalAccess(userId) {
+  const accessRef = doc(db, "projects", projectId, "access", userId);
+  const accessSnap = await getDoc(accessRef);
+  if (portalAccessStep({ accessExists: accessSnap.exists(), token }) !== "create") return;
   try {
-    const cred = await signInAnonymously(auth);
-    uid = cred.user.uid;
-    await setDoc(doc(db, "projects", projectId, "access", uid), { token });
-    const snap = await getDoc(doc(db, "projects", projectId));
-    if (!snap.exists()) {
-      show(viewError);
-      return;
-    }
-    project = { id: snap.id, ...snap.data() };
-    document.title = `${project.name || "Prosjekt"} | Einar A Børsheim`;
-    show(viewProject);
+    await setDoc(accessRef, { token });
+  } catch (error) {
+    const again = await getDoc(accessRef);
+    if (!again.exists()) throw error;
+  }
+}
+
+function startPortal() {
+  try {
     watchCost();
     watchGps();
     render();
@@ -982,8 +980,32 @@ async function init() {
     });
   } catch (error) {
     console.error(error);
-    show(viewError);
   }
+}
+
+async function init() {
+  if (!projectId || !token || portalAccessStep({ token }) === "missing") {
+    show(viewError);
+    return;
+  }
+  try {
+    const cred = await signInAnonymously(auth);
+    uid = cred.user.uid;
+    await openPortalAccess(uid);
+    const snap = await getDoc(doc(db, "projects", projectId));
+    if (!snap.exists()) {
+      show(viewError);
+      return;
+    }
+    project = { id: snap.id, ...snap.data() };
+    document.title = `${project.name || "Prosjekt"} | Einar A Børsheim`;
+    show(viewProject);
+  } catch (error) {
+    console.error(error);
+    show(viewError);
+    return;
+  }
+  startPortal();
 }
 
 init();
