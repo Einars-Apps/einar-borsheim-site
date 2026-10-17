@@ -38,7 +38,7 @@ function taleButton(textarea) {
   });
 }
 
-export function renderOfferList({ items, project, onOpen, onNew }) {
+export function renderOfferList({ items, project, onOpen, onNew, cost = null }) {
   const posts = (items || []).filter((item) => isOfferItem(item) && item.fikenBase !== true);
   const sum = approvedChoiceSum(posts);
   const list = el("div", { class: "stack" });
@@ -63,7 +63,7 @@ export function renderOfferList({ items, project, onOpen, onNew }) {
     row.addEventListener("click", () => onOpen(item.id));
     list.append(row);
   }
-  return el("div", { class: "stack" }, [
+  return el("div", { class: "stack offers-screen" }, [
     el("section", { class: "card continue" }, [
       el("h2", { class: "h-app" }, "Tilbud og endringer"),
       el("p", { class: "meta" }, "Samme godkjenning som før. Kunden velger ett alternativ. Pris kr 0,00 betyr inkludert."),
@@ -71,6 +71,7 @@ export function renderOfferList({ items, project, onOpen, onNew }) {
       button("Ny post", { class: "btn btn-primary", onClick: onNew }),
     ]),
     list,
+    cost,
   ]);
 }
 
