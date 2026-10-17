@@ -16,9 +16,11 @@ import {
   isTrashed,
   missingTemplateSteps,
   phaseLabel,
+  isPortalPreview,
   portalPreviewUrl,
   portalUrl,
   previewOpenMode,
+  shareTokenPlan,
   projectShareText,
   randomToken,
   reminderPlan,
@@ -417,14 +419,29 @@ function openShareSheet({ title, text, url, phone, email }) {
 }
 
 const tokenJobs = new Map();
+const tokenMinted = new Map();
 
-async function ensureToken(project) {
-  if (project.shareToken) return project.shareToken;
+async function ensureToken(project, { confirm = false } = {}) {
+  if (!project?.id) throw new Error("Prosjektet mangler id");
+  const cached = String(project.shareToken || "").trim();
+  if (!confirm && cached) return cached;
   if (tokenJobs.has(project.id)) return tokenJobs.get(project.id);
   const job = (async () => {
-    const shareToken = randomToken(12);
+    const snap = await db.collection("projects").doc(project.id).get();
+    if (!snap.exists) throw new Error("Fant ikke prosjektet");
+    const plan = shareTokenPlan({
+      serverToken: snap.data()?.shareToken,
+      localToken: cached || project.shareToken,
+    });
+    if (plan.action === "use") {
+      project.shareToken = plan.token;
+      tokenMinted.set(project.id, false);
+      return plan.token;
+    }
+    const shareToken = plan.token || randomToken(12);
     await db.collection("projects").doc(project.id).update({ shareToken, updatedAt: stamp() });
     project.shareToken = shareToken;
+    tokenMinted.set(project.id, true);
     return shareToken;
   })();
   tokenJobs.set(project.id, job);
@@ -455,10 +472,14 @@ async function openPreviewUrl(url) {
 
 async function previewAsCustomer(project) {
   try {
-    const hadLink = !!project.shareToken;
-    const token = await ensureToken(project);
-    if (!hadLink) toast("Kundelenken er opprettet");
-    await openPreviewUrl(portalPreviewUrl(project.id, token));
+    const token = await ensureToken(project, { confirm: true });
+    if (tokenMinted.get(project.id)) toast("Kundelenken er opprettet");
+    const url = portalPreviewUrl(project.id, token);
+    const built = new URL(url);
+    if (!built.searchParams.get("p") || !built.searchParams.get("t") || !isPortalPreview(built.searchParams)) {
+      throw new Error("Forhåndsvisningen mangler prosjekt eller kode");
+    }
+    await openPreviewUrl(url);
   } catch (error) {
     console.error(error);
     toast("Kunne ikke åpne forhåndsvisningen");
