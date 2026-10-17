@@ -1464,10 +1464,93 @@ function mountOffers(route) {
   const root = el("div", { class: "screen" });
   main.append(root);
   let items = [];
+  let costDoc = null;
+  let costLog = [];
+  let priceTable = pricesFromSettings(null);
+  let costQueue = Promise.resolve();
+  let toldCostRead = false;
+  let costSeen = false;
+  let costTimer;
+
+  const savePatch = (patch) => {
+    const projectId = route.projectId;
+    costQueue = costQueue.then(async () => {
+      const next = patchCost(costDoc, priceTable, patch);
+      const changes = costChanges(costDoc, next, priceTable);
+      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description";
+      if (!changes.length && !structural) return;
+      const stored = persistableCost(next);
+      costDoc = { ...costDoc, ...stored };
+      draw();
+      await db.collection("projects").doc(projectId).collection("quantities").doc("live").set({
+        ...stored,
+        updatedAt: stamp(),
+      }, { merge: true });
+      if (!changes.length) return;
+      try {
+        await Promise.all(changes.map((change) => db.collection("projects").doc(projectId).collection("costLog").add({
+          at: stamp(),
+          by: user?.uid || "",
+          byName: "Einar",
+          lineId: String(change.lineId).slice(0, 39),
+          label: String(change.label || "Linje").slice(0, 79),
+          field: change.field,
+          from: change.from,
+          to: change.to,
+          unit: change.unit || "",
+          text: changeText(change).slice(0, 299),
+        })));
+      } catch (error) {
+        console.error(error);
+        toast("Mengden er lagret, men historikken ble ikke skrevet.");
+      }
+    }).catch((error) => {
+      console.error(error);
+      toast("Kunne ikke lagre mengden");
+    });
+  };
+
   const draw = () => {
+    const active = document.activeElement;
+    if (active && root.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) {
+      return;
+    }
+    const project = projectById(route.projectId);
+    if (!project) {
+      root.replaceChildren(el("p", { class: "empty" }, "Fant ikke prosjektet."));
+      return;
+    }
+    const summary = liveCost({ cost: costDoc, prices: priceTable, items });
+    const shareCost = el("input", { type: "checkbox" });
+    shareCost.checked = customerSeesCost(project);
+    shareCost.addEventListener("change", async () => {
+      try {
+        await db.collection("projects").doc(project.id).update({
+          showCostToCustomer: shareCost.checked === true,
+          updatedAt: stamp(),
+        });
+        toast(shareCost.checked ? "Kunden kan se kostnadsoversikten" : "Kostnadsoversikten er skjult for kunden");
+      } catch (error) {
+        console.error(error);
+        shareCost.checked = customerSeesCost(project);
+        toast("Kunne ikke lagre valget");
+      }
+    });
+    const costExtras = [
+      el("label", { class: "checkline" }, [
+        shareCost,
+        el("span", {}, "Vis kostnad for kunden i portalen"),
+      ]),
+    ];
+    if (project.fikenProjectId) {
+      costExtras.push(button("Hent linjer fra Fiken", {
+        class: "btn btn-ghost btn-block",
+        onClick: () => applyFikenOfferLines(project.id, project.fikenProjectId),
+      }));
+    }
     root.replaceChildren(renderOfferList({
       items,
-      project: projectById(route.projectId),
+      project,
       onOpen: (itemId) => push({ name: "item", projectId: route.projectId, itemId }),
       onNew: async () => {
         try {
@@ -1478,13 +1561,57 @@ function mountOffers(route) {
           toast("Kunne ikke opprette posten");
         }
       },
+      cost: renderCostOverview({
+        summary,
+        history: costLog.map((entry) => ({
+          when: formatWhen(entry.at),
+          byName: entry.byName || "Einar",
+          text: entry.text || changeText(entry),
+        })),
+        editable: true,
+        showToCustomer: customerSeesCost(project),
+        extras: costExtras,
+        onAgreed: (value) => savePatch({ field: "agreedExVat", value }),
+        onQuantity: (lineId, field, value) => savePatch({ lineId, field, value }),
+        onAddExtra: () => savePatch({ addExtra: true, extraId: newExtraId() }),
+        onDeleteExtra: (extraId) => savePatch({ deleteExtraId: extraId }),
+        onExtra: (extraId, field, value) => savePatch({ extraId, field, value }),
+      }),
     }));
   };
+
+  refresh = () => draw();
   subs.push(db.collection("projects").doc(route.projectId).collection("items").onSnapshot((snap) => {
     items = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     items.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
     draw();
   }, (error) => console.error(error)));
+  const onCostReadError = (error) => {
+    console.error(error);
+    clearTimeout(costTimer);
+    costTimer = setTimeout(() => {
+      if (costSeen || toldCostRead) return;
+      toldCostRead = true;
+      toast(firestoreReadMessage(error));
+    }, 1500);
+  };
+  subs.push(db.collection("projects").doc(route.projectId).collection("quantities").doc("live").onSnapshot((snap) => {
+    costSeen = true;
+    clearTimeout(costTimer);
+    costDoc = snap.exists ? snap.data() : null;
+    draw();
+  }, onCostReadError));
+  subs.push(db.collection("projects").doc(route.projectId).collection("costLog").orderBy("at", "desc").limit(40).onSnapshot((snap) => {
+    costSeen = true;
+    clearTimeout(costTimer);
+    costLog = snap.docs.map((entry) => entry.data());
+    draw();
+  }, onCostReadError));
+  subs.push(() => clearTimeout(costTimer));
+  readAppSettings().then((settings) => {
+    priceTable = settings.prices;
+    draw();
+  });
   draw();
 }
 
@@ -1882,10 +2009,6 @@ function mountProject(route) {
   let drainageCount = 0;
   let hmsCount = 0;
   let fikenQuotes = [];
-  let costDoc = null;
-  let costLog = [];
-  let priceTable = pricesFromSettings(null);
-  let costQueue = Promise.resolve();
   const draw = () => {
     const active = document.activeElement;
     if (active && root.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) {
@@ -1997,88 +2120,8 @@ function mountProject(route) {
       button("Meldinger", { class: "btn btn-ghost", onClick: () => push({ name: "messages", projectId: project.id }) }),
       button("Dokumenter", { class: "btn btn-ghost", onClick: () => push({ name: "documents", projectId: project.id }) }),
     ]);
-    const summary = liveCost({ cost: costDoc, prices: priceTable, items });
-    const savePatch = (patch) => {
-      costQueue = costQueue.then(async () => {
-        const next = patchCost(costDoc, priceTable, patch);
-        const changes = costChanges(costDoc, next, priceTable);
-        const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description";
-        if (!changes.length && !structural) return;
-        const stored = persistableCost(next);
-        costDoc = { ...costDoc, ...stored };
-        draw();
-        await db.collection("projects").doc(project.id).collection("quantities").doc("live").set({
-          ...stored,
-          updatedAt: stamp(),
-        }, { merge: true });
-        if (!changes.length) return;
-        try {
-          await Promise.all(changes.map((change) => db.collection("projects").doc(project.id).collection("costLog").add({
-            at: stamp(),
-            by: user?.uid || "",
-            byName: "Einar",
-            lineId: String(change.lineId).slice(0, 39),
-            label: String(change.label || "Linje").slice(0, 79),
-            field: change.field,
-            from: change.from,
-            to: change.to,
-            unit: change.unit || "",
-            text: changeText(change).slice(0, 299),
-          })));
-        } catch (error) {
-          console.error(error);
-          toast("Mengden er lagret, men historikken ble ikke skrevet.");
-        }
-      }).catch((error) => {
-        console.error(error);
-        toast("Kunne ikke lagre mengden");
-      });
-    };
-    const shareCost = el("input", { type: "checkbox" });
-    shareCost.checked = customerSeesCost(project);
-    shareCost.addEventListener("change", async () => {
-      try {
-        await db.collection("projects").doc(project.id).update({
-          showCostToCustomer: shareCost.checked === true,
-          updatedAt: stamp(),
-        });
-        toast(shareCost.checked ? "Kunden kan se kostnadsoversikten" : "Kostnadsoversikten er skjult for kunden");
-      } catch (error) {
-        console.error(error);
-        shareCost.checked = customerSeesCost(project);
-        toast("Kunne ikke lagre valget");
-      }
-    });
-    const costExtras = [
-      el("label", { class: "checkline" }, [
-        shareCost,
-        el("span", {}, "Vis kostnad for kunden i portalen"),
-      ]),
-    ];
-    if (project.fikenProjectId) {
-      costExtras.push(button("Hent linjer fra Fiken", {
-        class: "btn btn-ghost btn-block",
-        onClick: () => applyFikenOfferLines(project.id, project.fikenProjectId),
-      }));
-    }
     root.append(
       info,
-      renderCostOverview({
-        summary,
-        history: costLog.map((entry) => ({
-          when: formatWhen(entry.at),
-          byName: entry.byName || "Einar",
-          text: entry.text || changeText(entry),
-        })),
-        editable: true,
-        showToCustomer: customerSeesCost(project),
-        extras: costExtras,
-        onAgreed: (value) => savePatch({ field: "agreedExVat", value }),
-        onQuantity: (lineId, field, value) => savePatch({ lineId, field, value }),
-        onAddExtra: () => savePatch({ addExtra: true, extraId: newExtraId() }),
-        onDeleteExtra: (extraId) => savePatch({ deleteExtraId: extraId }),
-        onExtra: (extraId, field, value) => savePatch({ extraId, field, value }),
-      }),
       renderFikenProjectBox({
         project,
         onList: () => callFiken("listFikenProjects", {}),
@@ -2117,35 +2160,6 @@ function mountProject(route) {
     hmsCount = activeHmsDocs(snap.docs.map((entry) => entry.data())).length;
     draw();
   }, (error) => console.error(error)));
-  let toldCostRead = false;
-  let costSeen = false;
-  let costTimer;
-  const onCostReadError = (error) => {
-    console.error(error);
-    clearTimeout(costTimer);
-    costTimer = setTimeout(() => {
-      if (costSeen || toldCostRead) return;
-      toldCostRead = true;
-      toast(firestoreReadMessage(error));
-    }, 1500);
-  };
-  subs.push(db.collection("projects").doc(route.projectId).collection("quantities").doc("live").onSnapshot((snap) => {
-    costSeen = true;
-    clearTimeout(costTimer);
-    costDoc = snap.exists ? snap.data() : null;
-    draw();
-  }, onCostReadError));
-  subs.push(db.collection("projects").doc(route.projectId).collection("costLog").orderBy("at", "desc").limit(40).onSnapshot((snap) => {
-    costSeen = true;
-    clearTimeout(costTimer);
-    costLog = snap.docs.map((entry) => entry.data());
-    draw();
-  }, onCostReadError));
-  subs.push(() => clearTimeout(costTimer));
-  readAppSettings().then((settings) => {
-    priceTable = settings.prices;
-    draw();
-  });
   draw();
 }
 

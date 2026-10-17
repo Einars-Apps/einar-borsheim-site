@@ -260,7 +260,6 @@ function render() {
     finished ? el("p", { class: "muted" }, `Ferdig ${formatDay(project.completedAt) || ""}`.trim()) : null,
     finished ? pdfSlot : el("p", { class: "muted" }, "Sluttrapporten kan lastes ned når oppdraget er ferdig og godkjent."),
   ]));
-  if (customerSeesCost(project)) viewProject.append(el("div", { id: "cost-slot" }));
   const knownPdf = displayUrl(project.pdfUrl);
   if (finished && project.pdfPath === pdfPath) {
     getDownloadURL(ref(storage, pdfPath)).then((url) => {
@@ -298,12 +297,15 @@ function render() {
   }
 
   const offerPosts = items.filter((item) => isOfferItem(item) && item.fikenBase !== true && item.approved === true && item.approvalRequested === true);
-  if (offerPosts.length) {
-    const box = el("section", { class: "k-card k-stack" }, [
+  if (offerPosts.length || customerSeesCost(project)) {
+    const box = el("section", { class: "k-card k-stack", id: "offers" }, [
       el("h2", {}, "Tilbud og endringer"),
-      el("p", { class: "muted" }, "Velg ett alternativ og trykk Godkjenn valgt løsning. Tidspunkt og navn lagres. Pris kr 0,00 er inkludert."),
     ]);
-    for (const item of offerPosts) box.append(offerCard(item));
+    if (offerPosts.length) {
+      box.append(el("p", { class: "muted" }, "Velg ett alternativ og trykk Godkjenn valgt løsning. Tidspunkt og navn lagres. Pris kr 0,00 er inkludert."));
+      for (const item of offerPosts) box.append(offerCard(item));
+    }
+    if (customerSeesCost(project)) box.append(el("div", { id: "cost-slot" }));
     viewProject.append(box);
   }
 
