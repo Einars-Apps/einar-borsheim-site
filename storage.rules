@@ -80,5 +80,15 @@ service firebase.storage {
         && request.resource.size < 25 * 1024 * 1024;
       allow update, delete: if isAdmin();
     }
+
+    // Bilde fra kontaktskjemaet. Hvem som helst kan laste opp ett bilde. Bare admin kan lese det.
+    match /henvendelser/{id}/{fileName} {
+      allow read: if isAdmin();
+      allow create: if id.matches('^[A-Za-z0-9]{16,32}$')
+        && fileName.matches('^[A-Za-z0-9._-]{1,80}$')
+        && request.resource.size < 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow update, delete: if false;
+    }
   }
 }

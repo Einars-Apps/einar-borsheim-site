@@ -60,6 +60,17 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.8rem 1.2rem;
+  flex-wrap: wrap;
+}
+
+.header-side {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem 1rem;
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .brand {
@@ -83,8 +94,16 @@ body {
 nav a {
   color: var(--muted);
   text-decoration: none;
-  margin-left: 1.2rem;
+  margin-left: 0.9rem;
   font-weight: 500;
+}
+
+nav a:first-child {
+  margin-left: 0;
+}
+
+.btn-call {
+  white-space: nowrap;
 }
 
 main {
@@ -137,6 +156,9 @@ h1 {
   padding: 0.65rem 1rem;
   border: 1px solid transparent;
   font-weight: 600;
+  font: inherit;
+  cursor: pointer;
+  display: inline-block;
 }
 
 .btn-primary {
@@ -189,6 +211,91 @@ h1 {
   border-color: var(--accent);
   background: linear-gradient(180deg, #f3faf7 0%, #ffffff 72%);
   box-shadow: 0 12px 28px #00695c18;
+}
+
+a.card {
+  color: inherit;
+  text-decoration: none;
+  display: block;
+}
+
+a.card:hover {
+  border-color: var(--accent);
+}
+
+.steps {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.lead-form label {
+  display: grid;
+  gap: 0.3rem;
+  font-weight: 600;
+  margin-top: 0.85rem;
+}
+
+.lead-form input,
+.lead-form textarea {
+  font: inherit;
+  color: inherit;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.7rem 0.75rem;
+  width: 100%;
+}
+
+.lead-form input:focus,
+.lead-form textarea:focus,
+.btn:focus-visible,
+nav a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lead-form button {
+  margin-top: 1rem;
+}
+
+.form-note,
+.form-status {
+  color: var(--muted);
+  margin: 0.6rem 0 0;
+}
+
+.thanks {
+  font-weight: 600;
+}
+
+.call-bar {
+  display: none;
+}
+
+.consent {
+  position: fixed;
+  z-index: 30;
+  left: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  max-width: 640px;
+  margin: 0 auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1rem;
+  box-shadow: 0 16px 40px #17242b22;
+}
+
+.consent p {
+  margin: 0;
+}
+
+.consent-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+  flex-wrap: wrap;
 }
 
 .site-footer {
@@ -283,11 +390,57 @@ h1 {
     gap: 0.6rem;
   }
 
+  .header-side {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
   nav a {
     margin: 0 0.9rem 0 0;
   }
 
   .cards {
     grid-template-columns: 1fr;
+  }
+
+  body {
+    padding-bottom: calc(4.8rem + env(safe-area-inset-bottom));
+  }
+
+  .call-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    position: fixed;
+    z-index: 40;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #fffaf1;
+    border-top: 1px solid var(--line);
+    padding: 0.55rem 0.7rem calc(0.55rem + env(safe-area-inset-bottom));
+    gap: 0.5rem;
+  }
+
+  .call-bar a {
+    text-align: center;
+    text-decoration: none;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 0.7rem 0.4rem;
+  }
+
+  .call-bar a:first-child {
+    background: var(--accent);
+    color: #f3fffc;
+  }
+
+  .call-bar a:last-child {
+    border: 1px solid var(--line);
+    color: var(--ink);
+    background: #fff;
+  }
+
+  .consent {
+    bottom: calc(4.6rem + env(safe-area-inset-bottom));
   }
 }
