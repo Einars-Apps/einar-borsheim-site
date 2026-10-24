@@ -434,5 +434,50 @@ service cloud.firestore {
         allow update, delete: if isAdmin();
       }
     }
+
+    function validHenvendelse(id) {
+    return request.resource.data.keys().hasOnly([
+        'name', 'phone', 'email', 'place', 'text', 'storagePath', 'contentType', 'createdAt'
+      ])
+      && request.resource.data.name is string
+      && request.resource.data.name.size() > 1
+      && request.resource.data.name.size() < 80
+      && request.resource.data.phone is string
+      && request.resource.data.phone.matches('^[+0-9][0-9 ]{7,18}$')
+      && request.resource.data.place is string
+      && request.resource.data.place.size() > 1
+      && request.resource.data.place.size() < 80
+      && request.resource.data.text is string
+      && request.resource.data.text.size() > 2
+      && request.resource.data.text.size() < 2000
+      && request.resource.data.createdAt == request.time
+      && (
+        !request.resource.data.keys().hasAny(['email'])
+        || (
+          request.resource.data.email is string
+          && request.resource.data.email.size() > 3
+          && request.resource.data.email.size() < 200
+          && request.resource.data.email.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')
+        )
+      )
+      && (
+        !request.resource.data.keys().hasAny(['storagePath', 'contentType'])
+        || (
+          request.resource.data.keys().hasAll(['storagePath', 'contentType'])
+          && request.resource.data.storagePath is string
+          && request.resource.data.contentType is string
+          && request.resource.data.storagePath.matches('^henvendelser/' + id + '/[A-Za-z0-9._-]{1,80}$')
+          && request.resource.data.contentType.matches('image/(jpeg|png|webp)')
+        )
+      );
+    }
+
+    // Henvendelser fra nettsiden. Hvem som helst kan opprette ett dokument.
+    // Bare admin kan lese. Ingen kan endre eller slette via reglene.
+    match /henvendelser/{id} {
+      allow create: if id.matches('^[A-Za-z0-9]{16,32}$') && validHenvendelse(id);
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
   }
 }

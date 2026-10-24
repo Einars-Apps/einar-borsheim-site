@@ -257,6 +257,7 @@ function updateChrome() {
     drainage: [route.docId ? "Strekk" : "Drenering", projectName(route.projectId)],
     offers: ["Tilbud og endringer", projectName(route.projectId)],
     order: ["Ny bestilling", ""],
+    henvendelser: ["Henvendelser", "Fra nettsiden"],
   };
   const [title, kicker] = titles[route.name] || ["Internkontroll", ""];
   topTitle.textContent = title || "Internkontroll";
@@ -347,6 +348,7 @@ function render() {
     drainage: mountDrainage,
     offers: mountOffers,
     order: mountOrder,
+    henvendelser: mountHenvendelser,
   };
   (mounts[route.name] || mountProjects)(route);
 }
@@ -1706,6 +1708,48 @@ function mountOrder() {
   }));
 }
 
+function mountHenvendelser() {
+  const root = el("div", { class: "screen stack" });
+  const list = el("div", { class: "stack" });
+  root.append(
+    el("p", { class: "meta" }, "Henvendelser fra nettsiden. Bare lesing."),
+    list,
+  );
+  main.append(root);
+  subs.push(db.collection("henvendelser").orderBy("createdAt", "desc").limit(50).onSnapshot((snap) => {
+    list.replaceChildren();
+    if (snap.empty) {
+      list.append(el("p", { class: "empty" }, "Ingen henvendelser ennå."));
+      return;
+    }
+    snap.forEach((doc) => list.append(leadCard(doc.data())));
+  }, (error) => {
+    console.error(error);
+    list.replaceChildren(el("p", { class: "empty" }, "Kunne ikke hente henvendelsene."));
+  }));
+}
+
+function leadCard(data) {
+  const phone = String(data.phone || "").trim();
+  const email = String(data.email || "").trim();
+  const card = el("article", { class: "card continue stack" }, [
+    el("h2", {}, data.name || "Henvendelse"),
+    el("p", { class: "meta" }, [data.place, formatWhen(data.createdAt)].filter(Boolean).join(" · ")),
+    phone ? el("p", {}, el("a", { href: `tel:${phone.replace(/\s/g, "")}` }, phone)) : null,
+    email ? el("p", {}, el("a", { href: `mailto:${email}` }, email)) : null,
+    data.text ? el("p", {}, data.text) : null,
+  ]);
+  if (data.storagePath) {
+    const img = el("img", { alt: "Bilde fra henvendelsen", hidden: true });
+    card.append(img);
+    storage.ref(String(data.storagePath)).getDownloadURL().then((url) => {
+      img.src = url;
+      img.hidden = false;
+    }).catch((error) => console.error(error));
+  }
+  return card;
+}
+
 function mountProjects() {
   const root = el("div", { class: "screen" });
   const list = el("div", { class: "stack" });
@@ -1732,6 +1776,7 @@ function mountProjects() {
       onPick: (card) => importFikenProject(card),
     }),
     el("div", { class: "action-row" }, [
+      button("Henvendelser", { class: "btn btn-ghost", onClick: () => push({ name: "henvendelser" }) }),
       button("Fullførte", { class: "btn btn-ghost", onClick: () => push({ name: "done" }) }),
       button("Papirkurv", { class: "btn btn-ghost", onClick: () => push({ name: "trash" }) }),
       button("Bildemaler", { class: "btn btn-ghost", onClick: () => push({ name: "templates" }) }),

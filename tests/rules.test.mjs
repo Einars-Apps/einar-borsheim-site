@@ -681,6 +681,37 @@ test("storage: HMS-filer leses av kunden bare når dokumentet er delt", async ()
   await assertFails(getBytes(ref(kunde.storage(), "projects/p1/hms/borte/slettet.pdf")));
 });
 
+test("henvendelse kan opprettes uten innlogging, og bare admin kan lese", async () => {
+  const id = "abcdefghij1234567890";
+  const base = {
+    name: "Kari Nord",
+    phone: "905 52 065",
+    place: "Bærum",
+    text: "Fuktig kjeller.",
+    createdAt: serverTimestamp(),
+  };
+  const stranger = strangerDb();
+  await assertSucceeds(setDoc(doc(stranger, `henvendelser/${id}`), base));
+  await assertFails(getDoc(doc(stranger, `henvendelser/${id}`)));
+  await assertFails(updateDoc(doc(stranger, `henvendelser/${id}`), { text: "Endret" }));
+  await assertFails(setDoc(doc(stranger, "henvendelser/kort"), base));
+  await assertFails(setDoc(doc(stranger, `henvendelser/${id}b`), { ...base, name: "A" }));
+  const admin = adminDb();
+  const snap = await assertSucceeds(getDoc(doc(admin, `henvendelser/${id}`)));
+  assert.equal(snap.data().name, "Kari Nord");
+  await assertFails(updateDoc(doc(admin, `henvendelser/${id}`), { text: "Endret" }));
+  const open = env.unauthenticatedContext();
+  const adminStorage = env.authenticatedContext("admin-user", { email: "e.bors@hotmail.com" });
+  await assertSucceeds(uploadString(ref(open.storage(), `henvendelser/${id}/bilde.jpg`), "img", "raw", {
+    contentType: "image/jpeg",
+  }));
+  await assertFails(getBytes(ref(open.storage(), `henvendelser/${id}/bilde.jpg`)));
+  await assertSucceeds(getBytes(ref(adminStorage.storage(), `henvendelser/${id}/bilde.jpg`)));
+  await assertFails(uploadString(ref(open.storage(), `henvendelser/${id}/fil.exe`), "x", "raw", {
+    contentType: "application/octet-stream",
+  }));
+});
+
 test("regelfilene slipper ikke gjennom åpen skriving", () => {
   const firestore = readFileSync("firestore.rules", "utf8");
   const storage = readFileSync("storage.rules", "utf8");

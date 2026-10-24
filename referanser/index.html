@@ -1,13 +1,8 @@
 <!doctype html>
 <html lang="no">
   <head>
+    <script src="../samtykke.js"></script>
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-XCQTBQVK7C"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config', 'G-XCQTBQVK7C');
-    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Referanser | Einar A Børsheim</title>
@@ -31,18 +26,22 @@
   <body data-page="referanser">
     <header class="site-header">
       <a class="brand" href="../index.html"><img src="../assets/logo-256.png" alt="" width="52" height="52" />Einar A Børsheim</a>
-      <nav>
-        <a href="../index.html#om">Om</a>
-        <a href="../index.html#tjenester">Tjenester</a>
-        <a href="../index.html#kontakt">Kontakt</a>
-      </nav>
+      <div class="header-side">
+        <a class="btn btn-primary btn-call" href="tel:+4790552065">Ring 905 52 065</a>
+        <nav>
+          <a href="../drenering/">Drenering</a>
+          <a href="../graving/">Graving</a>
+          <a href="../sprengning/">Sprengning</a>
+          <a href="../index.html#kontakt">Kontakt</a>
+        </nav>
+      </div>
     </header>
     <main>
       <section class="hero" data-referanser-side hidden>
         <p class="eyebrow">Referanser</p>
         <h1>Utvalgte oppdrag</h1>
         <p class="lead">
-          Et utvalg prosjekter fra Einar A Børsheim i Asker og omegn. Bare innhold som er
+          Et utvalg prosjekter fra Einar A Børsheim i Asker, Bærum, Lier og Oslo. Bare innhold som er
           godkjent for visning ligger her: bilder, kort omtale og kundevurderinger.
         </p>
       </section>
@@ -56,7 +55,12 @@
     </main>
     <footer class="site-footer">
       <p>&copy; <span id="year"></span> Einar A Børsheim &middot; Org.nr 962 091 504</p>
+      <p><a href="../personvern/">Personvern</a></p>
     </footer>
+    <div class="call-bar">
+      <a href="tel:+4790552065">Ring 905 52 065</a>
+      <a href="mailto:post@einar-borsheim.com">E-post</a>
+    </div>
     <script src="../script.js"></script>
     <script type="module" src="../referanser.js"></script>
   </body>
