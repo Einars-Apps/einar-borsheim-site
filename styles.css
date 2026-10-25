@@ -228,6 +228,16 @@ a.card:hover {
   padding-left: 1.2rem;
 }
 
+.faq h3 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin: 1.15rem 0 0.25rem;
+}
+
+.faq h3:first-of-type {
+  margin-top: 0.2rem;
+}
+
 .lead-form label {
   display: grid;
   gap: 0.3rem;
