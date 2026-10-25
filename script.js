@@ -10,16 +10,20 @@ document.addEventListener("click", (event) => {
 });
 
 const consentKey = "samtykke";
-let consentChoice = "";
-try { consentChoice = localStorage.getItem(consentKey) || ""; } catch (error) { consentChoice = ""; }
 
-if (!consentChoice) {
+function readConsent() {
+  try { return localStorage.getItem(consentKey) || ""; } catch (error) { return ""; }
+}
+
+function showConsentBanner() {
+  if (document.querySelector(".consent")) return;
+
   const banner = document.createElement("div");
   banner.className = "consent";
   banner.setAttribute("role", "dialog");
   banner.setAttribute("aria-label", "Informasjonskapsler");
   const text = document.createElement("p");
-  text.append("Vi bruker analyse bare hvis du godtar. ");
+  text.append("Informasjonskapsler for analyse settes bare hvis du godtar. Uten samtykke settes ingen slike kapsler, og det sendes bare anonyme signaler uten informasjonskapsler. ");
   const privacy = document.createElement("a");
   privacy.href = "/personvern/";
   privacy.textContent = "Les om personvern";
@@ -35,8 +39,10 @@ if (!consentChoice) {
   allow.className = "btn btn-primary";
   allow.textContent = "Godta";
   actions.append(deny, allow);
+  banner.tabIndex = -1;
   banner.append(text, actions);
   document.body.append(banner);
+  banner.focus({ preventScroll: true });
 
   function choose(value) {
     try { localStorage.setItem(consentKey, value); } catch (error) { /* valget gjelder bare dette besøket */ }
@@ -55,3 +61,12 @@ if (!consentChoice) {
   deny.addEventListener("click", () => choose("avslatt"));
   allow.addEventListener("click", () => choose("godtatt"));
 }
+
+if (!readConsent()) showConsentBanner();
+
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest?.("[data-endre-samtykke]");
+  if (!trigger) return;
+  event.preventDefault();
+  showConsentBanner();
+});

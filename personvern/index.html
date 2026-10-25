@@ -27,7 +27,7 @@
     <div class="bg-shape bg-shape-a" aria-hidden="true"></div>
     <div class="bg-shape bg-shape-b" aria-hidden="true"></div>
     <header class="site-header">
-      <a class="brand" href="../index.html"><img src="../assets/logo-256.png" alt="" width="52" height="52" />Einar A Børsheim</a>
+      <a class="brand" href="../index.html"><img src="../assets/logo-256.png" alt="Einar A Børsheim logo" width="52" height="52" />Einar A Børsheim</a>
       <div class="header-side">
         <a class="btn btn-primary btn-call" href="tel:+4790552065">Ring 905 52 065</a>
         <nav>
@@ -41,7 +41,7 @@
         <p class="eyebrow">Personvern</p>
         <h1>Slik bruker vi opplysningene</h1>
         <p class="lead">
-          Einar A Børsheim, Eriksvei 13, 1386 Asker, org.nr 962 091 504.
+          Einar A Børsheim, Eriks vei 13, 1386 Asker, org.nr 962 091 504.
           Spørsmål kan sendes til <a href="mailto:post@einar-borsheim.com">post@einar-borsheim.com</a>.
         </p>
       </section>
@@ -50,8 +50,9 @@
         <p>
           Skjemaet ber om navn, telefon, sted eller kommune og en kort beskrivelse.
           E-post og bilde er valgfritt. Opplysningene lagres i Firebase, i samlingen henvendelser.
-          Et bilde lagres under henvendelser/ i Firebase Storage. Bare innehaveren, med innlogging
-          e.bors@hotmail.com, kan lese henvendelsen. Den brukes til å svare på forespørselen.
+          Et bilde lagres under henvendelser/ i Firebase Storage. Bare innehaveren kan lese henvendelsen.
+          Den brukes til å svare på forespørselen, og spørsmål sendes til
+          <a href="mailto:post@einar-borsheim.com">post@einar-borsheim.com</a>.
         </p>
         <p>
           Skjemaet kan feile. Da kan du sende det samme til
@@ -61,19 +62,22 @@
       <section class="panel">
         <h2>Analyse og annonser</h2>
         <p>
-          Nettstedet har Google Analytics 4 med måle-ID G-XCQTBQVK7C. Analyse er avslått til du
-          trykker Godta. Valget lagres i nettleseren din. Ved avslag forblir lagring til analyse og
-          annonser avslått. Google Ads-koden er ikke satt inn ennå. Når den kommer, bruker den samme
-          samtykke.
+          Nettstedet har Google Analytics 4 med måle-ID G-XCQTBQVK7C. Informasjonskapsler for
+          analyse og annonser settes bare hvis du trykker Godta. Valget lagres i nettleseren din.
+          Ved avslag settes ingen slike kapsler. Google mottar likevel anonyme signaler uten
+          informasjonskapsler, slik at besøket kan telles uten at nettleseren gjenkjennes senere.
+          Google Ads-koden er ikke satt inn ennå. Når den kommer, bruker den samme samtykke.
         </p>
         <p>
-          Du kan endre valget ved å slette lagrede data for einar-borsheim.com i nettleseren.
-          Da vises spørsmålet på nytt.
+          Du kan endre valget når som helst med
+          <a href="#samtykke" data-endre-samtykke>Endre samtykke</a>
+          nederst på siden. Da vises spørsmålet på nytt.
         </p>
       </section>
     </main>
     <footer class="site-footer">
       <p>&copy; <span id="year"></span> Einar A Børsheim &middot; Org.nr 962 091 504</p>
+      <p><a href="#samtykke" data-endre-samtykke>Endre samtykke</a></p>
     </footer>
     <div class="call-bar">
       <a href="tel:+4790552065">Ring 905 52 065</a>
