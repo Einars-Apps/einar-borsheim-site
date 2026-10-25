@@ -295,7 +295,6 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .tile-kunde .tile-ico { background: #f8ece4; color: var(--clay); }
 .tile-endring .tile-ico { background: #e7eef8; color: #24507a; }
 .tile-avvik .tile-ico { background: #f8eee4; color: var(--warn); }
-.tile-drenering .tile-ico { background: #e5f3f8; color: #1a5f78; }
 .tile-rapport, .tile-hms { grid-column: 1 / -1; min-height: 92px; flex-direction: row; align-items: center; gap: 12px; }
 .tile-rapport .tile-copy, .tile-hms .tile-copy { display: flex; flex-direction: column; gap: 2px; }
 .tile-hms .tile-ico { background: #f8efe0; color: var(--warn); }

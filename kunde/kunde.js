@@ -34,6 +34,7 @@ import {
   formatWhen,
   isCompleted,
   isPortalPreview,
+  normalizedCustomerName,
   portalAccessStep,
 } from "../www/js/logic.js";
 import {
@@ -47,7 +48,6 @@ import {
   offerStatusLabel,
   offerTypeLabel,
 } from "../www/js/offers.js";
-import { drainageReportText, reportIsPublished, verdictLabel } from "../www/js/drainage.js";
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
 import { renderCostOverview } from "../www/js/cost-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
@@ -78,7 +78,6 @@ let approvedDocs = [];
 let ownDocs = [];
 let hmsDocs = [];
 let thread = [];
-let drainagePoints = [];
 let costState = null;
 let costHistory = [];
 let stopCost = null;
@@ -253,9 +252,11 @@ function render() {
   if (previewMode) {
     viewProject.append(el("p", { class: "preview-banner", role: "status" }, PORTAL_PREVIEW_BANNER));
   }
+  const customerName = normalizedCustomerName(project.customerName);
   viewProject.append(el("section", { class: "k-card k-stack" }, [
     el("p", { class: "muted" }, "Ditt prosjekt"),
     el("h1", {}, project.name || "Prosjekt"),
+    customerName ? el("p", { class: "customer-name" }, customerName) : null,
     project.description ? el("p", { class: "pre" }, project.description) : null,
     project.address ? el("p", { class: "muted" }, project.address) : null,
     finished ? el("p", { class: "muted" }, `Ferdig ${formatDay(project.completedAt) || ""}`.trim()) : null,
@@ -281,21 +282,6 @@ function render() {
   viewProject.append(el("section", { id: "report-photos", class: "k-card k-stack", hidden: true }, [
     el("h2", {}, "Bilder"),
   ]));
-
-  if (reportIsPublished(project) && drainagePoints.length) {
-    const drainage = el("section", { class: "k-card k-stack" }, [
-      el("h2", {}, "Drenering – dokumentasjon og vurdering"),
-      el("p", { class: "muted" }, "Det samme ligger i sluttrapporten."),
-    ]);
-    for (const point of drainagePoints) {
-      drainage.append(el("article", {}, [
-        el("h3", {}, point.name || "Strekk"),
-        el("p", { class: "muted" }, verdictLabel(point.verdict)),
-        drainageReportText(point) ? el("p", { class: "pre" }, drainageReportText(point)) : null,
-      ]));
-    }
-    viewProject.append(drainage);
-  }
 
   const offerPosts = items.filter((item) => isOfferItem(item) && item.fikenBase !== true && item.approved === true && item.approvalRequested === true);
   if (offerPosts.length || customerSeesCost(project)) {
@@ -967,11 +953,6 @@ function startPortal() {
       where("trashed", "==", false),
     ), (snap) => {
       hmsDocs = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-      render();
-    }, (error) => console.error(error));
-    onSnapshot(collection(db, "projects", projectId, "drainage"), (snap) => {
-      drainagePoints = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-      drainagePoints.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
       render();
     }, (error) => console.error(error));
     onSnapshot(query(collection(db, "projects", projectId, "messages"), orderBy("createdAt", "asc")), (snap) => {
