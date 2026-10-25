@@ -368,14 +368,38 @@ export function buildReferenceDoc(project, items, photosByItem = {}) {
   };
 }
 
+export function normalizedCustomerName(value) {
+  return String(value ?? "").trim().slice(0, 120);
+}
+
+// Kundenavnet ligger på prosjektet. Rapportutkastet kan ha kopiert det som en
+// egen linje «Kunde: …». Bare den linjen oppdateres, ikke fri tekst ellers.
+export function customerNamePatch(project, value) {
+  const customerName = normalizedCustomerName(value);
+  const previous = normalizedCustomerName(project?.customerName);
+  const patch = { customerName };
+  if (!previous || previous === customerName) return patch;
+  const reportText = String(project?.reportText || "");
+  let changed = false;
+  const lines = reportText.split("\n").map((line) => {
+    if (line !== `Kunde: ${previous}`) return line;
+    changed = true;
+    return customerName ? `Kunde: ${customerName}` : "";
+  });
+  if (!changed) return patch;
+  patch.reportText = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+  return patch;
+}
+
 export function buildLocalDraft(project, items, extras = {}) {
   const photosByItem = extras.photosByItem || {};
   const commentsByItem = extras.commentsByItem || {};
   const shownPhotos = representativeKeys(items, photosByItem);
+  const customerName = normalizedCustomerName(project?.customerName);
   const lines = [];
   lines.push(`Oppdrag: ${project?.name || "Uten navn"}`);
   if (project?.address) lines.push(`Adresse: ${project.address}`);
-  if (project?.customerName) lines.push(`Kunde: ${project.customerName}`);
+  if (customerName) lines.push(`Kunde: ${customerName}`);
   lines.push("");
   lines.push("Arbeid utført");
   lines.push("Skriv om hva som ble gjort. Punktene under er hentet fra notatene i prosjektet og kan redigeres.");

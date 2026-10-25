@@ -28,6 +28,7 @@ import {
   reminderWhenLabel,
   toDate,
   trashDaysLeft,
+  customerNamePatch,
 } from "./js/logic.js";
 import { canSpeak, dictate } from "./js/speech.js";
 import { AI_DRAFT_URL, requestAiDraft } from "./js/ai.js";
@@ -1175,8 +1176,16 @@ async function saveReportPdf(project, reportText) {
       })),
     });
   }
+  let customerName = project.customerName || "";
+  try {
+    const fresh = await db.collection("projects").doc(project.id).get();
+    if (fresh.exists && fresh.data().customerName != null) customerName = String(fresh.data().customerName);
+  } catch (error) {
+    console.error(error);
+  }
+  const named = { ...project, customerName };
   const result = await generatePdfBlob({
-    project,
+    project: named,
     reportText,
     sections,
     photos: sortPhotos(reportShots, "oldest"),
@@ -1184,7 +1193,7 @@ async function saveReportPdf(project, reportText) {
   const path = `projects/${project.id}/rapport/sluttrapport.pdf`;
   await storage.ref(path).put(result.blob, { contentType: "application/pdf" });
   const pdfUrl = await storage.ref(path).getDownloadURL();
-  const saved = { ...project, pdfUrl, pdfPath: path, reportText };
+  const saved = { ...named, pdfUrl, pdfPath: path, reportText };
   await db.collection("projects").doc(project.id).update({
     pdfUrl,
     pdfPath: path,
@@ -2072,7 +2081,6 @@ function mountProject(route) {
   main.append(root);
   let items = [];
   let legacy = [];
-  let drainageCount = 0;
   let hmsCount = 0;
   let fikenQuotes = [];
   const draw = () => {
@@ -2135,14 +2143,6 @@ function mountProject(route) {
     ]);
     offersTile.addEventListener("click", () => push({ name: "offers", projectId: project.id }));
     tiles.append(offersTile);
-    const drainageTile = el("button", { type: "button", class: "tile tile-drenering" }, [
-      el("span", { class: "tile-ico" }, [icon("drop")]),
-      el("span", {}, [
-        el("span", { class: "tile-label" }, "Drenering"),
-        el("span", { class: "tile-count" }, `${drainageCount} strekk`),
-      ]),
-    ]);
-    drainageTile.addEventListener("click", () => push({ name: "drainage", projectId: project.id }));
     const tileSpec = [
       ["bilde", "camera", "Bilder", count("bilde") + queued],
       ["kunde", "user", "Fra kunde", count("kunde")],
@@ -2163,7 +2163,6 @@ function mountProject(route) {
       tile.addEventListener("click", () => push({ name: "section", projectId: project.id, kind }));
       tiles.append(tile);
     }
-    tiles.append(drainageTile);
     const report = el("button", { type: "button", class: "tile tile-rapport" }, [
       el("span", { class: "tile-ico" }, [icon("file")]),
       el("span", { class: "tile-copy" }, [
@@ -2218,10 +2217,6 @@ function mountProject(route) {
     legacy = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     draw();
   }));
-  subs.push(db.collection("projects").doc(route.projectId).collection("drainage").onSnapshot((snap) => {
-    drainageCount = snap.size;
-    draw();
-  }, (error) => console.error(error)));
   subs.push(db.collection("projects").doc(route.projectId).collection("hmsDocs").onSnapshot((snap) => {
     hmsCount = activeHmsDocs(snap.docs.map((entry) => entry.data())).length;
     draw();
@@ -2543,22 +2538,77 @@ async function setProjectStatus(project, status) {
   }
 }
 
+function applyCustomerName(project, patch) {
+  const current = projectById(project.id);
+  if (!current) return;
+  current.customerName = patch.customerName;
+  if (patch.reportText != null) current.reportText = patch.reportText;
+}
+
+function saveCustomerName(project, value) {
+  const source = projectById(project.id) || project;
+  const previous = {
+    customerName: source.customerName || "",
+    reportText: source.reportText,
+  };
+  const patch = customerNamePatch(source, value);
+  applyCustomerName(project, patch);
+  return db.collection("projects").doc(project.id).update({
+    ...patch,
+    updatedAt: stamp(),
+  }).then(() => true).catch((error) => {
+    console.error(error);
+    const current = projectById(project.id);
+    if (current && current.customerName === patch.customerName) {
+      current.customerName = previous.customerName;
+      if (patch.reportText != null) current.reportText = previous.reportText;
+    }
+    toast("Kunne ikke lagre kundenavnet");
+    return false;
+  });
+}
+
 function customerBox(project) {
-  const name = el("input", { type: "text", maxlength: "120", value: project.customerName || "", placeholder: "Kundens navn" });
-  let timer;
+  const name = el("input", {
+    type: "text",
+    maxlength: "120",
+    value: project.customerName || "",
+    placeholder: "Kundens navn",
+    autocomplete: "name",
+  });
+  let timer = 0;
+  let tail = Promise.resolve();
+  let lastWritten = String(project.customerName || "").trim();
+  const commit = () => {
+    clearTimeout(timer);
+    timer = 0;
+    const next = name.value.trim();
+    if (next === lastWritten) return;
+    lastWritten = next;
+    tail = tail.then(() => {
+      const latest = name.value.trim();
+      lastWritten = latest;
+      return saveCustomerName(project, latest).then((ok) => {
+        if (!ok) lastWritten = String((projectById(project.id) || project).customerName || "").trim();
+      });
+    }).catch((error) => {
+      console.error(error);
+    });
+  };
   name.addEventListener("input", () => {
     clearTimeout(timer);
-    timer = setTimeout(() => {
-      db.collection("projects").doc(project.id).update({
-        customerName: name.value.trim(),
-        updatedAt: stamp(),
-      }).catch((error) => {
-        console.error(error);
-        toast("Kunne ikke lagre kundenavnet");
-      });
-    }, 600);
+    timer = setTimeout(commit, 400);
   });
-  name.addEventListener("blur", () => setTimeout(() => refresh(), 0));
+  name.addEventListener("change", commit);
+  name.addEventListener("blur", () => {
+    const changed = name.value.trim() !== lastWritten;
+    commit();
+    if (!changed) return;
+    setTimeout(() => {
+      if (document.activeElement === name) return;
+      refresh();
+    }, 0);
+  });
   const link = el("input", { type: "text", readonly: true, value: "Henter lenke…" });
   ensureToken(project).then((token) => {
     link.value = portalUrl(project.id, token);
@@ -3572,7 +3622,7 @@ function reviewFacts(item) {
 function mountForm(route) {
   const name = el("input", { type: "text", required: true, maxlength: "140", placeholder: "F.eks. Hageanlegg med støttemur" });
   const address = el("input", { type: "text", maxlength: "180", placeholder: "Kun synlig for deg og kunden" });
-  const customerName = el("input", { type: "text", maxlength: "120" });
+  const customerName = el("input", { type: "text", maxlength: "120", placeholder: "Kundens navn", autocomplete: "name" });
   const customerPhone = el("input", { type: "tel", maxlength: "40", autocomplete: "tel" });
   const customerEmail = el("input", { type: "email", maxlength: "120", autocomplete: "email" });
   const description = el("textarea", { rows: "3", maxlength: "2000" });
@@ -3640,10 +3690,12 @@ function mountForm(route) {
   main.append(form);
 
   let originalCompleted = "";
+  let loadedProject = null;
   if (route.projectId) {
     db.collection("projects").doc(route.projectId).get().then((snap) => {
       if (!snap.exists) return;
       const data = snap.data();
+      loadedProject = data;
       const fill = (input, value) => {
         if (document.activeElement === input) return;
         input.value = value || "";
@@ -3678,10 +3730,12 @@ function mountForm(route) {
     const trimmed = name.value.trim();
     if (!trimmed) return;
     save.disabled = true;
+    const source = route.projectId ? (projectById(route.projectId) || loadedProject || {}) : {};
+    const nameFields = customerNamePatch(source, customerName.value);
     const common = {
       name: trimmed,
       address: address.value.trim(),
-      customerName: customerName.value.trim(),
+      customerName: nameFields.customerName,
       customerPhone: customerPhone.value.trim(),
       customerEmail: customerEmail.value.trim(),
       description: description.value.trim(),
@@ -3726,6 +3780,7 @@ function mountForm(route) {
         public: isPublic.checked,
         showGpsInReport: showGps.checked,
       };
+      if (nameFields.reportText != null) patch.reportText = nameFields.reportText;
       if (completed.value) {
         patch.completedAt = firebase.firestore.Timestamp.fromDate(new Date(`${completed.value}T12:00:00`));
         patch.status = "fullfort";
@@ -3738,6 +3793,7 @@ function mountForm(route) {
         patch.status = "aktiv";
       }
       await db.collection("projects").doc(route.projectId).update(patch);
+      applyCustomerName({ id: route.projectId }, nameFields);
       let published = true;
       try {
         await publishReference(route.projectId);

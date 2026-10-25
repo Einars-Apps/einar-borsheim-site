@@ -6,6 +6,8 @@ import {
   backAction,
   buildLocalDraft,
   buildReferenceDoc,
+  customerNamePatch,
+  normalizedCustomerName,
   dueReminderCount,
   isCompleted,
   missingTemplateSteps,
@@ -159,11 +161,38 @@ test("utkast fra notater tar med godkjente punkt og hopper over ventende", () =>
       commentsByItem: { 2: [{ text: "Avklart med kunde", approved: true, createdAt: "2024-05-03T08:00:00Z" }] },
     }
   );
+  assert.match(draft, /Kunde: Ola/);
   assert.match(draft, /Ekstra trapp/);
   assert.match(draft, /Tele i massene/);
   assert.match(draft, /Trappen/);
   assert.match(draft, /Avklart med kunde/);
   assert.equal(draft.includes("Ventende beskjed"), false);
+});
+
+test("kundenavn kan settes, endres og tømmes, og bare den kopierte linjen i utkastet følger med", () => {
+  assert.equal(normalizedCustomerName("  Kari  "), "Kari");
+  assert.equal(normalizedCustomerName(""), "");
+  assert.equal(normalizedCustomerName(null), "");
+  assert.equal(normalizedCustomerName("x".repeat(200)).length, 120);
+
+  assert.deepEqual(customerNamePatch({ customerName: "" }, "  Kari Nordmann  "), {
+    customerName: "Kari Nordmann",
+  });
+  assert.deepEqual(customerNamePatch({ customerName: "Kari" }, "Kari"), {
+    customerName: "Kari",
+  });
+
+  const draft = "Oppdrag: Hagen\nKunde: Kari\n\nArbeid utført\nKunden ville ha hekk.\n";
+  const renamed = customerNamePatch({ customerName: "Kari", reportText: draft }, "Ola");
+  assert.equal(renamed.customerName, "Ola");
+  assert.match(renamed.reportText, /Kunde: Ola/);
+  assert.equal(renamed.reportText.includes("Kunde: Kari"), false);
+  assert.match(renamed.reportText, /Kunden ville ha hekk/);
+
+  const cleared = customerNamePatch({ customerName: "Ola", reportText: renamed.reportText }, "  ");
+  assert.equal(cleared.customerName, "");
+  assert.equal(cleared.reportText.includes("Kunde:"), false);
+  assert.match(cleared.reportText, /Kunden ville ha hekk/);
 });
 
 test("pågår, tilbud, fullført og papirkurv leser begge statusord", () => {
