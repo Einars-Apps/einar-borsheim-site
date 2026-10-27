@@ -5,8 +5,14 @@ document.addEventListener("click", (event) => {
   const link = event.target.closest?.("a[href]");
   if (!link || typeof gtag !== "function") return;
   const href = link.getAttribute("href") || "";
-  if (href.startsWith("tel:")) gtag("event", "klikk_telefon", { link_url: href });
-  if (href.startsWith("mailto:")) gtag("event", "klikk_epost", { link_url: href });
+  if (href.startsWith("tel:")) {
+    gtag("event", "klikk_telefon", { link_url: href });
+    if (href.replace(/\D/g, "").endsWith("90552065") && typeof adsKonvertering === "function") adsKonvertering("telefon");
+  }
+  if (href.startsWith("mailto:")) {
+    gtag("event", "klikk_epost", { link_url: href });
+    if (/^mailto:post@einar-borsheim\.com(?:\?|$)/i.test(href) && typeof adsKonvertering === "function") adsKonvertering("epost");
+  }
 });
 
 const consentKey = "samtykke";
@@ -55,6 +61,7 @@ function showConsentBanner() {
         ad_personalization: state,
         analytics_storage: state,
       });
+      if (granted && typeof konfigurerGoogleAds === "function") konfigurerGoogleAds();
     }
     banner.remove();
   }

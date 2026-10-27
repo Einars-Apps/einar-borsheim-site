@@ -93,7 +93,7 @@ test("nettsiden har tjenestesider, skjema, samtykke og området", () => {
   assert.match(samtykke, /ad_storage: "denied"/);
   assert.match(samtykke, /analytics_storage: "denied"/);
   assert.match(samtykke, /G-XCQTBQVK7C/);
-  assert.match(samtykke, /AW-XXXXXXXXXX/);
+  assert.match(samtykke, /AW-18535455222/);
   const script = readFileSync("script.js", "utf8");
   assert.match(script, /klikk_telefon/);
   assert.match(script, /klikk_epost/);
