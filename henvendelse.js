@@ -50,6 +50,7 @@ if (form) {
       const thanks = document.getElementById("henvendelse-takk");
       if (thanks) thanks.hidden = false;
       if (typeof gtag === "function") gtag("event", "generate_lead", { method: "skjema" });
+      if (typeof window.adsKonvertering === "function") window.adsKonvertering("skjema");
     } catch (error) {
       console.error(error);
       status.textContent = "Henvendelsen ble ikke sendt. Send en e-post til post@einar-borsheim.com.";
