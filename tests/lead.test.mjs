@@ -68,7 +68,7 @@ test("nettsiden har tjenestesider, skjema, samtykke og området", () => {
   const home = html["index.html"];
   assert.match(home, /href="drenering\/"/);
   assert.match(home, /href="graving\/"/);
-  assert.match(home, /href="sprengning\/"/);
+  assert.doesNotMatch(home, /href="sprengning\//);
   assert.match(home, /href="tel:\+4790552065"/);
   assert.match(home, /Ring 905 52 065/);
   assert.match(home, /class="call-bar"/);
@@ -78,7 +78,7 @@ test("nettsiden har tjenestesider, skjema, samtykke og området", () => {
   assert.match(home, /"@type": "LocalBusiness"/);
   assert.match(home, /G-XCQTBQVK7C/);
   assert.equal(home.includes("Asker og omegn"), false);
-  for (const path of ["drenering/index.html", "graving/index.html", "sprengning/index.html"]) {
+  for (const path of ["drenering/index.html", "graving/index.html"]) {
     assert.match(html[path], /Be om tilbud/);
     assert.match(html[path], /id="henvendelse"/);
     assert.match(html[path], /Asker, Bærum, Lier og Oslo/);
@@ -87,6 +87,9 @@ test("nettsiden har tjenestesider, skjema, samtykke og området", () => {
     assert.match(html[path], /name="description"/);
   }
   assert.match(html["drenering/index.html"], /Slik jobber vi/);
+  assert.match(html["sprengning/index.html"], /noindex/);
+  assert.match(html["sprengning/index.html"], /https:\/\/einar-borsheim\.com\/graving\/#sprengning/);
+  assert.match(html["sprengning/index.html"], /samtykke\.js/);
   assert.match(html["personvern/index.html"], /G-XCQTBQVK7C/);
   assert.match(html["personvern/index.html"], /henvendelser/);
   const samtykke = readFileSync("samtykke.js", "utf8");
