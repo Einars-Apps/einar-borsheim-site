@@ -22,6 +22,10 @@ body {
   padding: 0;
 }
 
+section[id] {
+  scroll-margin-top: 1rem;
+}
+
 body {
   font-family: "Space Grotesk", sans-serif;
   color: var(--ink);
