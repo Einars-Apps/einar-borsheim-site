@@ -36,6 +36,7 @@ import {
   isPortalPreview,
   normalizedCustomerName,
   portalAccessStep,
+  projectIdentityText,
 } from "../www/js/logic.js";
 import {
   alternativeHeading,
@@ -386,7 +387,7 @@ function render() {
   const mine = items.filter((item) => item.kind === "kunde" && item.createdBy === uid);
   const inbox = el("section", { class: "k-card k-stack" }, [
     el("h2", {}, "Grunnlag fra deg"),
-    el("p", { class: "muted" }, "Send bilder og info som grunnlag for arbeidet. Einar godkjenner før det kommer med i rapporten."),
+    el("p", { class: "muted" }, "Har du bilder eller informasjon vi ikke har? Last opp f.eks. eldre bilder av tomten, fuktige steder, rør eller tegninger. Einar ser gjennom alt og legger det som er nyttig inn i dokumentasjonen."),
     notice ? el("p", { class: "notice" }, notice) : null,
     submissionForm(),
     ...mine.map((item) => itemCard(item, true)),
@@ -562,14 +563,19 @@ async function loadVisible(col) {
 }
 
 function submissionForm() {
-  const name = el("input", { type: "text", maxlength: "80", placeholder: "Ditt navn" });
-  const title = el("input", { type: "text", maxlength: "140", placeholder: "F.eks. ønske om beplantning" });
-  const text = el("textarea", { rows: "4", maxlength: "4000", placeholder: "Beskriv hva du vil vi skal ta hensyn til" });
+  const knownName = normalizedCustomerName(project?.customerName);
+  const identity = projectIdentityText(project);
+  const name = knownName
+    ? null
+    : el("input", { type: "text", maxlength: "79", placeholder: "Ditt navn" });
+  const title = el("input", { type: "text", maxlength: "140", placeholder: "F.eks. bilder fra kjelleren før arbeidet" });
+  const text = el("textarea", { rows: "4", maxlength: "4000", placeholder: "F.eks. fukt i hjørnet, eller hva tegningen viser" });
   const files = el("input", { type: "file", accept: "image/*", multiple: true });
   const status = el("p", { class: "muted", hidden: true });
   const submit = el("button", { class: "btn btn-primary btn-block", type: "submit" }, "Send inn");
   const form = el("form", { class: "k-stack" }, [
-    field("Navn", name),
+    identity ? el("p", { class: "project-identity" }, identity) : null,
+    name ? field("Navn", name) : null,
     field("Overskrift", title),
     field("Beskrivelse", text),
     mic(text),
@@ -597,7 +603,7 @@ function submissionForm() {
         approved: false,
         source: "kunde",
         createdBy: uid,
-        authorName: name.value.trim() || "Kunde",
+        authorName: (knownName || name?.value || "Kunde").trim().slice(0, 79) || "Kunde",
         createdAt: serverTimestamp(),
       });
       for (let index = 0; index < chosen.length; index++) {

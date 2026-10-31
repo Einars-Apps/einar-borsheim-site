@@ -19,6 +19,15 @@ test("eksisterende prosjekt lagrer kundenavn, og portalen viser det", () => {
   assert.match(pdf, /Oppdragsgiver: \$\{model\.project\.customerName\}/);
   assert.match(portal, /normalizedCustomerName\(project\.customerName\)/);
   assert.match(portal, /class: "customer-name"/);
+  assert.match(portal, /Har du bilder eller informasjon vi ikke har\?/);
+  assert.match(portal, /F\.eks\. bilder fra kjelleren før arbeidet/);
+  assert.match(portal, /knownName\s*\?\s*null/);
+  assert.match(portal, /projectIdentityText\(project\)/);
+  assert.match(portal, /el\("h2", \{\}, "Meldinger"\)/);
+  assert.match(portal, /Skriv direkte til Einar\. Svar vises her\./);
+  assert.equal(portal.includes("ønske om beplantning"), false);
+  assert.match(form, /field\("Adresse", address\)/);
+  assert.match(form, /address: address\.value\.trim\(\)/);
 });
 
 test("dreneringsflisen er borte i portal og app, modulen og rapportdata er igjen", () => {

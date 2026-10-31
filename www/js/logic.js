@@ -372,6 +372,13 @@ export function normalizedCustomerName(value) {
   return String(value ?? "").trim().slice(0, 120);
 }
 
+export function projectIdentityText(project) {
+  const name = normalizedCustomerName(project?.customerName);
+  const address = String(project?.address || "").trim();
+  const parts = [name, address].filter(Boolean);
+  return parts.length ? `Prosjekt: ${parts.join(", ")}` : "";
+}
+
 // Kundenavnet ligger på prosjektet. Rapportutkastet kan ha kopiert det som en
 // egen linje «Kunde: …». Bare den linjen oppdateres, ikke fri tekst ellers.
 export function customerNamePatch(project, value) {
