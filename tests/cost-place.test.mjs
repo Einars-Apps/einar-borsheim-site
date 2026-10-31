@@ -10,15 +10,18 @@ function sliceFn(source, name, next) {
   return source.slice(start, end);
 }
 
-test("nåværende kostnad ligger i Tilbud og endringer, ikke på prosjektsiden", () => {
+test("nåværende kostnad ligger i Tilbud og endringer, og prosjektet gjenbruker samme bryter", () => {
   const app = readFileSync("www/app.js", "utf8");
   const offers = sliceFn(app, "mountOffers", "fikenLinkPatch");
   const project = sliceFn(app, "mountProject", "loadDrainagePhotos");
+  const visibility = readFileSync("www/js/portal-visibility.js", "utf8");
   assert.match(offers, /renderCostOverview\(/);
   assert.match(offers, /Vis kostnad for kunden i portalen/);
   assert.match(offers, /showCostToCustomer: shareCost\.checked === true/);
   assert.equal(project.includes("renderCostOverview"), false);
   assert.equal(project.includes("showCostToCustomer"), false);
+  assert.match(project, /renderCustomerVisibility\(/);
+  assert.match(visibility, /if \(id === "kostnad"\) return \{ showCostToCustomer: on \}/);
   assert.equal(customerSeesCost({}), false);
   assert.equal(customerSeesCost({ showCostToCustomer: false }), false);
   assert.equal(customerSeesCost({ showCostToCustomer: true }), true);

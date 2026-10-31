@@ -454,6 +454,8 @@ test("kunde kan lese mengder bare når Einar har skrudd det på, og kan ikke skr
     fikenLines: [{ id: "dren", label: "Drenering", planned: 26, done: 20, unitPrice: 6000, final: true }],
   }));
   await assertFails(updateDoc(doc(customer, "projects/p1"), { costOverview: { agreedExVat: 1 } }));
+  await assertFails(updateDoc(doc(customer, "projects/p1"), { showCostToCustomer: true }));
+  await assertFails(updateDoc(doc(customer, "projects/p1"), { portalSections: { meldinger: false, tilbud: false } }));
   await assertFails(addDoc(collection(customer, "projects/p1/costLog"), {
     at: serverTimestamp(),
     by: "kunde1",
@@ -849,6 +851,20 @@ test("bare admin skriver betalinger, og kunden leser dem på eget prosjekt", asy
   await assertSucceeds(updateDoc(doc(adminDb(), "projects/p1/payments/bet1"), {
     amount: 10000,
     note: "Korrigert",
+  }));
+  await assertSucceeds(setDoc(doc(adminDb(), "projects/p1/payments/del1"), {
+    ...payment,
+    status: "sendt",
+    installment: 1,
+    invoiceNumber: "200",
+    note: "Akonto",
+  }));
+  await assertFails(updateDoc(doc(customer, "projects/p1/payments/del1"), { status: "betalt" }));
+  await assertSucceeds(updateDoc(doc(adminDb(), "projects/p1/payments/del1"), { status: "betalt" }));
+  await assertFails(setDoc(doc(adminDb(), "projects/p1/payments/del2"), {
+    ...payment,
+    status: "ukjent",
+    installment: 2,
   }));
   await assertSucceeds(deleteDoc(doc(adminDb(), "projects/p1/payments/bet1")));
   await assertFails(getDoc(doc(customer, "projects/p1/payments/bet1")));
