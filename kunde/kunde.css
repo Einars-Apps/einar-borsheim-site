@@ -36,7 +36,7 @@ select:disabled {
 }
 .k-card h2, .k-card h3 { margin: 0 0 0.4rem; }
 .muted { color: var(--muted); }
-.customer-name { margin: 0; font-weight: 700; }
+.customer-name, .project-identity { margin: 0; font-weight: 700; }
 .notice { background: #e5f3ee; color: #0c5344; border-radius: 12px; padding: 12px 14px; }
 .pre { white-space: pre-wrap; margin: 0; }
 

@@ -7,6 +7,7 @@ import {
   buildLocalDraft,
   buildReferenceDoc,
   customerNamePatch,
+  projectIdentityText,
   normalizedCustomerName,
   dueReminderCount,
   isCompleted,
@@ -167,6 +168,13 @@ test("utkast fra notater tar med godkjente punkt og hopper over ventende", () =>
   assert.match(draft, /Trappen/);
   assert.match(draft, /Avklart med kunde/);
   assert.equal(draft.includes("Ventende beskjed"), false);
+});
+
+test("prosjektlinjen viser navn og adresse, og er tom når begge mangler", () => {
+  assert.equal(projectIdentityText({ customerName: " Kari ", address: " Lensmannslia 4 " }), "Prosjekt: Kari, Lensmannslia 4");
+  assert.equal(projectIdentityText({ customerName: "Kari", address: "" }), "Prosjekt: Kari");
+  assert.equal(projectIdentityText({ customerName: "", address: "Asker" }), "Prosjekt: Asker");
+  assert.equal(projectIdentityText({}), "");
 });
 
 test("kundenavn kan settes, endres og tømmes, og bare den kopierte linjen i utkastet følger med", () => {
