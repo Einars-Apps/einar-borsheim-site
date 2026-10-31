@@ -263,6 +263,7 @@ function paintCost() {
     showPreview: true,
     showPayments: false,
     payments,
+    requestHref: portalSectionVisible(project, "foresporsler") ? "#seksjon-foresporsler" : "",
   }));
 }
 

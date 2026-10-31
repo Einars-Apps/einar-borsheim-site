@@ -113,7 +113,7 @@ export function renderAdminRequests({ requests = [], lines = [], onAnswer }) {
   const list = el("div", { class: "request-list" });
   if (!requests.length) list.append(el("p", { class: "meta" }, "Ingen forespørsler fra kunden ennå."));
   for (const request of requests) list.append(adminCard(request, lines, onAnswer));
-  return el("section", { class: "card request-box" }, [
+  return el("section", { class: "card request-box", id: "seksjon-foresporsler" }, [
     el("h2", { class: "h-app" }, "Forespørsler om tillegg"),
     el("p", { class: "meta" }, "Svar med en forklaring og en prislinje. Kunden godkjenner eller avslår. Godkjent antall legges i Avtalt tillegg, eller som en ny post."),
     list,
