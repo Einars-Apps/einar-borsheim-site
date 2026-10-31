@@ -19,6 +19,7 @@ import {
   paymentReportText,
   paymentTotals,
   persistableCost,
+  storedTimestamp,
 } from "../www/js/cost.js";
 
 const prices = {
@@ -286,6 +287,25 @@ test("Fiken-linjer uten avtalt pris er det opprinnelige tilbudet, ikke en rød �
   assert.equal(agreedQuote.baseline.kind, "fiken");
   assert.equal(agreedQuote.baseline.exVat, 1000);
   assert.equal(originalOffer({ agreedExVat: 500, lines: summary.lines, offers: summary.offers }).kind, "manuell");
+});
+
+test("ferdig-tidspunkt i en Fiken-linje er et vanlig tidspunkt, ikke serverTimestamp", () => {
+  const sentinel = { _methodName: "serverTimestamp" };
+  const now = new Date("2026-10-31T18:00:00Z");
+  const stored = storedTimestamp(sentinel, now);
+  assert.equal(stored.seconds, Math.floor(now.getTime() / 1000));
+  assert.equal(stored._methodName, undefined);
+  const locked = patchCost({
+    fikenLines: [{ id: "dren", label: "Drenering", planned: 26, done: 20, unitPrice: 6000 }],
+  }, prices, { lineId: "dren", field: "final", value: true, finalizedAt: sentinel });
+  const line = locked.fikenLines.find((entry) => entry.id === "dren");
+  assert.equal(line.final, true);
+  assert.equal(line.finalizedAt._methodName, undefined);
+  assert.equal(typeof line.finalizedAt.seconds, "number");
+  const kept = persistableCost({
+    fikenLines: [{ id: "dren", planned: 1, done: 1, unitPrice: 10, final: true, finalizedAt: { seconds: 4, nanoseconds: 0 } }],
+  });
+  assert.equal(kept.fikenLines[0].finalizedAt.seconds, 4);
 });
 
 test("utført kan være 0,5 uten å bli endelig, og en ferdig halv post sier det", () => {

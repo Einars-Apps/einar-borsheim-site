@@ -916,6 +916,72 @@ test("bare admin skriver betalinger, og kunden leser dem på eget prosjekt", asy
   await assertFails(getDoc(doc(customer, "projects/p1/payments/bet1")));
 });
 
+test("admin kan lagre ferdig Fiken-post og prosjektfelt, andre kan ikke", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "projects/p1/access/kunde1"), { token: "TOK123456" });
+  });
+  const admin = adminDb();
+  await assertSucceeds(updateDoc(doc(admin, "projects/p1"), {
+    households: [{ id: "h1", name: "Første etasje", share: 60, email: "a@b.no" }],
+    fdvAvailable: false,
+    fdvUnlocked: true,
+    showCostToCustomer: true,
+    updatedAt: serverTimestamp(),
+  }));
+  await assertSucceeds(setDoc(doc(admin, "projects/p1/quantities/live"), {
+    agreedExVat: 0,
+    lines: {},
+    extras: [],
+    fikenLines: [{
+      id: "dren",
+      label: "Drenering",
+      unit: "meter",
+      planned: 26,
+      done: 20,
+      addition: 2,
+      unitPrice: 6000,
+      final: true,
+      finalizedAt: new Date("2026-10-31T12:00:00Z"),
+      finalNote: "Halve jobben var ikke mulig",
+      requestId: "rq1",
+      manual: true,
+      source: "fra Fiken-tilbud nr 10102",
+    }],
+    updatedAt: serverTimestamp(),
+  }));
+  const stored = await assertSucceeds(getDoc(doc(admin, "projects/p1/quantities/live")));
+  assert.equal(stored.data().fikenLines[0].final, true);
+  assert.equal(stored.data().fikenLines[0].done, 20);
+  await assertSucceeds(addDoc(collection(admin, "projects/p1/costLog"), {
+    at: serverTimestamp(),
+    by: "admin-user",
+    byName: "Einar",
+    lineId: "dren",
+    label: "Drenering",
+    field: "final",
+    from: 0,
+    to: 1,
+    unit: "kr",
+    text: "Posten er ferdig, endelig pris kr 120 000,00 eks. mva",
+  }));
+  const other = env.authenticatedContext("other", { email: "other@example.com" }).firestore();
+  await assertFails(updateDoc(doc(other, "projects/p1"), { fdvAvailable: true, households: [] }));
+  await assertFails(setDoc(doc(customerDb(), "projects/p1/quantities/live"), {
+    fikenLines: [{ id: "dren", final: false }],
+  }));
+  let sentinelError = null;
+  try {
+    await setDoc(doc(admin, "projects/p1/quantities/sentinel"), {
+      fikenLines: [{ id: "dren", final: true, finalizedAt: serverTimestamp() }],
+    });
+  } catch (error) {
+    sentinelError = error;
+  }
+  assert.match(String(sentinelError?.message || ""), /not currently supported inside arrays/);
+  assert.equal(sentinelError?.code, "invalid-argument");
+});
+
 test("regelfilene slipper ikke gjennom åpen skriving", () => {
   const firestore = readFileSync("firestore.rules", "utf8");
   const storage = readFileSync("storage.rules", "utf8");

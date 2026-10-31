@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   firestoreReadMessage,
   firestoreTransportSettings,
+  firestoreWriteMessage,
   isFirestoreDeniedError,
   isFirestoreOfflineError,
   readDocWithRetry,
@@ -18,6 +19,18 @@ test("Android-appen tvinger long polling, nettleseren beholder standard", () => 
   assert.deepEqual(firestoreTransportSettings({ isNativePlatform: () => false, getPlatform: () => "web" }), {});
   assert.deepEqual(firestoreTransportSettings(undefined), {});
   assert.equal(firestoreTransportSettings({ isNativePlatform: () => true }).experimentalAutoDetectLongPolling, undefined);
+});
+
+test("avvist lagring viser Firebase-koden", () => {
+  const rejected = Object.assign(new Error("Function FieldValue.serverTimestamp() is not currently supported inside arrays"), {
+    code: "invalid-argument",
+  });
+  const text = firestoreWriteMessage(rejected, "Kunne ikke lagre mengden");
+  assert.match(text, /^Kunne ikke lagre mengden \(invalid-argument — /);
+  assert.match(text, /inside arrays/);
+  const deniedWrite = firestoreWriteMessage(denied, "Kunne ikke lagre mengden");
+  assert.match(deniedWrite, /permission-denied/);
+  assert.equal(firestoreWriteMessage({}, "Kunne ikke lagre mengden"), "Kunne ikke lagre mengden");
 });
 
 test("offline og avvist lesing får hver sin norske melding", () => {
