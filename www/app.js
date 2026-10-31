@@ -1656,7 +1656,12 @@ function mountOffers(route) {
         showToCustomer: customerSeesCost(project),
         extras: costExtras,
         onAgreed: (value) => savePatch({ field: "agreedExVat", value }),
-        onQuantity: (lineId, field, value) => savePatch({ lineId, field, value }),
+        onQuantity: (lineId, field, value) => savePatch({
+          lineId,
+          field,
+          value,
+          finalizedAt: field === "final" && value === true ? stamp() : null,
+        }),
         onAddExtra: () => savePatch({ addExtra: true, extraId: newExtraId() }),
         onDeleteExtra: (extraId) => savePatch({ deleteExtraId: extraId }),
         onExtra: (extraId, field, value) => savePatch({ extraId, field, value }),

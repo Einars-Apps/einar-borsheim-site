@@ -449,6 +449,9 @@ test("kunde kan lese mengder bare når Einar har skrudd det på, og kan ikke skr
   assert.equal(snap.data().agreedExVat, 10000);
   await assertSucceeds(getDoc(doc(customer, "projects/p1/costLog/log1")));
   await assertFails(setDoc(doc(customer, "projects/p1/quantities/live"), { agreedExVat: 1 }));
+  await assertFails(updateDoc(doc(customer, "projects/p1/quantities/live"), {
+    fikenLines: [{ id: "dren", label: "Drenering", planned: 26, done: 20, unitPrice: 6000, final: true }],
+  }));
   await assertFails(updateDoc(doc(customer, "projects/p1"), { costOverview: { agreedExVat: 1 } }));
   await assertFails(addDoc(collection(customer, "projects/p1/costLog"), {
     at: serverTimestamp(),

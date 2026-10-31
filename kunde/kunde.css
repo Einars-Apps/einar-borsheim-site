@@ -185,6 +185,17 @@ textarea { min-height: 96px; }
 .cost-diff-down { color: #0f6b4c; font-weight: 700; margin: 0; }
 .cost-preview { background: #f3e2c8; border-radius: 12px; padding: 10px 12px; margin: 0; }
 .qty-line { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+.qty-line-final { background: #e5f3ee; border: 1px solid #b7dfd0; border-radius: 14px; padding: 12px; }
+.final-badge, .estimate-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+.final-badge { background: #0c5344; color: #fff; }
+.estimate-badge { background: #f3e2c8; color: #6d4712; }
 .cost-log { margin: 0; padding-left: 1.1rem; }
 .cost-log li { margin: 0.25rem 0; overflow-wrap: anywhere; }
 .post-tillegg {

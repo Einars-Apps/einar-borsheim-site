@@ -85,6 +85,7 @@ export function normalizeFikenLines(raw) {
       unitPrice: clampQty(line?.unitPrice),
       source: String(line?.source || "").replace(/\s+/g, " ").trim().slice(0, 80),
       manual: line?.manual === true,
+      ...finalFields(line),
     });
   }
   return lines;
@@ -122,6 +123,7 @@ export function normalizeCost(raw, prices = DEFAULT_PRICES) {
       addition: clampQty(line.addition),
       done: clampQty(line.done),
       unitPrice: storedPrice != null && storedPrice >= 0 ? round2(storedPrice) : next.lines[id].unitPrice,
+      ...finalFields(line),
     };
   }
   next.fikenLines = normalizeFikenLines(raw);
@@ -133,7 +135,7 @@ export function persistableCost(next) {
   const state = normalizeCost(next);
   const lines = {};
   for (const [id, line] of Object.entries(state.lines)) {
-    if (line.planned > 0 || line.addition > 0 || line.done > 0) lines[id] = line;
+    if (line.planned > 0 || line.addition > 0 || line.done > 0 || line.final === true) lines[id] = line;
   }
   return {
     agreedExVat: state.agreedExVat,
@@ -203,13 +205,18 @@ export function offerContribution(items, previewChoices = null) {
 export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices = null } = {}) {
   const state = normalizeCost(cost, prices);
   const offers = offerContribution(items, previewChoices);
-  let plannedEx = 0;
   let doneEx = 0;
+  let finalEx = 0;
+  let openEx = 0;
+  const takeLine = (line, money) => {
+    doneEx += money.doneSum;
+    if (line.final === true) finalEx += money.doneSum;
+    else openEx += money.plannedSum;
+  };
   const catalog = PRICE_LINES.map(([id, label, unit]) => {
     const line = state.lines[id];
     const money = lineMoney(line);
-    plannedEx += money.plannedSum;
-    doneEx += money.doneSum;
+    takeLine(line, money);
     return {
       id,
       label,
@@ -221,35 +228,42 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       deviation: money.deviation,
       plannedSum: money.plannedSum,
       doneSum: money.doneSum,
+      final: line.final === true,
+      finalizedAt: line.final === true ? (line.finalizedAt ?? null) : null,
       fromFiken: false,
       source: "",
       manual: false,
     };
-  }).filter((line) => line.planned > 0 || line.addition > 0 || line.done > 0);
+  }).filter((line) => line.planned > 0 || line.addition > 0 || line.done > 0 || line.final);
   const fiken = state.fikenLines.map((line) => {
     const money = lineMoney(line);
-    plannedEx += money.plannedSum;
-    doneEx += money.doneSum;
+    takeLine(line, money);
     return {
       ...line,
       addition: money.addition,
       deviation: money.deviation,
       plannedSum: money.plannedSum,
       doneSum: money.doneSum,
+      final: line.final === true,
+      finalizedAt: line.final === true ? (line.finalizedAt ?? null) : null,
       fromFiken: true,
     };
   });
   const extras = state.extras.map((line) => {
     const sum = round2(line.quantity * line.unitPrice);
-    plannedEx += sum;
     doneEx += sum;
     return { ...line, sum };
   });
   const extrasExVat = round2(extras.reduce((sum, line) => sum + line.sum, 0));
+  openEx += extrasExVat;
   const lines = [...catalog, ...fiken];
-  const estimated = withVat(state.agreedExVat + offers.approvedExVat + plannedEx);
+  const finalBase = round2(finalEx);
+  const openBase = round2(state.agreedExVat + offers.approvedExVat + openEx);
+  const estimated = withVat(finalBase + openBase);
+  const finalized = withVat(finalBase);
+  const remaining = withVat(openBase);
   const incurred = withVat(state.agreedExVat + offers.approvedExVat + doneEx);
-  const preview = withVat(state.agreedExVat + offers.previewExVat + plannedEx);
+  const preview = withVat(finalBase + state.agreedExVat + offers.previewExVat + openEx);
   const differenceExVat = round2(estimated.exVat - state.agreedExVat);
   return {
     agreedExVat: state.agreedExVat,
@@ -258,11 +272,21 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
     extrasExVat,
     offers,
     estimated,
+    finalized,
+    remaining,
     incurred,
     preview,
     differenceExVat,
     differenceIncVat: round2(differenceExVat * (1 + VAT_RATE)),
     previewDeltaExVat: round2(preview.exVat - estimated.exVat),
+  };
+}
+
+function finalFields(line) {
+  const final = line?.final === true;
+  return {
+    final,
+    finalizedAt: final ? (line.finalizedAt ?? null) : null,
   };
 }
 
@@ -288,16 +312,31 @@ const FIELD_LABEL = {
   quantity: "antall",
 };
 
+function applyQtyPatch(target, field, value, patch) {
+  if (!target) return false;
+  if (field === "final") {
+    const on = value === true || value === "true" || value === 1 || value === "1";
+    target.final = on;
+    target.finalizedAt = on ? (patch.finalizedAt ?? target.finalizedAt ?? null) : null;
+    return true;
+  }
+  if (target.final === true) return false;
+  if (field === "planned" || field === "done" || field === "addition" || field === "unitPrice") {
+    target[field] = clampQty(value);
+    return true;
+  }
+  return false;
+}
+
 export function patchCost(raw, prices, patch = {}) {
   const { lineId, field, value } = patch;
   const next = pricedCost(raw, prices);
   if (field === "agreedExVat") next.agreedExVat = clampQty(value);
-  if ((field === "planned" || field === "done" || field === "addition") && next.lines[lineId]) {
-    next.lines[lineId][field] = clampQty(value);
+  if (field === "planned" || field === "done" || field === "addition" || field === "final") {
+    applyQtyPatch(next.lines[lineId], field, value, patch);
   }
   const fiken = next.fikenLines.find((line) => line.id === lineId);
-  if (fiken && (field === "planned" || field === "done" || field === "addition" || field === "unitPrice")) {
-    fiken[field] = clampQty(value);
+  if (fiken && applyQtyPatch(fiken, field, value, patch)) {
     fiken.manual = true;
   }
   if (patch.addExtra) {
@@ -353,6 +392,7 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
     if (left.unitPrice !== right.unitPrice) {
       changes.push({ lineId: id, label, field: "unitPrice", from: left.unitPrice, to: right.unitPrice, unit: "kr" });
     }
+    pushFinalChange(changes, id, label, left, right);
   }
   const beforeFiken = new Map(before.fikenLines.map((line) => [line.id, line]));
   const afterFiken = new Map(after.fikenLines.map((line) => [line.id, line]));
@@ -373,6 +413,7 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
     if (left.unitPrice !== right.unitPrice) {
       changes.push({ lineId: id, label, field: "unitPrice", from: left.unitPrice, to: right.unitPrice, unit: "kr" });
     }
+    pushFinalChange(changes, id, label, left, right);
   }
   const beforeExtra = new Map(before.extras.map((line) => [line.id, line]));
   const afterExtra = new Map(after.extras.map((line) => [line.id, line]));
@@ -390,7 +431,28 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
   return changes;
 }
 
+function pushFinalChange(changes, id, label, left, right) {
+  const was = left?.final === true;
+  const now = right?.final === true;
+  if (was === now) return;
+  const basis = now ? right : left;
+  const amount = round2((round2(basis?.done) ?? 0) * (round2(basis?.unitPrice) ?? 0));
+  changes.push({
+    lineId: id,
+    label,
+    field: "final",
+    from: was ? 1 : 0,
+    to: now ? 1 : 0,
+    unit: "kr",
+    amount,
+  });
+}
+
 export function changeText(change) {
+  if (change?.field === "final") {
+    if (Number(change.to) === 1) return `Posten er ferdig, endelig pris ${formatKr(change.amount)} eks. mva`;
+    return "Posten er åpnet igjen. Prisen er estimert.";
+  }
   const what = FIELD_LABEL[change?.field] || "endring";
   const unit = change?.unit ? ` ${change.unit}` : "";
   const label = change?.field === "agreedExVat" ? "Avtalt pris" : (change?.label || "Linje");
@@ -401,6 +463,9 @@ export function costReportText(summary, history = []) {
   const lines = [
     "Nåværende kostnad",
     `Avtalt pris ${formatKr(summary?.agreedExVat || 0)} eks. mva.`,
+    `Ferdige poster (endelig) ${formatKr(summary?.finalized?.exVat || 0)} eks. mva, ${formatKr(summary?.finalized?.incVat || 0)} inkl. mva.`,
+    `Gjenstår (estimert) ${formatKr(summary?.remaining?.exVat || 0)} eks. mva, ${formatKr(summary?.remaining?.incVat || 0)} inkl. mva.`,
+    `Totalt ${formatKr(summary?.estimated?.exVat || 0)} eks. mva, ${formatKr(summary?.estimated?.incVat || 0)} inkl. mva.`,
     `Estimert total ${formatKr(summary?.estimated?.exVat || 0)} eks. mva, ${formatKr(summary?.estimated?.incVat || 0)} inkl. mva.`,
     `Påløpt hittil ${formatKr(summary?.incurred?.exVat || 0)} eks. mva, ${formatKr(summary?.incurred?.incVat || 0)} inkl. mva.`,
     `Differanse mot opprinnelig tilbud: ${signedKr(summary?.differenceExVat || 0)} eks. mva, ${signedKr(summary?.differenceIncVat || 0)} inkl. mva.`,
@@ -414,10 +479,13 @@ export function costReportText(summary, history = []) {
   }
   lines.push("", "Mengder");
   for (const line of summary?.lines || []) {
-    if (!line.planned && !line.done) continue;
+    if (!line.planned && !line.done && !line.addition && !line.final) continue;
     const source = line.source ? ` (${line.source})` : "";
     const tillegg = line.addition ? `, avtalt tillegg ${formatQty(line.addition)} ${line.unit}` : "";
-    lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}${tillegg}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva. Enhetspris ${formatKr(line.unitPrice)}.`);
+    const priceNote = line.final
+      ? `Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva.`
+      : `Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva.`;
+    lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}${tillegg}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. ${priceNote} Enhetspris ${formatKr(line.unitPrice)}.`);
   }
   lines.push("", "Tilleggsarbeider");
   const extras = (summary?.extras || []).filter((line) => line.description || line.quantity || line.unitPrice);

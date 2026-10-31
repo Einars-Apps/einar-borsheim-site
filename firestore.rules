@@ -123,7 +123,7 @@ service cloud.firestore {
         && request.resource.data.label is string
         && request.resource.data.label.size() > 0
         && request.resource.data.label.size() < 80
-        && request.resource.data.field in ['planned', 'addition', 'done', 'unitPrice', 'agreedExVat', 'quantity']
+        && request.resource.data.field in ['planned', 'addition', 'done', 'unitPrice', 'agreedExVat', 'quantity', 'final']
         && request.resource.data.from is number
         && request.resource.data.to is number
         && request.resource.data.from >= 0
@@ -434,7 +434,7 @@ service cloud.firestore {
         allow read, create, update, delete: if isAdmin();
       }
 
-      // Mengder og enhetspris i kostnadsoversikten. Bare admin skriver. Kunden leser bare når flagget er på.
+      // Mengder, avtalt tillegg og «Ferdig – endelig pris». Bare admin skriver. Kunden kan ikke endre det. Kunden leser bare når flagget er på.
       match /quantities/{docId} {
         allow read: if isAdmin() || customerMayReadCost(projectId);
         allow create, update, delete: if isAdmin();

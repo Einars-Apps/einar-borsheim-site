@@ -337,6 +337,16 @@ function analyzeLine(line, entries, now) {
       effectLine,
     ]));
   }
+  for (const entry of entries.filter((item) => item.field === "final")) {
+    const on = Number(entry.to) === 1;
+    const sentence = String(entry.text || "").trim() || (on
+      ? "Posten er ferdig, endelig pris er satt."
+      : "Posten er åpnet igjen. Prisen er estimert.");
+    events.push(eventShell({
+      time: whenStamp(entry.at),
+      byName: entry.byName,
+    }, "tilbud", on ? "check" : "edit", line.label, [sentence]));
+  }
   for (const net of doneNets) {
     const plannedThen = qtyAt(plannedNets, net.time, original) ?? original;
     const additionThen = qtyAt(additionNets, net.time, storedAddition) ?? storedAddition;

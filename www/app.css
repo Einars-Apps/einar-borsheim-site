@@ -359,6 +359,18 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .cost-diff-down { color: var(--accent); font-weight: 700; margin: 0; }
 .cost-preview { background: #f3e2c8; border-radius: 12px; padding: 10px 12px; margin: 0; }
 .qty-line { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+.qty-line-final { background: #e5f3ee; border: 1px solid #b7dfd0; border-radius: 14px; padding: 12px; }
+.qty-step.is-locked { opacity: 0.55; }
+.final-badge, .estimate-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+.final-badge { background: #0c5344; color: #fff; }
+.estimate-badge { background: #f3e2c8; color: #6d4712; }
 .extra-box { display: flex; flex-direction: column; gap: 10px; }
 .extra-box h3 { margin: 8px 0 0; }
 .quote-box, .quote-intro { overflow-wrap: anywhere; max-width: 100%; }

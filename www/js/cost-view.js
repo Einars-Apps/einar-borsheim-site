@@ -49,7 +49,14 @@ function stepper(value, label, onCommit) {
   plus.addEventListener("mousedown", (event) => event.preventDefault());
   minus.setAttribute("aria-label", `Mindre ${label}`);
   plus.setAttribute("aria-label", `Mer ${label}`);
-  return el("div", { class: "qty-step" }, [minus, input, plus]);
+  const step = el("div", { class: "qty-step" }, [minus, input, plus]);
+  return step;
+}
+
+function lockStepper(step) {
+  step.classList.add("is-locked");
+  step.querySelectorAll("button, input").forEach((node) => { node.disabled = true; });
+  return step;
 }
 
 function commitField(input, onCommit) {
@@ -262,6 +269,9 @@ export function renderCostOverview({
     const deviation = `${signedQty(line.deviation)} ${shownUnit}`;
     const body = [
       el("p", { class: "cost-line-title" }, !editable && facts ? customerPostSummary(line.label, facts) : line.label),
+      line.final
+        ? el("p", { class: "final-badge" }, `Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva`)
+        : el("p", { class: "estimate-badge" }, "Estimert"),
       line.source ? el("p", { class: "meta" }, line.source) : null,
       editable && line.fromFiken ? null : el("p", { class: "meta" }, `à ${formatKr(line.unitPrice)} eks. mva`),
     ];
@@ -271,6 +281,7 @@ export function renderCostOverview({
         inputmode: "decimal",
         value: formatQty(line.unitPrice),
         "aria-label": `Enhetspris ${line.label}`,
+        disabled: line.final ? true : null,
       });
       let priceDirty = false;
       price.addEventListener("input", () => { priceDirty = true; });
@@ -284,24 +295,38 @@ export function renderCostOverview({
       body.push(field("Enhetspris, eks. mva", price));
     }
     if (editable) {
+      const plannedStep = stepper(line.planned, `Planlagt ${line.label}`, (value) => onQuantity?.(line.id, "planned", value));
+      const tilleggStep = stepper(line.addition || 0, `Avtalt tillegg ${line.label}`, (value) => onQuantity?.(line.id, "addition", value));
+      const doneStep = stepper(line.done, `Utført ${line.label}`, (value) => onQuantity?.(line.id, "done", value));
+      if (line.final) {
+        lockStepper(plannedStep);
+        lockStepper(tilleggStep);
+        lockStepper(doneStep);
+      }
+      const finalBox = el("input", { type: "checkbox", "aria-label": `Ferdig – endelig pris ${line.label}` });
+      finalBox.checked = line.final === true;
+      finalBox.addEventListener("change", () => onQuantity?.(line.id, "final", finalBox.checked));
       body.push(
         el("p", { class: "qty-label" }, `Planlagt, ${shownUnit}`),
-        stepper(line.planned, `Planlagt ${line.label}`, (value) => onQuantity?.(line.id, "planned", value)),
+        plannedStep,
         el("p", { class: "qty-label" }, `Avtalt tillegg, ${shownUnit}`),
-        stepper(line.addition || 0, `Avtalt tillegg ${line.label}`, (value) => onQuantity?.(line.id, "addition", value)),
+        tilleggStep,
         el("p", { class: "qty-label" }, `Utført hittil, ${shownUnit}`),
-        stepper(line.done, `Utført ${line.label}`, (value) => onQuantity?.(line.id, "done", value)),
+        doneStep,
+        el("label", { class: "checkline" }, [finalBox, el("span", {}, "Ferdig – endelig pris")]),
       );
     }
     body.push(
-      el("p", { class: "meta" }, `Avvik ${deviation}. Estimert ${formatKr(line.plannedSum)}. Påløpt ${formatKr(line.doneSum)}.`),
+      el("p", { class: "meta" }, line.final
+        ? `Endelig pris ${formatKr(line.doneSum)} eks. mva. Det er utført mengde ganger enhetspris.`
+        : `Avvik ${deviation}. Estimert ${formatKr(line.plannedSum)}. Påløpt ${formatKr(line.doneSum)}.`),
     );
     for (const tillegg of facts?.tillegg || []) body.push(el("p", { class: "post-tillegg" }, tillegg.text));
     for (const row of placed.linked.get(line.id) || []) {
       if (editable) body.push(extraEditor(row, ordered, { onDeleteExtra, onExtra }));
       else if (row.description || row.quantity || row.unitPrice) body.push(extraSentence(row, history));
     }
-    lines.append(el("article", { class: "qty-line" }, body));
+    lines.append(el("article", { class: line.final ? "qty-line qty-line-final" : "qty-line" }, body));
   }
 
   const otherExtras = editable
@@ -343,7 +368,9 @@ export function renderCostOverview({
     approved.length
       ? el("div", { class: "stack" }, approved.map((row) => el("p", { class: "meta" }, `Godkjent: ${row.title}${row.name ? ` – ${row.name}` : ""} ${formatKr(row.exVat)} eks. mva`)))
       : el("p", { class: "meta" }, "Ingen godkjente poster i Tilbud og endringer ennå."),
-    moneyLine("Estimert total", summary.estimated.exVat, summary.estimated.incVat),
+    moneyLine("Ferdige poster (endelig)", summary.finalized?.exVat || 0, summary.finalized?.incVat || 0),
+    moneyLine("Gjenstår (estimert)", summary.remaining?.exVat || 0, summary.remaining?.incVat || 0),
+    moneyLine("Totalt", summary.estimated.exVat, summary.estimated.incVat),
     moneyLine("Påløpt hittil", summary.incurred.exVat, summary.incurred.incVat),
     el("p", { class: diffClass }, `Differanse mot opprinnelig tilbud: ${signedKr(summary.differenceExVat)} eks. mva, ${signedKr(summary.differenceIncVat)} inkl. mva`),
     showPreview && summary.previewDeltaExVat
