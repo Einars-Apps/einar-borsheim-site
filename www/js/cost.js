@@ -50,6 +50,7 @@ export function emptyCost(prices = DEFAULT_PRICES) {
     const rate = parseNumber(prices?.[key]);
     lines[id] = {
       planned: 0,
+      addition: 0,
       done: 0,
       unitPrice: rate != null && rate >= 0 ? round2(rate) : 0,
     };
@@ -79,6 +80,7 @@ export function normalizeFikenLines(raw) {
       label,
       unit: String(line?.unit || "stk").trim().slice(0, 12) || "stk",
       planned: clampQty(line?.planned),
+      addition: clampQty(line?.addition),
       done: clampQty(line?.done),
       unitPrice: clampQty(line?.unitPrice),
       source: String(line?.source || "").replace(/\s+/g, " ").trim().slice(0, 80),
@@ -96,12 +98,15 @@ export function normalizeExtras(raw) {
     const id = String(line?.id || "").trim().slice(0, 39);
     if (!id || seen.has(id) || !id.startsWith("ta")) continue;
     seen.add(id);
-    extras.push({
+    const postId = String(line?.postId || "").trim().slice(0, 39);
+    const extra = {
       id,
       description: String(line?.description || "").replace(/\s+/g, " ").trim().slice(0, 200),
       unitPrice: clampQty(line?.unitPrice),
       quantity: clampQty(line?.quantity),
-    });
+    };
+    if (postId) extra.postId = postId;
+    extras.push(extra);
   }
   return extras;
 }
@@ -114,6 +119,7 @@ export function normalizeCost(raw, prices = DEFAULT_PRICES) {
     const storedPrice = parseNumber(line.unitPrice);
     next.lines[id] = {
       planned: clampQty(line.planned),
+      addition: clampQty(line.addition),
       done: clampQty(line.done),
       unitPrice: storedPrice != null && storedPrice >= 0 ? round2(storedPrice) : next.lines[id].unitPrice,
     };
@@ -127,7 +133,7 @@ export function persistableCost(next) {
   const state = normalizeCost(next);
   const lines = {};
   for (const [id, line] of Object.entries(state.lines)) {
-    if (line.planned > 0 || line.done > 0) lines[id] = line;
+    if (line.planned > 0 || line.addition > 0 || line.done > 0) lines[id] = line;
   }
   return {
     agreedExVat: state.agreedExVat,
@@ -201,35 +207,35 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   let doneEx = 0;
   const catalog = PRICE_LINES.map(([id, label, unit]) => {
     const line = state.lines[id];
-    const plannedSum = round2(line.planned * line.unitPrice);
-    const doneSum = round2(line.done * line.unitPrice);
-    plannedEx += plannedSum;
-    doneEx += doneSum;
+    const money = lineMoney(line);
+    plannedEx += money.plannedSum;
+    doneEx += money.doneSum;
     return {
       id,
       label,
       unit,
       planned: line.planned,
+      addition: money.addition,
       done: line.done,
       unitPrice: line.unitPrice,
-      deviation: round2(line.done - line.planned),
-      plannedSum,
-      doneSum,
+      deviation: money.deviation,
+      plannedSum: money.plannedSum,
+      doneSum: money.doneSum,
       fromFiken: false,
       source: "",
       manual: false,
     };
-  }).filter((line) => line.planned > 0 || line.done > 0);
+  }).filter((line) => line.planned > 0 || line.addition > 0 || line.done > 0);
   const fiken = state.fikenLines.map((line) => {
-    const plannedSum = round2(line.planned * line.unitPrice);
-    const doneSum = round2(line.done * line.unitPrice);
-    plannedEx += plannedSum;
-    doneEx += doneSum;
+    const money = lineMoney(line);
+    plannedEx += money.plannedSum;
+    doneEx += money.doneSum;
     return {
       ...line,
-      deviation: round2(line.done - line.planned),
-      plannedSum,
-      doneSum,
+      addition: money.addition,
+      deviation: money.deviation,
+      plannedSum: money.plannedSum,
+      doneSum: money.doneSum,
       fromFiken: true,
     };
   });
@@ -260,8 +266,22 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   };
 }
 
+function lineMoney(line) {
+  const addition = round2(line?.addition) ?? 0;
+  const agreedQty = round2((round2(line?.planned) ?? 0) + addition);
+  const price = round2(line?.unitPrice) ?? 0;
+  return {
+    addition,
+    agreedQty,
+    plannedSum: round2(agreedQty * price),
+    doneSum: round2((round2(line?.done) ?? 0) * price),
+    deviation: round2((round2(line?.done) ?? 0) - agreedQty),
+  };
+}
+
 const FIELD_LABEL = {
   planned: "planlagt",
+  addition: "avtalt tillegg",
   done: "utført",
   unitPrice: "enhetspris",
   agreedExVat: "avtalt pris",
@@ -272,11 +292,11 @@ export function patchCost(raw, prices, patch = {}) {
   const { lineId, field, value } = patch;
   const next = pricedCost(raw, prices);
   if (field === "agreedExVat") next.agreedExVat = clampQty(value);
-  if ((field === "planned" || field === "done") && next.lines[lineId]) {
+  if ((field === "planned" || field === "done" || field === "addition") && next.lines[lineId]) {
     next.lines[lineId][field] = clampQty(value);
   }
   const fiken = next.fikenLines.find((line) => line.id === lineId);
-  if (fiken && (field === "planned" || field === "done" || field === "unitPrice")) {
+  if (fiken && (field === "planned" || field === "done" || field === "addition" || field === "unitPrice")) {
     fiken[field] = clampQty(value);
     fiken.manual = true;
   }
@@ -292,6 +312,11 @@ export function patchCost(raw, prices, patch = {}) {
   const extra = next.extras.find((line) => line.id === patch.extraId);
   if (extra && field === "description") {
     extra.description = String(value || "").replace(/\s+/g, " ").trim().slice(0, 200);
+  }
+  if (extra && field === "postId") {
+    const postId = String(value || "").trim().slice(0, 39);
+    if (postId) extra.postId = postId;
+    else delete extra.postId;
   }
   if (extra && (field === "quantity" || field === "unitPrice")) {
     extra[field] = clampQty(value);
@@ -319,6 +344,9 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
     if (left.planned !== right.planned) {
       changes.push({ lineId: id, label, field: "planned", from: left.planned, to: right.planned, unit });
     }
+    if (left.addition !== right.addition) {
+      changes.push({ lineId: id, label, field: "addition", from: left.addition, to: right.addition, unit });
+    }
     if (left.done !== right.done) {
       changes.push({ lineId: id, label, field: "done", from: left.done, to: right.done, unit });
     }
@@ -329,12 +357,15 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
   const beforeFiken = new Map(before.fikenLines.map((line) => [line.id, line]));
   const afterFiken = new Map(after.fikenLines.map((line) => [line.id, line]));
   for (const id of new Set([...beforeFiken.keys(), ...afterFiken.keys()])) {
-    const left = beforeFiken.get(id) || { planned: 0, done: 0, unitPrice: 0, label: "Linje", unit: "stk" };
-    const right = afterFiken.get(id) || { planned: 0, done: 0, unitPrice: 0, label: left.label, unit: left.unit };
+    const left = beforeFiken.get(id) || { planned: 0, addition: 0, done: 0, unitPrice: 0, label: "Linje", unit: "stk" };
+    const right = afterFiken.get(id) || { planned: 0, addition: 0, done: 0, unitPrice: 0, label: left.label, unit: left.unit };
     const label = String(right.label || left.label).slice(0, 79);
     const unit = right.unit || left.unit || "stk";
     if (left.planned !== right.planned) {
       changes.push({ lineId: id, label, field: "planned", from: left.planned, to: right.planned, unit });
+    }
+    if ((left.addition || 0) !== (right.addition || 0)) {
+      changes.push({ lineId: id, label, field: "addition", from: left.addition || 0, to: right.addition || 0, unit });
     }
     if (left.done !== right.done) {
       changes.push({ lineId: id, label, field: "done", from: left.done, to: right.done, unit });
@@ -385,7 +416,8 @@ export function costReportText(summary, history = []) {
   for (const line of summary?.lines || []) {
     if (!line.planned && !line.done) continue;
     const source = line.source ? ` (${line.source})` : "";
-    lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva. Enhetspris ${formatKr(line.unitPrice)}.`);
+    const tillegg = line.addition ? `, avtalt tillegg ${formatQty(line.addition)} ${line.unit}` : "";
+    lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}${tillegg}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva. Enhetspris ${formatKr(line.unitPrice)}.`);
   }
   lines.push("", "Tilleggsarbeider");
   const extras = (summary?.extras || []).filter((line) => line.description || line.quantity || line.unitPrice);

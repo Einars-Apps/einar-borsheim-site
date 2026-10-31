@@ -112,6 +112,37 @@ test("endring logges fra og til, og uendret mengde gir ingen linje", () => {
   assert.match(report, /Einar: Grøft, utført/);
 });
 
+test("avtalt tillegg legges på planlagt i estimert og avvik, og mangler feltet er 0", () => {
+  const summary = liveCost({
+    cost: {
+      fikenLines: [
+        { id: "dren", label: "Drenering (meter)", unit: "stk", planned: 26, addition: 9, done: 20, unitPrice: 6000 },
+        { id: "gammel", label: "Gammel post", unit: "stk", planned: 4, done: 1, unitPrice: 100 },
+      ],
+    },
+    prices,
+    items: [],
+  });
+  const dren = summary.lines.find((line) => line.id === "dren");
+  assert.equal(dren.planned, 26);
+  assert.equal(dren.addition, 9);
+  assert.equal(dren.deviation, -15);
+  assert.equal(dren.plannedSum, 210000);
+  assert.equal(dren.doneSum, 120000);
+  const old = summary.lines.find((line) => line.id === "gammel");
+  assert.equal(old.addition, 0);
+  assert.equal(old.plannedSum, 400);
+  assert.equal(old.deviation, -3);
+  const logged = costChanges(
+    { fikenLines: [{ id: "dren", label: "Drenering (meter)", planned: 26, done: 20, unitPrice: 6000 }] },
+    { fikenLines: [{ id: "dren", label: "Drenering (meter)", planned: 26, addition: 9, done: 20, unitPrice: 6000 }] },
+  );
+  assert.deepEqual(logged.map((change) => change.field), ["addition"]);
+  assert.equal(logged[0].from, 0);
+  assert.equal(logged[0].to, 9);
+  assert.match(changeText(logged[0]), /avtalt tillegg: 0 → 9/);
+});
+
 test("uberørte standardlinjer vises ikke, mengde og Fiken beholdes, grøftpris blir i kalkulatoren", () => {
   assert.equal(DEFAULT_PRICES.groftM, 1000);
   const summary = liveCost({

@@ -85,6 +85,8 @@ import { firestoreReadMessage, firestoreTransportSettings, readDocWithRetry } fr
 import { fikenQuoteRecord, mergeFikenLines, quotesFromFikenResult } from "./js/fiken-offers.js";
 import { renderFikenQuoteList } from "./js/fiken-quote-view.js";
 import { changeText, costChanges, costReportText, customerSeesCost, liveCost, newExtraId, patchCost, persistableCost } from "./js/cost.js";
+import { applyApprovedRequest } from "./js/requests.js";
+import { renderAdminRequests } from "./js/requests-view.js";
 import { renderCostOverview } from "./js/cost-view.js";
 import { fetchFrostRain } from "./js/frost.js";
 import { button, el, field, icon, sheet, toast } from "./js/dom.js";
@@ -1496,8 +1498,10 @@ function mountOffers(route) {
   const root = el("div", { class: "screen" });
   main.append(root);
   let items = [];
+  let requests = [];
   let costDoc = null;
   let costLog = [];
+  const applyingRequests = new Set();
   let priceTable = pricesFromSettings(null);
   let costQueue = Promise.resolve();
   let toldCostRead = false;
@@ -1509,7 +1513,7 @@ function mountOffers(route) {
     costQueue = costQueue.then(async () => {
       const next = patchCost(costDoc, priceTable, patch);
       const changes = costChanges(costDoc, next, priceTable);
-      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description";
+      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description" || patch.field === "postId";
       if (!changes.length && !structural) return;
       const stored = persistableCost(next);
       costDoc = { ...costDoc, ...stored };
@@ -1540,6 +1544,44 @@ function mountOffers(route) {
       console.error(error);
       toast("Kunne ikke lagre mengden");
     });
+  };
+
+  const applyApproved = (request) => {
+    if (!user?.uid || request?.status !== "godkjent" || request.appliedAt || applyingRequests.has(request.id)) return;
+    applyingRequests.add(request.id);
+    const projectId = route.projectId;
+    const ref = db.collection("projects").doc(projectId).collection("requests").doc(request.id);
+    const qtyRef = db.collection("projects").doc(projectId).collection("quantities").doc("live");
+    db.runTransaction(async (tx) => {
+      const fresh = await tx.get(ref);
+      const data = fresh.data() || {};
+      if (data.status !== "godkjent" || data.appliedAt) return;
+      const qtySnap = await tx.get(qtyRef);
+      const current = qtySnap.exists ? qtySnap.data() : {};
+      const result = applyApprovedRequest(current, { ...data, id: request.id });
+      if (!result.ok) return;
+      if (!result.already) {
+        tx.set(qtyRef, { ...result.cost, updatedAt: stamp() }, { merge: true });
+        for (const change of result.changes) {
+          tx.set(db.collection("projects").doc(projectId).collection("costLog").doc(), {
+            at: stamp(),
+            by: user.uid,
+            byName: "Einar",
+            lineId: change.lineId,
+            label: change.label,
+            field: change.field,
+            from: change.from,
+            to: change.to,
+            unit: change.unit,
+            text: changeText(change).slice(0, 299),
+          });
+        }
+      }
+      tx.update(ref, { appliedAt: stamp(), appliedAs: result.appliedAs });
+    }).catch((error) => {
+      console.error(error);
+      toast("Kunne ikke legge ønsket inn i kostnaden");
+    }).finally(() => applyingRequests.delete(request.id));
   };
 
   const draw = () => {
@@ -1596,10 +1638,20 @@ function mountOffers(route) {
       cost: renderCostOverview({
         summary,
         history: costLog.map((entry) => ({
+          at: entry.at,
           when: formatWhen(entry.at),
           byName: entry.byName || "Einar",
           text: entry.text || changeText(entry),
+          field: entry.field,
+          from: entry.from,
+          to: entry.to,
+          unit: entry.unit || "",
+          label: entry.label || "",
+          lineId: entry.lineId || "",
         })),
+        items,
+        audience: "einar",
+        logLimited: costLog.length >= 40,
         editable: true,
         showToCustomer: customerSeesCost(project),
         extras: costExtras,
@@ -1609,7 +1661,24 @@ function mountOffers(route) {
         onDeleteExtra: (extraId) => savePatch({ deleteExtraId: extraId }),
         onExtra: (extraId, field, value) => savePatch({ extraId, field, value }),
       }),
-    }));
+    }), renderAdminRequests({
+        requests,
+        lines: summary.lines,
+        onAnswer: async (request, fields) => {
+          await db.collection("projects").doc(route.projectId).collection("requests").doc(request.id).update({
+            status: "besvart",
+            answer: String(fields.answer || "").trim().slice(0, 2000),
+            postName: String(fields.postName || "").trim().slice(0, 200),
+            postId: String(fields.postId || "").trim().slice(0, 39),
+            unit: fields.unit || "stk",
+            quantity: fields.quantity,
+            unitPrice: fields.unitPrice,
+            answeredAt: stamp(),
+          });
+          toast("Svaret er sendt til kunden");
+        },
+      }),
+    );
   };
 
   refresh = () => draw();
@@ -1633,6 +1702,11 @@ function mountOffers(route) {
     costDoc = snap.exists ? snap.data() : null;
     draw();
   }, onCostReadError));
+  subs.push(db.collection("projects").doc(route.projectId).collection("requests").orderBy("createdAt", "desc").onSnapshot((snap) => {
+    requests = snap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
+    for (const request of requests) applyApproved(request);
+    draw();
+  }, (error) => console.error(error)));
   subs.push(db.collection("projects").doc(route.projectId).collection("costLog").orderBy("at", "desc").limit(40).onSnapshot((snap) => {
     costSeen = true;
     clearTimeout(costTimer);

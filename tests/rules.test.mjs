@@ -712,6 +712,69 @@ test("henvendelse kan opprettes uten innlogging, og bare admin kan lese", async 
   }));
 });
 
+test("kunden kan ønske og svare, men ikke sette pris eller røre et annet prosjekt", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(context.firestore(), "projects/p2"), { name: "Annen", shareToken: "TOK999999" });
+    await setDoc(doc(context.firestore(), "projects/p2/access/kunde2"), { token: "TOK999999" });
+  });
+  const customer = customerDb();
+  await assertFails(addDoc(collection(customer, "projects/p1/requests"), {
+    status: "ny",
+    text: "Ekstra drenering",
+    createdBy: "kunde1",
+    createdAt: serverTimestamp(),
+    unitPrice: 1,
+  }));
+  await assertFails(addDoc(collection(customer, "projects/p2/requests"), {
+    status: "ny",
+    text: "Ikke mitt prosjekt",
+    createdBy: "kunde1",
+    createdAt: serverTimestamp(),
+  }));
+  const created = await assertSucceeds(addDoc(collection(customer, "projects/p1/requests"), {
+    status: "ny",
+    text: "Ekstra drenering langs garasjen",
+    createdBy: "kunde1",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(created, {
+    status: "godkjent",
+    decidedAt: serverTimestamp(),
+    decidedBy: "kunde1",
+  }));
+  await assertSucceeds(updateDoc(doc(adminDb(), created.path), {
+    status: "besvart",
+    answer: "Jeg kan legge ni meter til.",
+    postName: "Drenering (meter)",
+    postId: "dren",
+    unit: "meter",
+    quantity: 9,
+    unitPrice: 180,
+  }));
+  await assertFails(updateDoc(created, {
+    status: "godkjent",
+    decidedAt: serverTimestamp(),
+    decidedBy: "kunde1",
+    unitPrice: 1,
+  }));
+  await assertFails(updateDoc(doc(customerDb("kunde2"), created.path), {
+    status: "godkjent",
+    decidedAt: serverTimestamp(),
+    decidedBy: "kunde2",
+  }));
+  await assertSucceeds(updateDoc(created, {
+    status: "godkjent",
+    decidedAt: serverTimestamp(),
+    decidedBy: "kunde1",
+  }));
+  const snap = await assertSucceeds(getDoc(created));
+  assert.equal(snap.data().status, "godkjent");
+  assert.equal(snap.data().unitPrice, 180);
+  await assertFails(getDoc(doc(customerDb("kunde2"), created.path)));
+});
+
 test("regelfilene slipper ikke gjennom åpen skriving", () => {
   const firestore = readFileSync("firestore.rules", "utf8");
   const storage = readFileSync("storage.rules", "utf8");

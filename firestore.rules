@@ -123,7 +123,7 @@ service cloud.firestore {
         && request.resource.data.label is string
         && request.resource.data.label.size() > 0
         && request.resource.data.label.size() < 80
-        && request.resource.data.field in ['planned', 'done', 'unitPrice', 'agreedExVat', 'quantity']
+        && request.resource.data.field in ['planned', 'addition', 'done', 'unitPrice', 'agreedExVat', 'quantity']
         && request.resource.data.from is number
         && request.resource.data.to is number
         && request.resource.data.from >= 0
@@ -135,6 +135,34 @@ service cloud.firestore {
         && request.resource.data.text is string
         && request.resource.data.text.size() > 0
         && request.resource.data.text.size() < 300;
+    }
+
+    // Ønske: kunden skriver bare teksten. Pris kan ikke settes her.
+    function validCustomerRequest() {
+      return request.resource.data.keys().hasOnly(['status', 'text', 'createdBy', 'createdAt'])
+        && request.resource.data.status == 'ny'
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() < 2000;
+    }
+
+    function validCustomerRequestDecision() {
+      let keys = request.resource.data.diff(resource.data).affectedKeys();
+      return resource.data.status == 'besvart'
+        && resource.data.createdBy is string
+        && request.resource.data.status in ['godkjent', 'avslatt']
+        && request.resource.data.decidedBy == request.auth.uid
+        && request.resource.data.decidedAt == request.time
+        && keys.hasOnly(['status', 'decidedAt', 'decidedBy'])
+        && request.resource.data.get('text', '') == resource.data.get('text', '')
+        && request.resource.data.get('answer', '') == resource.data.get('answer', '')
+        && request.resource.data.get('postName', '') == resource.data.get('postName', '')
+        && request.resource.data.get('postId', '') == resource.data.get('postId', '')
+        && request.resource.data.get('unit', '') == resource.data.get('unit', '')
+        && request.resource.data.get('quantity', 0) == resource.data.get('quantity', 0)
+        && request.resource.data.get('unitPrice', 0) == resource.data.get('unitPrice', 0);
     }
 
     // Kunden kan bare sette valg og godkjenning. Pris, tekst og alternativer blir stående.
@@ -417,6 +445,16 @@ service cloud.firestore {
         allow read: if isAdmin() || customerMayReadCost(projectId);
         allow create: if isAdmin() && validCostLog();
         allow update, delete: if false;
+      }
+
+      // Ønske fra kunden. Kunden oppretter bare teksten. Einar svarer med pris.
+      // Kunden kan deretter bare godkjenne eller avslå, på sitt eget prosjekt.
+      match /requests/{requestId} {
+        allow read: if isAdmin() || hasAccess(projectId);
+        allow create: if hasAccess(projectId) && validCustomerRequest();
+        allow update: if isAdmin()
+          || (hasAccess(projectId) && validCustomerRequestDecision());
+        allow delete: if isAdmin();
       }
 
       // Posisjon for ett bilde. Ligger ikke på bildedokumentet, som offentlige referanser kan lese.

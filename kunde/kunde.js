@@ -49,7 +49,8 @@ import {
   offerTypeLabel,
 } from "../www/js/offers.js";
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
-import { renderCostOverview } from "../www/js/cost-view.js";
+import { renderCostOverview, renderCustomerHistory } from "../www/js/cost-view.js";
+import { renderCustomerRequests } from "../www/js/requests-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
 import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem, sortPhotos } from "../www/js/photos.js";
 import { gpsLabel, photoWhen, showGpsInReport } from "../www/js/place.js";
@@ -80,6 +81,7 @@ let hmsDocs = [];
 let thread = [];
 let costState = null;
 let costHistory = [];
+let requests = [];
 let stopCost = null;
 let stopCostLog = null;
 
@@ -218,13 +220,48 @@ function paintCost() {
   slot.replaceChildren(renderCostOverview({
     summary,
     history: costHistory.map((entry) => ({
+      at: entry.at,
       when: formatWhen(entry.at),
       byName: entry.byName || "Einar",
       text: entry.text || changeText(entry),
+      field: entry.field,
+      from: entry.from,
+      to: entry.to,
+      unit: entry.unit || "",
+      label: entry.label || "",
+      lineId: entry.lineId || "",
     })),
+    items,
+    audience: "kunde",
     editable: false,
     showPreview: true,
   }));
+}
+
+function paintRequests() {
+  const slot = document.getElementById("request-slot");
+  if (!slot) return;
+  slot.replaceChildren(renderCustomerRequests({
+    requests,
+    onCreate: async (text) => {
+      if (previewMode) return;
+      await addDoc(collection(db, "projects", projectId, "requests"), {
+        status: "ny",
+        text: String(text || "").trim().slice(0, 1999),
+        createdBy: uid,
+        createdAt: serverTimestamp(),
+      });
+    },
+    onDecide: async (request, status) => {
+      if (previewMode || !request?.id) return;
+      await updateDoc(doc(db, "projects", projectId, "requests", request.id), {
+        status,
+        decidedAt: serverTimestamp(),
+        decidedBy: uid,
+      });
+    },
+  }));
+  if (previewMode) applyPortalPreviewLock(slot);
 }
 
 function render() {
@@ -233,6 +270,7 @@ function render() {
   const typing = active && viewProject.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
   if (typing) {
     paintCost();
+    paintRequests();
     if (!renderAfterBlur) {
       renderAfterBlur = true;
       active.addEventListener("blur", () => {
@@ -293,8 +331,16 @@ function render() {
       for (const item of offerPosts) box.append(offerCard(item));
     }
     if (customerSeesCost(project)) box.append(el("div", { id: "cost-slot" }));
+    else {
+      const story = renderCustomerHistory({ items: offerPosts, audience: "kunde" });
+      if (story) box.append(story);
+    }
     viewProject.append(box);
   }
+
+  const requestSlot = el("div", { id: "request-slot" });
+  viewProject.append(requestSlot);
+  paintRequests();
 
   const groups = [
     ["tilbud", "Tilbud"],
@@ -954,6 +1000,10 @@ function startPortal() {
     ), (snap) => {
       hmsDocs = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       render();
+    }, (error) => console.error(error));
+    onSnapshot(query(collection(db, "projects", projectId, "requests"), orderBy("createdAt", "desc")), (snap) => {
+      requests = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      if (document.getElementById("request-slot")) paintRequests();
     }, (error) => console.error(error));
     onSnapshot(query(collection(db, "projects", projectId, "messages"), orderBy("createdAt", "asc")), (snap) => {
       thread = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
