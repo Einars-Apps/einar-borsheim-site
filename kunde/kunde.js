@@ -52,6 +52,10 @@ import {
 } from "../www/js/offers.js";
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
 import { renderCostOverview, renderCustomerHistory, renderPaymentSummary } from "../www/js/cost-view.js";
+import { householdAllocation, normalizeHouseholds } from "../www/js/households.js";
+import { renderHouseholdAllocation } from "../www/js/household-view.js";
+import { fdvDownloadOpen } from "../www/js/fdv.js";
+import { renderFdvWait } from "../www/js/fdv-view.js";
 import { portalSectionVisible } from "../www/js/portal-visibility.js";
 import { fillPortalNav, renderPortalNav } from "../www/js/portal-visibility-view.js";
 import { renderCustomerRequests } from "../www/js/requests-view.js";
@@ -97,6 +101,8 @@ function watchPayments() {
     payments = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
     if (document.getElementById("payment-slot")) paintPayments();
     if (document.getElementById("cost-slot")) paintCost();
+    paintFdv();
+    paintAllocation();
   }, (error) => console.error(error));
 }
 
@@ -115,6 +121,7 @@ function watchCost() {
       costState = snap.exists() ? snap.data() : null;
       if (document.getElementById("cost-slot")) paintCost();
       if (document.getElementById("payment-slot")) paintPayments();
+      paintAllocation();
     }, (error) => console.error(error));
   }
   if (!stopCostLog) {
@@ -122,6 +129,7 @@ function watchCost() {
       costHistory = snap.docs.map((docSnap) => docSnap.data());
       if (document.getElementById("cost-slot")) paintCost();
       if (document.getElementById("payment-slot")) paintPayments();
+      paintAllocation();
     }, (error) => console.error(error));
   }
 }
@@ -233,6 +241,7 @@ function paintCost() {
     prices: {},
     items,
     previewChoices,
+    requests,
   });
   slot.replaceChildren(renderCostOverview({
     summary,
@@ -254,6 +263,7 @@ function paintCost() {
     showPreview: true,
     showPayments: false,
     payments,
+    requestHref: portalSectionVisible(project, "foresporsler") ? "#seksjon-foresporsler" : "",
   }));
 }
 
@@ -261,7 +271,7 @@ function paintPayments() {
   const slot = document.getElementById("payment-slot");
   if (!slot) return;
   const summary = customerSeesCost(project)
-    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), previewChoices })
+    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), previewChoices, requests })
     : null;
   slot.replaceChildren(renderPaymentSummary({
     id: "seksjon-betalinger",
@@ -270,7 +280,67 @@ function paintPayments() {
     showBalance: summary != null,
     prominent: true,
     editable: false,
+    households: normalizeHouseholds(project?.households),
   }));
+}
+
+function paintFdv() {
+  const slot = document.getElementById("fdv-slot");
+  if (!slot || !project) return;
+  if (!fdvDownloadOpen({ project, payments })) {
+    slot.replaceChildren(renderFdvWait());
+    return;
+  }
+  const path = String(project.pdfPath || "");
+  const storagePath = path.startsWith(`projects/${projectId}/rapport/`) && path.endsWith(".pdf") ? path : "";
+  if (!storagePath) {
+    slot.replaceChildren(el("p", { class: "muted" }, "Sluttrapporten legges her når den er klar."));
+    return;
+  }
+  const waiting = el("p", { class: "muted" }, "Henter FDV-dokumentasjonen…");
+  slot.replaceChildren(waiting);
+  getDownloadURL(ref(storage, storagePath)).then((url) => {
+    const href = displayUrl(url);
+    if (!slot.isConnected || !fdvDownloadOpen({ project, payments })) return;
+    if (!href) {
+      slot.replaceChildren(renderFdvWait());
+      return;
+    }
+    slot.replaceChildren(el("a", {
+      class: "pdf-link",
+      href,
+      target: "_blank",
+      rel: "noopener",
+    }, "Last ned FDV-dokumentasjon (PDF)"));
+  }).catch((error) => {
+    if (!slot.isConnected) return;
+    const denied = error?.code === "storage/unauthorized" || error?.code === "storage/unauthenticated";
+    slot.replaceChildren(denied || !fdvDownloadOpen({ project, payments })
+      ? renderFdvWait()
+      : el("p", { class: "muted" }, "Kunne ikke hente FDV-rapporten. Prøv igjen."));
+  });
+}
+
+function paintAllocation() {
+  const slot = document.getElementById("allocation-slot");
+  if (!slot || !project) return;
+  const showTotal = portalSectionVisible(project, "kostnad");
+  const showPayments = portalSectionVisible(project, "betalinger");
+  const summary = showTotal
+    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), previewChoices, requests })
+    : null;
+  const allocation = householdAllocation({
+    households: project.households,
+    totalEx: summary?.estimated?.exVat || 0,
+    totalInc: summary?.estimated?.incVat || 0,
+    payments: showPayments ? payments : [],
+  });
+  const node = renderHouseholdAllocation({
+    allocation,
+    showTotal: Boolean(showTotal && summary),
+    showPayments,
+  });
+  slot.replaceChildren(node || el("p", { class: "muted" }, ""));
 }
 
 function paintRequests() {
@@ -308,6 +378,8 @@ function render() {
   if (typing) {
     paintCost();
     paintPayments();
+    paintFdv();
+    paintAllocation();
     paintRequests();
     if (!renderAfterBlur) {
       renderAfterBlur = true;
@@ -323,8 +395,9 @@ function render() {
   const items = mergedItems();
   const finished = isCompleted(project);
   const docsOn = portalSectionVisible(project, "dokumentasjon");
-  const pdfSlot = el("p", { class: "muted" }, "Sluttrapporten legges her når den er klar.");
-  const pdfPath = `projects/${projectId}/rapport/sluttrapport.pdf`;
+  const showPay = portalSectionVisible(project, "betalinger");
+  const showCost = portalSectionVisible(project, "kostnad");
+  const hasHouseholds = normalizeHouseholds(project.households).length > 0;
   viewProject.replaceChildren();
   if (previewMode) {
     viewProject.append(el("p", { class: "preview-banner", role: "status" }, PORTAL_PREVIEW_BANNER));
@@ -340,33 +413,33 @@ function render() {
     project.description ? el("p", { class: "pre" }, project.description) : null,
     project.address ? el("p", { class: "muted" }, project.address) : null,
     finished ? el("p", { class: "muted" }, `Ferdig ${formatDay(project.completedAt) || ""}`.trim()) : null,
-    docsOn
-      ? (finished ? pdfSlot : el("p", { class: "muted" }, "Sluttrapporten kan lastes ned når oppdraget er ferdig og godkjent."))
-      : null,
   ]));
-  const knownPdf = displayUrl(project.pdfUrl);
-  if (docsOn && finished && project.pdfPath === pdfPath) {
-    getDownloadURL(ref(storage, pdfPath)).then((url) => {
-      const href = displayUrl(url);
-      if (!href || !pdfSlot.isConnected) return;
-      pdfSlot.replaceWith(el("a", { class: "pdf-link", href, target: "_blank", rel: "noopener" }, "Last ned sluttrapport (PDF)"));
-    }).catch(() => {});
-  } else if (docsOn && finished && knownPdf) {
-    pdfSlot.replaceWith(el("a", { class: "pdf-link", href: knownPdf, target: "_blank", rel: "noopener" }, "Last ned sluttrapport (PDF)"));
-  }
 
-  if (portalSectionVisible(project, "betalinger")) {
+  if (showPay) {
     viewProject.append(el("section", { class: "k-card k-stack", id: "payment-card" }, [
       el("div", { id: "payment-slot" }),
     ]));
   }
+  if (hasHouseholds && (showPay || showCost)) {
+    viewProject.append(el("section", { class: "k-card k-stack", id: "seksjon-fordeling" }, [
+      el("div", { id: "allocation-slot" }),
+    ]));
+  }
 
   const reportCopy = docsOn ? String(project.reportText || "").trim() : "";
-  if (reportCopy) {
-    viewProject.append(el("section", { class: "k-card", id: "seksjon-dokumentasjon" }, [
-      el("h2", {}, "Arbeid utført"),
-      el("p", { class: "pre" }, reportCopy),
-    ]));
+  if (docsOn) {
+    const documentation = el("section", { class: "k-card k-stack", id: "seksjon-dokumentasjon" }, [
+      el("h2", {}, "Dokumentasjon"),
+      el("h3", {}, "FDV-rapport"),
+      el("div", { id: "fdv-slot" }),
+    ]);
+    if (reportCopy) {
+      documentation.append(
+        el("h3", {}, "Arbeid utført"),
+        el("p", { class: "pre" }, reportCopy),
+      );
+    }
+    viewProject.append(documentation);
   }
   if (portalSectionVisible(project, "bilder")) {
     viewProject.append(el("section", { id: "seksjon-bilder", class: "k-card k-stack", hidden: true }, [
@@ -431,9 +504,7 @@ function render() {
     viewProject.append(messages);
   }
   if (docsOn) {
-    const documents = documentSection();
-    if (!reportCopy) documents.id = "seksjon-dokumentasjon";
-    viewProject.append(documents);
+    viewProject.append(documentSection());
   }
   if (portalSectionVisible(project, "hms")) {
     const hms = renderCustomerHms(hmsDocs);
@@ -453,6 +524,8 @@ function render() {
   }
   paintCost();
   paintPayments();
+  paintFdv();
+  paintAllocation();
 
   paintPortalPhotos();
   fillPortalNav(nav);

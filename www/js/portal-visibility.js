@@ -35,6 +35,7 @@ const DEFAULT_VISIBLE = {
 
 export const PORTAL_JUMPS = [
   { id: "seksjon-betalinger", label: "Betalinger" },
+  { id: "seksjon-fordeling", label: "Fordeling" },
   { id: "seksjon-tilbud-endringer", label: "Tilbud og endringer" },
   { id: "cost-slot", label: "Nåværende kostnad" },
   { id: "seksjon-bilder", label: "Bilder" },

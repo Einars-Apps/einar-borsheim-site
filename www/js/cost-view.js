@@ -1,5 +1,7 @@
 import { button, el, field, icon } from "./dom.js";
 import { formatKr } from "./offers.js";
+import { householdAllocation } from "./households.js";
+import { renderHouseholdAllocation } from "./household-view.js";
 import {
   formatQty,
   nextInstallmentNumber,
@@ -9,6 +11,8 @@ import {
   paymentProgress,
   paymentStatusLabel,
   paymentTotals,
+  budgetStatusText,
+  scopeChangeText,
   signedKr,
   signedQty,
 } from "./cost.js";
@@ -111,7 +115,15 @@ function todayInputValue() {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
-function paymentForm(onAddPayment, nextNumber) {
+function householdCaption(payment, households) {
+  if (!households?.length) return "";
+  const id = String(payment?.householdId || "");
+  const match = households.find((row) => row.id === id);
+  if (match) return `Husstand: ${match.name}`;
+  return "Fordeles etter andel";
+}
+
+function paymentForm(onAddPayment, nextNumber, households = []) {
   const date = el("input", { type: "date", required: true, value: todayInputValue(), "aria-label": "Dato" });
   const amount = el("input", { type: "text", inputmode: "decimal", "aria-label": "Beløp" });
   const inkl = el("input", { type: "radio", name: "payment-vat", value: "inkl" });
@@ -121,6 +133,10 @@ function paymentForm(onAddPayment, nextNumber) {
   sendt.checked = true;
   const invoice = el("input", { type: "text", maxlength: "39", "aria-label": "Fakturanummer" });
   const note = el("input", { type: "text", maxlength: "299", "aria-label": "Notat" });
+  const finalInvoice = el("input", { type: "checkbox" });
+  const household = el("select", { "aria-label": "Husstand" });
+  household.append(el("option", { value: "" }, "Fordeles etter andel"));
+  for (const row of households) household.append(el("option", { value: row.id }, row.name));
   const status = el("p", { class: "meta", role: "status" });
   const panel = el("form", { class: "payment-form", hidden: true }, [
     el("p", { class: "payment-amount" }, `Delfaktura ${nextNumber}`),
@@ -137,6 +153,8 @@ function paymentForm(onAddPayment, nextNumber) {
       el("label", { class: "checkline" }, [sendt, el("span", {}, "Sendt")]),
       el("label", { class: "checkline" }, [betalt, el("span", {}, "Betalt")]),
     ]),
+    households.length ? field("Husstand (valgfritt)", household) : null,
+    el("label", { class: "checkline" }, [finalInvoice, el("span", {}, "Dette er sluttfakturaen")]),
     field("Notat (valgfritt)", note),
     status,
     button("Lagre delfaktura", { class: "btn btn-primary btn-block", type: "submit" }),
@@ -171,6 +189,8 @@ function paymentForm(onAddPayment, nextNumber) {
         note: note.value.trim().slice(0, 299),
         status: betalt.checked ? "betalt" : "sendt",
         installment: nextNumber,
+        householdId: household.value,
+        sluttfaktura: finalInvoice.checked === true,
       });
     } catch (error) {
       console.error(error);
@@ -184,6 +204,8 @@ function paymentForm(onAddPayment, nextNumber) {
     eks.checked = false;
     sendt.checked = true;
     betalt.checked = false;
+    finalInvoice.checked = false;
+    household.value = "";
     panel.hidden = true;
     status.textContent = "Delfakturaen er lagret.";
   });
@@ -228,9 +250,12 @@ export function renderPaymentSummary({
   showBalance = false,
   prominent = false,
   editable = false,
+  households = [],
   onAddPayment,
   onDeletePayment,
   onMarkPaid,
+  onAssignHousehold,
+  onToggleSluttfaktura,
 } = {}) {
   const paid = paymentTotals(payments);
   const balance = showBalance && summary ? paymentBalance(summary, payments) : null;
@@ -249,8 +274,25 @@ export function renderPaymentSummary({
       el("p", {}, `${when} · ${formatKr(amount)} ${vatLabel}`),
       payment.invoiceNumber ? el("p", { class: "meta" }, `Faktura ${payment.invoiceNumber}`) : el("p", { class: "meta" }, "Uten fakturanummer"),
       el("p", {}, el("span", { class: `pay-status pay-status-${state}` }, paymentStatusLabel(state))),
+      payment.sluttfaktura === true ? el("p", {}, el("span", { class: "pay-status pay-status-slutt" }, "Sluttfaktura")) : null,
+      householdCaption(payment, households) ? el("p", { class: "meta" }, householdCaption(payment, households)) : null,
       payment.note ? el("p", { class: "meta" }, payment.note) : null,
       labeled ? null : el("p", { class: "meta" }, "Beløpet er ikke med i summen, fordi mva ikke er merket."),
+      editable && payment.id && households.length ? field("Husstand", (() => {
+        const select = el("select", { "aria-label": `Husstand for delfaktura ${payment.number}` });
+        select.append(el("option", { value: "" }, "Fordeles etter andel"));
+        for (const row of households) {
+          const option = el("option", { value: row.id }, row.name);
+          if (row.id === payment.householdId) option.selected = true;
+          select.append(option);
+        }
+        select.addEventListener("change", () => onAssignHousehold?.(payment.id, select.value));
+        return select;
+      })()) : null,
+      editable && payment.id ? button(payment.sluttfaktura === true ? "Fjern sluttfaktura" : "Merk som sluttfaktura", {
+        class: "btn btn-ghost",
+        onClick: () => onToggleSluttfaktura?.(payment.id, payment.sluttfaktura !== true),
+      }) : null,
       editable && payment.id && state === "sendt" ? button("Merk som betalt", {
         class: "btn btn-ghost",
         onClick: () => onMarkPaid?.(payment.id),
@@ -268,13 +310,13 @@ export function renderPaymentSummary({
   return el("section", { class: prominent ? "payment-box payment-hero" : "payment-box", id: id || null, "aria-label": "Betalinger" }, [
     el("h3", { class: "h-app" }, "Betalinger"),
     el("p", { class: "meta" }, editable
-      ? "Ny delfaktura får neste nummer. Sendt er fakturert, men teller ikke som betalt før du merker den betalt."
+      ? "Ny delfaktura får neste nummer. Sendt er fakturert, men teller ikke som betalt før du merker den betalt. Merk én delfaktura som sluttfaktura. FDV-dokumentasjonen kan lastes ned når den er betalt."
       : "Einar sender delfaktura underveis. Du kan ikke endre dem."),
     paymentProgressView(progress),
     showBalance && balance ? el("p", { class: "meta" }, `Totalt for oppdraget: ${formatKr(balance.totalInc)} inkl. mva.`) : null,
     el("p", { class: "meta" }, `Betalt hittil: ${formatKr(paid.exVat)} eks. mva, ${formatKr(paid.incVat)} inkl. mva`),
     list,
-    editable ? paymentForm(onAddPayment, nextInstallmentNumber(payments)) : null,
+    editable ? paymentForm(onAddPayment, nextInstallmentNumber(payments), households) : null,
   ]);
 }
 
@@ -474,10 +516,15 @@ export function renderCostOverview({
   onAddPayment,
   onDeletePayment,
   onMarkPaid,
+  households = [],
+  onAssignHousehold,
+  onToggleSluttfaktura,
   quotes = [],
   onAgreeQuote,
+  requestHref = "",
 }) {
-  const diffClass = summary.differenceExVat > 0 ? "cost-diff-up" : summary.differenceExVat < 0 ? "cost-diff-down" : "meta";
+  const lockedEx = summary.finalized?.exVat || 0;
+  const lockedInc = summary.finalized?.incVat || 0;
   const approved = (summary.offers?.rows || []).filter((row) => row.status === "godkjent");
   const baseline = summary.baseline || { kind: "ingen", exVat: 0, label: "" };
   const fromLines = baseline.kind === "planlagt" || baseline.kind === "fiken";
@@ -518,11 +565,7 @@ export function renderCostOverview({
     const body = [
       el("p", { class: "cost-line-title" }, !editable && facts ? customerPostSummary(line.label, facts) : line.label),
       line.final
-        ? el("p", { class: "final-badge" }, [
-          partialFinalText(line) ? `${partialFinalText(line)}. ` : "",
-          `Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva`,
-          line.finalizedAt ? ` · Fakturert ${formatDay(line.finalizedAt)}` : "",
-        ].join(""))
+        ? el("p", { class: "final-badge" }, "Ferdig")
         : el("p", { class: "estimate-badge" }, "Estimert"),
       line.source ? el("p", { class: "meta" }, line.source) : null,
       editable && line.fromFiken ? null : el("p", { class: "meta" }, `à ${formatKr(line.unitPrice)} eks. mva`),
@@ -585,6 +628,13 @@ export function renderCostOverview({
         doneStep,
         el("label", { class: "checkline" }, [finalBox, el("span", {}, "Ferdig – endelig pris")]),
         invoiced ? el("p", { class: "meta" }, invoiced) : null,
+        line.final ? field("Årsak til endret omfang (valgfritt)", commitField(el("input", {
+          type: "text",
+          maxlength: "200",
+          value: line.finalNote || "",
+          placeholder: "F.eks. Halve jobben var ikke mulig å utføre",
+          "aria-label": `Årsak til endret omfang ${line.label}`,
+        }), (value) => onQuantity?.(line.id, "finalNote", value))) : null,
       );
     }
     body.push(
@@ -627,8 +677,31 @@ export function renderCostOverview({
     extraBlock.push(extraSum);
   }
 
+  const scopeChanges = summary.budget?.changes || [];
+  const budgetText = budgetStatusText(summary.budget);
+  const budgetUnder = summary.budget?.direction === "under";
+  const scopeNote = scopeChanges.length
+    ? el("div", { class: "scope-changes" }, [
+      el("h3", { class: "h-app" }, "Endringer i omfang"),
+      el("ul", { class: "scope-list" }, scopeChanges.map((change) => el("li", {}, [
+        el("p", {}, scopeChangeText(change)),
+        change.note ? el("p", { class: "meta" }, change.note) : null,
+      ]))),
+    ])
+    : null;
+  const budgetNote = budgetText
+    ? el("div", { class: budgetUnder ? "budget-under" : "budget-over", role: "status" }, [
+      el("p", {}, budgetText),
+      budgetUnder && requestHref
+        ? el("a", { class: "btn btn-primary", href: requestHref }, "Send en forespørsel")
+        : null,
+    ])
+    : null;
+
   return el("section", { class: "card continue cost-box" }, [
     el("h2", { class: "h-app" }, "Nåværende kostnad"),
+    scopeNote,
+    budgetNote,
     el("p", { class: "meta" }, editable
       ? (showToCustomer
         ? "Mengdene oppdateres med en gang. Kunden ser det samme, men kan ikke endre tallene. Utført kan justeres underveis, også med desimaler, til Ferdig – endelig pris er krysset av."
@@ -636,7 +709,7 @@ export function renderCostOverview({
       : "Einar oppdaterer mengdene. Du kan ikke endre mengder eller priser."),
     ...extras,
     fromLines ? el("p", { class: "meta" }, `Opprinnelig tilbud: ${formatKr(baseline.exVat)} eks. mva. ${baseline.label}. Det er planlagt mengde ganger enhetspris, uten avtalt tillegg.`) : null,
-    fromLines ? el("p", { class: "meta" }, "Differansen er avtalt tillegg og avvik fra den planlagte mengden. Et beløp i feltet under legges oppå postene.") : null,
+    fromLines ? el("p", { class: "meta" }, "Differansen er totalen mot det opprinnelige tilbudet. Låst sluttmengde og avtalt tillegg flytter totalen opp eller ned.") : null,
     ...agreeQuoteActions(quotes, editable ? onAgreeQuote : null),
     agreed,
     approved.length
@@ -644,20 +717,34 @@ export function renderCostOverview({
       : el("p", { class: "meta" }, fromLines
         ? "Ingen poster i Tilbud og endringer er godkjent av kunden ennå. Fiken-linjene er ikke den godkjenningen. Kunden godkjenner en post først når du har sendt den."
         : "Ingen godkjente poster i Tilbud og endringer ennå."),
-    moneyLine("Ferdige poster (endelig)", summary.finalized?.exVat || 0, summary.finalized?.incVat || 0),
+    lockedEx || lockedInc ? moneyLine("Låst sluttpris (ferdige poster)", lockedEx, lockedInc) : null,
     moneyLine("Gjenstår (estimert)", summary.remaining?.exVat || 0, summary.remaining?.incVat || 0),
     moneyLine("Totalt", summary.estimated.exVat, summary.estimated.incVat),
     moneyLine("Påløpt hittil", summary.incurred.exVat, summary.incurred.incVat),
-    el("p", { class: diffClass }, `Differanse mot opprinnelig tilbud: ${signedKr(summary.differenceExVat)} eks. mva, ${signedKr(summary.differenceIncVat)} inkl. mva`),
+    el("p", { class: "meta" }, `Differanse mot opprinnelig tilbud: ${signedKr(summary.differenceExVat)} eks. mva, ${signedKr(summary.differenceIncVat)} inkl. mva`),
     showPayments ? renderPaymentSummary({
       id: "seksjon-betalinger",
       payments,
       summary,
       showBalance: true,
       editable,
+      households,
       onAddPayment,
       onDeletePayment,
       onMarkPaid,
+      onAssignHousehold,
+      onToggleSluttfaktura,
+    }) : null,
+    audience === "einar" && households.length ? renderHouseholdAllocation({
+      allocation: householdAllocation({
+        households,
+        totalEx: summary?.estimated?.exVat || 0,
+        totalInc: summary?.estimated?.incVat || 0,
+        payments,
+      }),
+      showTotal: true,
+      showPayments: true,
+      heading: "h3",
     }) : null,
     showPreview && summary.previewDeltaExVat
       ? el("p", { class: "cost-preview" }, `Forhåndsvisning hvis du godkjenner valget: ${formatKr(summary.preview.exVat)} eks. mva, ${formatKr(summary.preview.incVat)} inkl. mva. Det er ${signedKr(summary.previewDeltaExVat)} eks. mva mot nåværende estimat.`)

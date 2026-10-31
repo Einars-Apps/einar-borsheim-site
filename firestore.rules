@@ -150,9 +150,10 @@ service cloud.firestore {
 
     // Betaling og delfaktura. Bare admin skriver. Kunden leser dem på eget prosjekt.
     // status og installment kan mangle på eldre betalinger. De teller da som betalt.
+    // householdId knytter beløpet til én husstand. sluttfaktura markerer FDV-nedlastingen.
     function validPayment() {
       return request.resource.data.keys().hasOnly([
-          'paidAt', 'amount', 'vat', 'invoiceNumber', 'note', 'createdAt', 'createdBy', 'status', 'installment'
+          'paidAt', 'amount', 'vat', 'invoiceNumber', 'note', 'createdAt', 'createdBy', 'status', 'installment', 'householdId', 'sluttfaktura'
         ])
         && request.resource.data.paidAt is timestamp
         && request.resource.data.amount is number
@@ -176,6 +177,19 @@ service cloud.firestore {
             && request.resource.data.installment >= 1
             && request.resource.data.installment <= 500
           )
+        )
+        && (
+          !request.resource.data.keys().hasAny(['householdId'])
+          || (
+            request.resource.data.householdId is string
+            && request.resource.data.householdId.size() > 0
+            && request.resource.data.householdId.size() < 40
+            && request.resource.data.householdId.matches('^[A-Za-z0-9_-]+$')
+          )
+        )
+        && (
+          !request.resource.data.keys().hasAny(['sluttfaktura'])
+          || request.resource.data.sluttfaktura is bool
         );
     }
 
@@ -188,7 +202,7 @@ service cloud.firestore {
       return validPayment()
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.createdBy == resource.data.createdBy
-        && keys.hasOnly(['paidAt', 'amount', 'vat', 'invoiceNumber', 'note', 'status', 'installment']);
+        && keys.hasOnly(['paidAt', 'amount', 'vat', 'invoiceNumber', 'note', 'status', 'installment', 'householdId', 'sluttfaktura']);
     }
 
     function validCustomerRequestDecision() {
@@ -374,6 +388,7 @@ service cloud.firestore {
       allow read: if isAdmin() || hasAccess(projectId);
       allow create, update, delete: if isAdmin();
 
+      // Flere kunder kan opprette hver sin tilgang med samme delingskode. Det er én lenke per prosjekt.
       match /access/{uid} {
         allow create: if request.auth != null
           && request.auth.uid == uid

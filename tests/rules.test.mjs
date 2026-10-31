@@ -260,6 +260,14 @@ test("storage: kunde med tilgang laster opp bilde, ikke PDF, og fremmede leser i
   await assertSucceeds(uploadString(ref(admin.storage(), "projects/p1/rapport/sluttrapport.pdf"), "pdf", "raw", {
     contentType: "application/pdf",
   }));
+  await assertFails(getBytes(ref(kunde.storage(), "projects/p1/rapport/sluttrapport.pdf")));
+  await assertSucceeds(uploadString(ref(kunde.storage(), "projects/p1/documents/tegning.pdf"), "pdf", "raw", {
+    contentType: "application/pdf",
+  }));
+  await assertSucceeds(getBytes(ref(kunde.storage(), "projects/p1/documents/tegning.pdf")));
+  await env.withSecurityRulesDisabled(async (context) => {
+    await updateDoc(doc(context.firestore(), "projects/p1"), { fdvAvailable: true });
+  });
   await assertSucceeds(getBytes(ref(kunde.storage(), "projects/p1/rapport/sluttrapport.pdf")));
   await assertFails(getBytes(ref(stranger.storage(), "projects/p1/rapport/sluttrapport.pdf")));
   await assertFails(uploadString(ref(kunde.storage(), "projects/p1/rapport/sluttrapport.pdf"), "pdf", "raw", {
@@ -275,6 +283,37 @@ test("storage: kunde med tilgang laster opp bilde, ikke PDF, og fremmede leser i
   await assertSucceeds(uploadString(ref(admin.storage(), "projects/p1/gammelt.jpg"), "img", "raw", {
     contentType: "image/jpeg",
   }));
+});
+
+test("to kunder kan bruke samme lenke, mens FDV-filen venter til den er åpnet", async () => {
+  await seedProject();
+  const first = customerDb("hus-a");
+  const second = customerDb("hus-b");
+  await assertSucceeds(setDoc(doc(first, "projects/p1/access/hus-a"), { token: "TOK123456" }));
+  await assertSucceeds(setDoc(doc(second, "projects/p1/access/hus-b"), { token: "TOK123456" }));
+  await assertSucceeds(getDoc(doc(first, "projects/p1")));
+  await assertSucceeds(getDoc(doc(second, "projects/p1")));
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "projects/p1/documents/d1"), {
+      name: "Tegning",
+      url: "https://example.com/t.pdf",
+      approved: true,
+      source: "admin",
+    });
+    await setDoc(doc(context.firestore(), "projects/p1/photos/ph1"), {
+      url: "https://example.com/a.jpg",
+      approved: true,
+    });
+  });
+  await assertSucceeds(getDoc(doc(second, "projects/p1/documents/d1")));
+  await assertSucceeds(getDoc(doc(first, "projects/p1/photos/ph1")));
+  const admin = env.authenticatedContext("admin-user", { email: "e.bors@hotmail.com" });
+  const storageA = env.authenticatedContext("hus-a", { firebase: { sign_in_provider: "anonymous" } });
+  await assertSucceeds(uploadString(ref(admin.storage(), "projects/p1/rapport/sluttrapport.pdf"), "pdf", "raw", {
+    contentType: "application/pdf",
+  }));
+  await assertFails(getBytes(ref(storageA.storage(), "projects/p1/rapport/sluttrapport.pdf")));
+  await assertSucceeds(getBytes(ref(admin.storage(), "projects/p1/rapport/sluttrapport.pdf")));
 });
 
 test("meldinger og dokumenter er bare for admin og kunden med lenke", async () => {
@@ -861,6 +900,13 @@ test("bare admin skriver betalinger, og kunden leser dem på eget prosjekt", asy
   }));
   await assertFails(updateDoc(doc(customer, "projects/p1/payments/del1"), { status: "betalt" }));
   await assertSucceeds(updateDoc(doc(adminDb(), "projects/p1/payments/del1"), { status: "betalt" }));
+  await assertSucceeds(updateDoc(doc(adminDb(), "projects/p1/payments/del1"), {
+    sluttfaktura: true,
+    householdId: "h1etasje",
+  }));
+  await assertFails(updateDoc(doc(adminDb(), "projects/p1/payments/del1"), { householdId: "ikke gyldig" }));
+  await assertFails(updateDoc(doc(adminDb(), "projects/p1/payments/del1"), { sluttfaktura: "ja" }));
+  await assertFails(updateDoc(doc(customer, "projects/p1/payments/del1"), { sluttfaktura: true }));
   await assertFails(setDoc(doc(adminDb(), "projects/p1/payments/del2"), {
     ...payment,
     status: "ukjent",

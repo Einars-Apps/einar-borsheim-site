@@ -85,6 +85,10 @@ import { firestoreReadMessage, firestoreTransportSettings, readDocWithRetry } fr
 import { fikenQuoteRecord, mergeFikenLines, quotesFromFikenResult } from "./js/fiken-offers.js";
 import { renderFikenQuoteList } from "./js/fiken-quote-view.js";
 import { changeText, costChanges, costReportText, customerSeesCost, liveCost, newExtraId, nextInstallmentNumber, patchCost, paymentReportText, persistableCost } from "./js/cost.js";
+import { householdShareText, householdsForSave, householdShareError, normalizeHouseholds } from "./js/households.js";
+import { renderHouseholdEditor } from "./js/household-view.js";
+import { fdvDownloadOpen, fdvOpenReason, fdvReasonText } from "./js/fdv.js";
+import { renderFdvWait } from "./js/fdv-view.js";
 import { applyApprovedRequest } from "./js/requests.js";
 import { renderAdminRequests } from "./js/requests-view.js";
 import { renderCostOverview } from "./js/cost-view.js";
@@ -1132,7 +1136,14 @@ async function saveReportPdf(project, reportText) {
     const costSnap = await db.collection("projects").doc(project.id).collection("quantities").doc("live").get();
     const logSnap = await db.collection("projects").doc(project.id).collection("costLog").orderBy("at", "desc").limit(80).get();
     const costSettings = await readAppSettings();
-    const costSummary = liveCost({ cost: costSnap.data() || null, prices: costSettings.prices, items });
+    const requestSnap = await db.collection("projects").doc(project.id).collection("requests").get();
+    const requestRows = requestSnap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
+    const costSummary = liveCost({
+      cost: costSnap.data() || null,
+      prices: costSettings.prices,
+      items,
+      requests: requestRows,
+    });
     const costHistory = logSnap.docs.map((entry) => entry.data()).reverse();
     sections.push({
       title: "Nåværende kostnad",
@@ -1232,6 +1243,7 @@ async function saveReportPdf(project, reportText) {
     pdfUpdatedAt: stamp(),
     updatedAt: stamp(),
   });
+  await syncFdvFlag(project.id);
   await maybeQueueReportMail(saved);
   try {
     await deliverPdf(result.blob, result.filename);
@@ -1289,17 +1301,24 @@ async function deliverPdf(blob, filename) {
 }
 
 async function maybeQueueReportMail(project) {
-  const email = String(project?.customerEmail || "").trim();
-  if (!isCompleted(project) || !project?.pdfUrl || !email.includes("@")) return;
-  if (project.reportMailFor === project.pdfUrl) return;
+  if (!project?.id) return;
+  const freshSnap = await db.collection("projects").doc(project.id).get();
+  if (!freshSnap.exists) return;
+  const current = { id: project.id, ...freshSnap.data() };
+  const email = String(current.customerEmail || "").trim();
+  if (!isCompleted(current) || !current.pdfUrl || !email.includes("@")) return;
+  if (current.reportMailFor === current.pdfUrl) return;
+  const paySnap = await db.collection("projects").doc(project.id).collection("payments").get();
+  const payments = paySnap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
+  if (!fdvDownloadOpen({ project: current, payments })) return;
   await db.collection("mail").add({
     to: email,
     message: {
-      subject: `Sluttrapport klar: ${project.name || "Prosjekt"}`,
+      subject: `Sluttrapport klar: ${current.name || "Prosjekt"}`,
       text: [
-        `Hei${project.customerName ? ` ${project.customerName}` : ""}!`,
+        `Hei${current.customerName ? ` ${current.customerName}` : ""}!`,
         "",
-        `Sluttrapporten for «${project.name || "prosjektet"}» er klar.`,
+        `Sluttrapporten for «${current.name || "prosjektet"}» er klar.`,
         "Åpne prosjektlenken du fikk fra Einar A Børsheim for å laste den ned.",
         "",
         "Vennlig hilsen",
@@ -1310,7 +1329,38 @@ async function maybeQueueReportMail(project) {
     },
     createdAt: stamp(),
   });
-  await db.collection("projects").doc(project.id).update({ reportMailFor: project.pdfUrl, updatedAt: stamp() });
+  await db.collection("projects").doc(project.id).update({ reportMailFor: current.pdfUrl, updatedAt: stamp() });
+}
+
+const fdvSyncs = new Map();
+
+function syncFdvFlag(projectId) {
+  if (!projectId) return Promise.resolve();
+  const previous = fdvSyncs.get(projectId) || Promise.resolve();
+  const job = previous.catch(() => {}).then(() => writeFdvFlag(projectId));
+  fdvSyncs.set(projectId, job);
+  job.finally(() => {
+    if (fdvSyncs.get(projectId) === job) fdvSyncs.delete(projectId);
+  });
+  return job;
+}
+
+async function writeFdvFlag(projectId) {
+  const root = db.collection("projects").doc(projectId);
+  const [projectSnap, paySnap] = await Promise.all([
+    root.get(),
+    root.collection("payments").get(),
+  ]);
+  if (!projectSnap.exists) return;
+  const project = { id: projectId, ...projectSnap.data() };
+  const payments = paySnap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
+  const open = fdvDownloadOpen({ project, payments });
+  if (project.fdvAvailable !== open) {
+    await root.update({ fdvAvailable: open, updatedAt: stamp() });
+    const current = projectById(projectId);
+    if (current) current.fdvAvailable = open;
+  }
+  if (open) await maybeQueueReportMail(project);
 }
 
 function templateChoices() {
@@ -1545,7 +1595,7 @@ function mountOffers(route) {
     costQueue = costQueue.then(async () => {
       const next = patchCost(costDoc, priceTable, patch);
       const changes = costChanges(costDoc, next, priceTable);
-      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description" || patch.field === "postId";
+      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description" || patch.field === "postId" || patch.field === "finalNote";
       if (!changes.length && !structural) return;
       const stored = persistableCost(next);
       costDoc = { ...costDoc, ...stored };
@@ -1626,7 +1676,7 @@ function mountOffers(route) {
       root.replaceChildren(el("p", { class: "empty" }, "Fant ikke prosjektet."));
       return;
     }
-    const summary = liveCost({ cost: costDoc, prices: priceTable, items, quotes });
+    const summary = liveCost({ cost: costDoc, prices: priceTable, items, quotes, requests });
     const shareCost = el("input", { type: "checkbox" });
     shareCost.checked = customerSeesCost(project);
     shareCost.addEventListener("change", async () => {
@@ -1699,6 +1749,7 @@ function mountOffers(route) {
         onDeleteExtra: (extraId) => savePatch({ deleteExtraId: extraId }),
         onExtra: (extraId, field, value) => savePatch({ extraId, field, value }),
         payments,
+        households: normalizeHouseholds(project.households),
         onAddPayment: async (payment) => {
           if (!(payment?.paidAt instanceof Date) || !payment.amount || (payment.vat !== "eks" && payment.vat !== "inkl")) {
             throw new Error("ufullstendig");
@@ -1707,7 +1758,8 @@ function mountOffers(route) {
             const installment = Number.isInteger(payment.installment) && payment.installment >= 1
               ? payment.installment
               : nextInstallmentNumber(payments);
-            await db.collection("projects").doc(route.projectId).collection("payments").add({
+            const col = db.collection("projects").doc(route.projectId).collection("payments");
+            const payload = {
               paidAt: firebase.firestore.Timestamp.fromDate(payment.paidAt),
               amount: payment.amount,
               vat: payment.vat,
@@ -1717,7 +1769,18 @@ function mountOffers(route) {
               installment,
               createdAt: stamp(),
               createdBy: user?.uid || "",
-            });
+            };
+            const householdId = String(payment.householdId || "").trim().slice(0, 39);
+            if (householdId) payload.householdId = householdId;
+            if (payment.sluttfaktura === true) payload.sluttfaktura = true;
+            const batch = db.batch();
+            if (payload.sluttfaktura) {
+              for (const existing of payments) {
+                if (existing.sluttfaktura === true) batch.update(col.doc(existing.id), { sluttfaktura: false });
+              }
+            }
+            batch.set(col.doc(), payload);
+            await batch.commit();
             toast(payment.status === "sendt" ? "Delfakturaen er sendt" : "Delfakturaen er registrert som betalt");
           } catch (error) {
             console.error(error);
@@ -1733,6 +1796,39 @@ function mountOffers(route) {
           } catch (error) {
             console.error(error);
             toast("Kunne ikke slette delfakturaen");
+          }
+        },
+        onAssignHousehold: async (paymentId, householdId) => {
+          if (!paymentId) return;
+          const ref = db.collection("projects").doc(route.projectId).collection("payments").doc(paymentId);
+          const next = String(householdId || "").trim().slice(0, 39);
+          try {
+            await ref.update(next
+              ? { householdId: next }
+              : { householdId: firebase.firestore.FieldValue.delete() });
+          } catch (error) {
+            console.error(error);
+            toast("Kunne ikke knytte betalingen til husstanden");
+          }
+        },
+        onToggleSluttfaktura: async (paymentId, on) => {
+          if (!paymentId) return;
+          const col = db.collection("projects").doc(route.projectId).collection("payments");
+          const batch = db.batch();
+          if (on) {
+            for (const existing of payments) {
+              if (existing.sluttfaktura === true && existing.id !== paymentId) {
+                batch.update(col.doc(existing.id), { sluttfaktura: false });
+              }
+            }
+          }
+          batch.update(col.doc(paymentId), { sluttfaktura: on === true });
+          try {
+            await batch.commit();
+            toast(on ? "Sluttfakturaen er merket" : "Sluttfakturaen er fjernet");
+          } catch (error) {
+            console.error(error);
+            toast("Kunne ikke merke sluttfakturaen");
           }
         },
         quotes,
@@ -1761,6 +1857,7 @@ function mountOffers(route) {
             toast("Kunne ikke merke delfakturaen som betalt");
           }
         },
+        requestHref: "#seksjon-foresporsler",
       }),
     }), renderAdminRequests({
         requests,
@@ -1815,6 +1912,7 @@ function mountOffers(route) {
   subs.push(db.collection("projects").doc(route.projectId).collection("payments").onSnapshot((snap) => {
     payments = snap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
     draw();
+    syncFdvFlag(route.projectId).catch((error) => console.error(error));
   }, onCostReadError));
   subs.push(db.collection("projects").doc(route.projectId).collection("costLog").orderBy("at", "desc").limit(40).onSnapshot((snap) => {
     costSeen = true;
@@ -2262,6 +2360,7 @@ function mountCapture(route) {
 function mountProject(route) {
   const root = el("div", { class: "screen" });
   main.append(root);
+  let householdDraft = null;
   let items = [];
   let legacy = [];
   let hmsCount = 0;
@@ -2390,6 +2489,41 @@ function mountProject(route) {
         },
       }),
       customerBox(project),
+      renderHouseholdEditor({
+        households: householdDraft || normalizeHouseholds(project.households),
+        onChange: (next) => {
+          householdDraft = next;
+        },
+        onCancel: () => {
+          householdDraft = null;
+          draw();
+        },
+        onSave: async (next) => {
+          const error = householdShareError(next);
+          if (error) {
+            toast(error);
+            return;
+          }
+          const stored = householdsForSave(next);
+          const previous = householdDraft;
+          householdDraft = null;
+          try {
+            await db.collection("projects").doc(project.id).update({
+              households: stored,
+              updatedAt: stamp(),
+            });
+            const current = projectById(project.id);
+            if (current) current.households = stored;
+            toast(stored.length ? "Husstandene er lagret" : "Husstandene er fjernet");
+            draw();
+          } catch (saveError) {
+            console.error(saveError);
+            householdDraft = previous;
+            toast("Kunne ikke lagre husstandene");
+            draw();
+          }
+        },
+      }),
       templateBox(project, () => setTimeout(draw, 0)),
       tiles,
       extra,
@@ -2413,6 +2547,7 @@ function mountProject(route) {
     hmsCount = activeHmsDocs(snap.docs.map((entry) => entry.data())).length;
     draw();
   }, (error) => console.error(error)));
+  syncFdvFlag(route.projectId).catch((error) => console.error(error));
   draw();
 }
 
@@ -2715,7 +2850,7 @@ async function toggleComplete(project) {
         reminder2Done: false,
         updatedAt: stamp(),
       });
-      await maybeQueueReportMail({ ...project, status: "fullfort" });
+      await syncFdvFlag(project.id);
       toast("Markert som ferdig. Påminnelse vises om ca. ett år.");
     }
   } catch (error) {
@@ -2729,6 +2864,7 @@ async function setProjectStatus(project, status) {
     const patch = { status, updatedAt: stamp() };
     if (status !== "fullfort") patch.completedAt = null;
     await db.collection("projects").doc(project.id).update(patch);
+    await syncFdvFlag(project.id);
     toast(status === "tilbud" ? "Vises som tilbud" : "Vises som pågående");
   } catch (error) {
     console.error(error);
@@ -2831,9 +2967,33 @@ function customerBox(project) {
   }).catch(() => {
     link.value = "";
   });
+  const households = normalizeHouseholds(project.households);
+  const sends = households.filter((household) => String(household.email || "").includes("@")).map((household) => button(
+    `Send lenken til ${household.name}`,
+    {
+      class: "btn btn-ghost",
+      onClick: async () => {
+        try {
+          const token = await ensureToken(project);
+          const url = portalUrl(project.id, token);
+          link.value = url;
+          openShareSheet({
+            title: `Lenke til ${household.name}`,
+            text: householdShareText(project, household, url),
+            url,
+            email: household.email,
+          });
+        } catch (error) {
+          console.error(error);
+          toast("Kunne ikke gjøre klar lenken");
+        }
+      },
+    },
+  ));
   return el("section", { class: "card continue customer-box" }, [
     el("h2", { class: "h-app" }, "Kunde"),
-    el("p", { class: "meta" }, "Navn og lenke kunden bruker for å se prosjektet, sende meldinger og godkjenne tilbud."),
+    el("p", { class: "meta" }, "Navn og lenke kunden bruker for å se prosjektet, sende meldinger og godkjenne tilbud. Flere personer kan åpne den samme lenken."),
+    households.length ? el("p", { class: "meta" }, "Alle husstandene bruker denne ene lenken. Kopier den, eller send den til hver e-post.") : null,
     field("Kundenavn", name),
     field("Lenke til kunden", link),
     el("div", { class: "action-row" }, [
@@ -2861,6 +3021,7 @@ function customerBox(project) {
         class: "btn btn-ghost",
         onClick: () => previewAsCustomer(project),
       }),
+      ...sends,
     ]),
   ]);
 }
@@ -4033,6 +4194,9 @@ function mountReport(route) {
   const text = el("textarea", { rows: "8", maxlength: "8000", placeholder: "Skriv hva som ble gjort, slik det skal stå i sluttrapporten." });
   const status = el("p", { class: "meta save-state" }, "");
   const pdfLine = el("p", { class: "meta" }, "");
+  const fdvSlot = el("div", { id: "fdv-admin-slot" });
+  const unlock = el("input", { type: "checkbox", "aria-label": "Åpne FDV-nedlasting for kunden" });
+  let reportPayments = [];
   const ratings = el("div", { class: "stack" });
   const gaps = el("p", { class: "meta" }, "");
   const aiPanel = el("div", { class: "note", hidden: true }, [
@@ -4076,19 +4240,54 @@ function mountReport(route) {
     aiPanel,
     pdfButton,
     pdfLine,
+    el("section", { class: "card continue" }, [
+      el("h2", { class: "h-app" }, "FDV for kunden"),
+      el("p", { class: "meta" }, "Kunden ser FDV-rapporten i dokumentasjonen. Nedlastingen åpnes når prosjektet er ferdig og sluttoppgjøret er på plass. Bilder og andre dokumenter er åpne som før."),
+      fdvSlot,
+      el("label", { class: "checkline" }, [unlock, el("span", {}, "Åpne FDV-nedlasting for kunden")]),
+    ]),
     gaps,
     el("h2", { class: "h-app" }, "Kundevurderinger"),
     ratings
   );
 
+  function paintReportFdv(data) {
+    const project = { id: route.projectId, ...data };
+    if (document.activeElement !== unlock) unlock.checked = project.fdvUnlocked === true;
+    const reason = fdvOpenReason({ project, payments: reportPayments });
+    pdfLine.textContent = data.pdfPath || data.pdfUrl
+      ? `Sist lagret ${formatWhen(data.pdfUpdatedAt) || ""}.`
+      : "PDF er ikke lagret i prosjektet ennå.";
+    fdvSlot.replaceChildren(reason === "locked" ? renderFdvWait() : el("p", { class: "meta" }, fdvReasonText(reason)));
+  }
+
+  unlock.addEventListener("change", async () => {
+    try {
+      await db.collection("projects").doc(route.projectId).update({
+        fdvUnlocked: unlock.checked === true,
+        updatedAt: stamp(),
+      });
+      await syncFdvFlag(route.projectId);
+      toast(unlock.checked ? "FDV-nedlastingen er åpnet for kunden" : "Manuell åpning er slått av");
+    } catch (error) {
+      console.error(error);
+      unlock.checked = !unlock.checked;
+      toast("Kunne ikke lagre valget");
+    }
+  });
+
   subs.push(db.collection("projects").doc(route.projectId).onSnapshot((snap) => {
     if (!snap.exists) return;
     const data = snap.data();
     if (!reportDirty && document.activeElement !== text) text.value = data.reportText || "";
-    pdfLine.textContent = data.pdfUrl
-      ? `Sist lagret ${formatWhen(data.pdfUpdatedAt) || ""}. Kunden kan laste den ned fra portalen.`
-      : "PDF er ikke lagret i prosjektet ennå.";
+    paintReportFdv(data);
   }));
+  subs.push(db.collection("projects").doc(route.projectId).collection("payments").onSnapshot((snap) => {
+    reportPayments = snap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
+    const project = projectById(route.projectId);
+    if (project) paintReportFdv(project);
+    syncFdvFlag(route.projectId).catch((error) => console.error(error));
+  }, (error) => console.error(error)));
 
   text.addEventListener("input", () => {
     reportDirty = true;

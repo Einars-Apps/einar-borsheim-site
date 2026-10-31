@@ -12,6 +12,11 @@ service firebase.storage {
         && firestore.exists(/databases/(default)/documents/projects/$(projectId)/access/$(request.auth.uid));
     }
 
+    // Appen setter feltet når sluttfakturaen er betalt, eller når Einar låser opp FDV manuelt.
+    function fdvReleased(projectId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId)).data.fdvAvailable == true;
+    }
+
     function isPublic(projectId) {
       return firestore.get(/databases/(default)/documents/projects/$(projectId)).data.get('public', false) == true;
     }
@@ -54,9 +59,10 @@ service firebase.storage {
       allow update, delete: if isAdmin();
     }
 
-    // Sluttrapport. Kun admin skriver. Kunde med prosjektlenke kan laste ned.
     match /projects/{projectId}/rapport/{fileName} {
-      allow read: if isAdmin() || hasAccess(projectId);
+      // Sluttrapport / FDV. Kunden laster ned filen bare når fdvAvailable er sann.
+      // Bilder, dokumenter og HMS i prosjektet er ikke låst av dette.
+      allow read: if isAdmin() || (hasAccess(projectId) && fdvReleased(projectId));
       allow create, update: if isAdmin()
         && request.resource.size < 40 * 1024 * 1024
         && request.resource.contentType == 'application/pdf'

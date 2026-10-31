@@ -412,6 +412,22 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 }
 .final-badge { background: #0c5344; color: #fff; }
 .estimate-badge { background: #f3e2c8; color: #6d4712; }
+.budget-under, .budget-over {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+}
+.budget-under { background: #e5f3ee; color: #0c5344; }
+.budget-over { background: #f7f4ee; color: var(--ink); border: 1px solid var(--line); }
+.budget-under p, .budget-over p { margin: 0; font-weight: 600; line-height: 1.45; }
+.budget-under .btn { align-self: flex-start; text-decoration: none; }
+.scope-changes { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.scope-changes h3 { margin: 0; }
+.scope-list { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 8px; }
+.scope-list p { margin: 0; }
 .extra-box { display: flex; flex-direction: column; gap: 10px; }
 .extra-box h3 { margin: 8px 0 0; }
 .quote-box, .quote-intro { overflow-wrap: anywhere; max-width: 100%; }
@@ -700,6 +716,37 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .bubble-admin { align-self: flex-end; background: #e7f2ec; }
 .bubble-customer { align-self: flex-start; background: white; border: 1px solid var(--line); }
 .customer-box input[readonly] { background: #f6f1e8; }
+.household-card, .allocation-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+.household-box .meta, .allocation-box .meta, .allocation-row p { margin: 0; }
+.fdv-wait {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #f7f4ee;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+.fdv-wait p { margin: 0; font-weight: 500; line-height: 1.5; }
+.fdv-wait-icon {
+  display: inline-flex;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: #0c5344;
+  margin-top: 2px;
+}
+.fdv-wait-icon svg { width: 22px; height: 22px; display: block; }
+.pay-status-slutt { background: #e7f2ec; color: #0c5344; }
 
 @media (min-width: 800px) {
   .tabbar, .topbar { left: 50%; right: auto; width: min(760px, 100%); transform: translateX(-50%); }
