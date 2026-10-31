@@ -775,6 +775,48 @@ test("kunden kan ønske og svare, men ikke sette pris eller røre et annet prosj
   await assertFails(getDoc(doc(customerDb("kunde2"), created.path)));
 });
 
+test("kunden skriver bare egne forespørsler, og bare admin leser alle", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(db, "projects/p2"), { name: "Annen", shareToken: "TOK999999" });
+    await setDoc(doc(db, "projects/p1/jobRequests/annens"), {
+      kind: "pris",
+      text: "Fra en annen",
+      status: "ny",
+      createdBy: "kunde2",
+      createdAt: new Date(),
+    });
+  });
+  const customer = customerDb();
+  const base = {
+    kind: "pris",
+    text: "Ni meter ekstra drenering",
+    status: "ny",
+    createdBy: "kunde1",
+    createdAt: serverTimestamp(),
+  };
+  await assertFails(addDoc(collection(customer, "projects/p2/jobRequests"), base));
+  await assertFails(addDoc(collection(customer, "projects/p1/jobRequests"), { ...base, unitPrice: 180 }));
+  await assertFails(addDoc(collection(customer, "projects/p1/jobRequests"), { ...base, status: "tillegg" }));
+  const created = await assertSucceeds(addDoc(collection(customer, "projects/p1/jobRequests"), base));
+  await assertSucceeds(addDoc(collection(customer, "projects/p1/jobRequests"), { ...base, kind: "bestilling", quantity: 9 }));
+  await assertFails(updateDoc(created, { status: "besvart" }));
+  await assertSucceeds(getDoc(created));
+  await assertFails(getDoc(doc(customer, "projects/p1/jobRequests/annens")));
+  const own = await assertSucceeds(getDocs(query(
+    collection(customer, "projects/p1/jobRequests"),
+    where("createdBy", "==", "kunde1"),
+  )));
+  assert.equal(own.size, 2);
+  const admin = adminDb();
+  const all = await assertSucceeds(getDocs(collection(admin, "projects/p1/jobRequests")));
+  assert.equal(all.size, 3);
+  await assertSucceeds(updateDoc(doc(admin, created.path), { status: "besvart" }));
+  await assertFails(getDocs(collection(customerDb("kunde2"), "projects/p1/jobRequests")));
+});
+
 test("regelfilene slipper ikke gjennom åpen skriving", () => {
   const firestore = readFileSync("firestore.rules", "utf8");
   const storage = readFileSync("storage.rules", "utf8");

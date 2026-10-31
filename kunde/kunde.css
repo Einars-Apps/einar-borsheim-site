@@ -254,6 +254,9 @@ textarea { min-height: 96px; }
 .request-price dt { margin: 0; color: var(--muted); }
 .request-price dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
 .request-form textarea, .request-form input, .request-form select { width: 100%; font: inherit; }
+.job-kind { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.job-kind legend { font-weight: 700; padding: 0; }
+.job-photo { width: 100%; max-height: 220px; object-fit: cover; border-radius: 12px; }
 .pill-warn { background: #f3e2c8; color: #6d4712; }
 .cost-line-title { overflow-wrap: anywhere; }
 

@@ -138,6 +138,33 @@ service cloud.firestore {
     }
 
     // Ønske: kunden skriver bare teksten. Pris kan ikke settes her.
+    function validJobRequest(projectId) {
+      let data = request.resource.data;
+      let keys = data.keys();
+      return data.status == 'ny'
+        && data.kind in ['pris', 'bestilling']
+        && data.createdBy == request.auth.uid
+        && data.createdAt == request.time
+        && data.text is string
+        && data.text.size() > 0
+        && data.text.size() < 2000
+        && keys.hasAll(['kind', 'text', 'status', 'createdBy', 'createdAt'])
+        && keys.hasOnly(['kind', 'text', 'status', 'createdBy', 'createdAt', 'quantity', 'photoUrl', 'photoPath'])
+        && (
+          !keys.hasAny(['quantity'])
+          || (data.quantity is number && data.quantity > 0 && data.quantity < 100000000)
+        )
+        && (
+          !keys.hasAny(['photoUrl', 'photoPath'])
+          || (
+            keys.hasAll(['photoUrl', 'photoPath'])
+            && storedMediaUrl(data.photoUrl)
+            && data.photoPath is string
+            && data.photoPath.matches('^projects/' + projectId + '/media/[A-Za-z0-9_.-]+$')
+          )
+        );
+    }
+
     function validCustomerRequest() {
       return request.resource.data.keys().hasOnly(['status', 'text', 'createdBy', 'createdAt'])
         && request.resource.data.status == 'ny'
@@ -445,6 +472,15 @@ service cloud.firestore {
         allow read: if isAdmin() || customerMayReadCost(projectId);
         allow create: if isAdmin() && validCostLog();
         allow update, delete: if false;
+      }
+
+      // Be om pris eller bestill. Kunden skriver bare egen forespørsel.
+      // Bare admin leser alle. Kunden leser sine egne. Ingen prisfelt.
+      match /jobRequests/{requestId} {
+        allow read: if isAdmin()
+          || (hasAccess(projectId) && resource.data.createdBy == request.auth.uid);
+        allow create: if hasAccess(projectId) && validJobRequest(projectId);
+        allow update, delete: if isAdmin();
       }
 
       // Ønske fra kunden. Kunden oppretter bare teksten. Einar svarer med pris.
