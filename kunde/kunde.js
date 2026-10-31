@@ -241,6 +241,7 @@ function paintCost() {
     prices: {},
     items,
     previewChoices,
+    requests,
   });
   slot.replaceChildren(renderCostOverview({
     summary,
@@ -269,7 +270,7 @@ function paintPayments() {
   const slot = document.getElementById("payment-slot");
   if (!slot) return;
   const summary = customerSeesCost(project)
-    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), previewChoices })
+    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), previewChoices, requests })
     : null;
   slot.replaceChildren(renderPaymentSummary({
     id: "seksjon-betalinger",
@@ -325,7 +326,7 @@ function paintAllocation() {
   const showTotal = portalSectionVisible(project, "kostnad");
   const showPayments = portalSectionVisible(project, "betalinger");
   const summary = showTotal
-    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), previewChoices })
+    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), previewChoices, requests })
     : null;
   const allocation = householdAllocation({
     households: project.households,

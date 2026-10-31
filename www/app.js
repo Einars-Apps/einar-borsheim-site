@@ -1136,7 +1136,14 @@ async function saveReportPdf(project, reportText) {
     const costSnap = await db.collection("projects").doc(project.id).collection("quantities").doc("live").get();
     const logSnap = await db.collection("projects").doc(project.id).collection("costLog").orderBy("at", "desc").limit(80).get();
     const costSettings = await readAppSettings();
-    const costSummary = liveCost({ cost: costSnap.data() || null, prices: costSettings.prices, items });
+    const requestSnap = await db.collection("projects").doc(project.id).collection("requests").get();
+    const requestRows = requestSnap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
+    const costSummary = liveCost({
+      cost: costSnap.data() || null,
+      prices: costSettings.prices,
+      items,
+      requests: requestRows,
+    });
     const costHistory = logSnap.docs.map((entry) => entry.data()).reverse();
     sections.push({
       title: "Nåværende kostnad",
@@ -1669,7 +1676,7 @@ function mountOffers(route) {
       root.replaceChildren(el("p", { class: "empty" }, "Fant ikke prosjektet."));
       return;
     }
-    const summary = liveCost({ cost: costDoc, prices: priceTable, items, quotes });
+    const summary = liveCost({ cost: costDoc, prices: priceTable, items, quotes, requests });
     const shareCost = el("input", { type: "checkbox" });
     shareCost.checked = customerSeesCost(project);
     shareCost.addEventListener("change", async () => {

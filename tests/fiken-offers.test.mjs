@@ -86,6 +86,14 @@ test("ny henting overskriver ikke linjer Einar har endret", () => {
   assert.equal(replaced.lines.find((line) => line.id === "ft-5-0").planned, 12.5);
   assert.equal(replaced.lines.find((line) => line.id === "ft-5-0").done, 4);
   assert.equal(replaced.lines.find((line) => line.id === "ft-5-0").manual, false);
+  const locked = mergeFikenLines([
+    { ...incoming[0], done: 0.5, addition: 2, final: true, finalizedAt: { seconds: 4 }, manual: true },
+  ], incoming, { overwriteManual: false });
+  const keptLock = locked.lines.find((line) => line.id === incoming[0].id);
+  assert.equal(keptLock.final, true);
+  assert.equal(keptLock.addition, 2);
+  assert.equal(keptLock.done, 0.5);
+  assert.equal(keptLock.finalizedAt.seconds, 4);
 });
 
 test("kostnadslinje fra Fiken inngår i estimatet, og endring merkes som manuell", () => {

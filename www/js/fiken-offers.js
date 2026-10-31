@@ -1,5 +1,5 @@
 function cloneLine(line) {
-  return {
+  const copy = {
     id: line.id,
     label: line.label,
     unit: line.unit || "stk",
@@ -9,6 +9,14 @@ function cloneLine(line) {
     source: line.source || "",
     manual: line.manual === true,
   };
+  const addition = Number(line?.addition);
+  if (Number.isFinite(addition) && addition > 0) copy.addition = Math.round(addition * 100) / 100;
+  const locked = line?.final === true || line?.final === 1 || line?.final === "1" || line?.final === "true";
+  if (locked) {
+    copy.final = true;
+    if (line.finalizedAt != null) copy.finalizedAt = line.finalizedAt;
+  }
+  return copy;
 }
 
 function differs(current, incoming) {

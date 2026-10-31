@@ -520,7 +520,8 @@ export function renderCostOverview({
   quotes = [],
   onAgreeQuote,
 }) {
-  const diffClass = summary.differenceExVat > 0 ? "cost-diff-up" : summary.differenceExVat < 0 ? "cost-diff-down" : "meta";
+  const lockedEx = summary.finalized?.exVat || 0;
+  const lockedInc = summary.finalized?.incVat || 0;
   const approved = (summary.offers?.rows || []).filter((row) => row.status === "godkjent");
   const baseline = summary.baseline || { kind: "ingen", exVat: 0, label: "" };
   const fromLines = baseline.kind === "planlagt" || baseline.kind === "fiken";
@@ -679,7 +680,7 @@ export function renderCostOverview({
       : "Einar oppdaterer mengdene. Du kan ikke endre mengder eller priser."),
     ...extras,
     fromLines ? el("p", { class: "meta" }, `Opprinnelig tilbud: ${formatKr(baseline.exVat)} eks. mva. ${baseline.label}. Det er planlagt mengde ganger enhetspris, uten avtalt tillegg.`) : null,
-    fromLines ? el("p", { class: "meta" }, "Differansen er avtalt tillegg og avvik fra den planlagte mengden. Et beløp i feltet under legges oppå postene.") : null,
+    fromLines ? el("p", { class: "meta" }, "Differansen er totalen mot det opprinnelige tilbudet. Låst sluttmengde og avtalt tillegg flytter totalen opp eller ned.") : null,
     ...agreeQuoteActions(quotes, editable ? onAgreeQuote : null),
     agreed,
     approved.length
@@ -687,11 +688,11 @@ export function renderCostOverview({
       : el("p", { class: "meta" }, fromLines
         ? "Ingen poster i Tilbud og endringer er godkjent av kunden ennå. Fiken-linjene er ikke den godkjenningen. Kunden godkjenner en post først når du har sendt den."
         : "Ingen godkjente poster i Tilbud og endringer ennå."),
-    moneyLine("Ferdige poster (endelig)", summary.finalized?.exVat || 0, summary.finalized?.incVat || 0),
+    lockedEx || lockedInc ? moneyLine("Låst sluttpris (ferdige poster)", lockedEx, lockedInc) : null,
     moneyLine("Gjenstår (estimert)", summary.remaining?.exVat || 0, summary.remaining?.incVat || 0),
     moneyLine("Totalt", summary.estimated.exVat, summary.estimated.incVat),
     moneyLine("Påløpt hittil", summary.incurred.exVat, summary.incurred.incVat),
-    el("p", { class: diffClass }, `Differanse mot opprinnelig tilbud: ${signedKr(summary.differenceExVat)} eks. mva, ${signedKr(summary.differenceIncVat)} inkl. mva`),
+    el("p", { class: "meta" }, `Differanse mot opprinnelig tilbud: ${signedKr(summary.differenceExVat)} eks. mva, ${signedKr(summary.differenceIncVat)} inkl. mva`),
     showPayments ? renderPaymentSummary({
       id: "seksjon-betalinger",
       payments,

@@ -201,7 +201,8 @@ test("ferdig post har endelig pris utført ganger enhetspris, og gamle poster er
   assert.equal(opened.fikenLines[0].finalizedAt, null);
   assert.match(changeText(costChanges(closed, opened, prices).find((change) => change.field === "final")), /Posten er åpnet igjen/);
   const report = costReportText(summary, []);
-  assert.match(report, /Ferdige poster \(endelig\)/);
+  assert.match(report, /Låst sluttpris \(ferdige poster\)/);
+  assert.equal(summary.remaining.exVat, summary.estimated.exVat - summary.finalized.exVat);
   assert.match(report, /Gjenstår \(estimert\)/);
   assert.match(report, /Ferdig – endelig pris/);
   assert.match(report, /Betalt hittil/);
@@ -379,4 +380,129 @@ test("tilleggsarbeider summeres inn i nåværende kostnad", () => {
   const removed = patchCost(cost, prices, { deleteExtraId: "ta-en" });
   assert.equal(removed.extras.length, 0);
   assert.equal(liveCost({ cost: removed, prices, items: [] }).estimated.exVat, 0);
+});
+
+test("låst sluttmengde flytter totalen, og åpne poster bruker endret mengde", () => {
+  const lower = liveCost({
+    cost: {
+      fikenLines: [
+        { id: "masse", label: "Masseutskifting", planned: 1, done: 0.5, unitPrice: 1000, final: 1 },
+      ],
+    },
+    prices,
+    items: [],
+  });
+  const lowerLine = lower.lines.find((line) => line.id === "masse");
+  assert.equal(lowerLine.final, true);
+  assert.equal(lowerLine.basis, "låst");
+  assert.equal(lowerLine.countedEx, 500);
+  assert.equal(lower.finalized.exVat, 500);
+  assert.equal(lower.estimated.exVat, 500);
+  assert.equal(lower.remaining.exVat, 0);
+  assert.equal(lower.baseline.exVat, 1000);
+  assert.equal(lower.differenceExVat, -500);
+  assert.equal(lower.remaining.exVat, lower.estimated.exVat - lower.finalized.exVat);
+
+  const higher = liveCost({
+    cost: {
+      fikenLines: [
+        { id: "transport", label: "Transport maskin", planned: 1, done: 2, unitPrice: 1000, final: true },
+      ],
+    },
+    prices,
+    items: [],
+  });
+  assert.equal(higher.lines[0].countedEx, 2000);
+  assert.equal(higher.estimated.exVat, 2000);
+  assert.equal(higher.finalized.exVat, 2000);
+  assert.equal(higher.remaining.exVat, 0);
+  assert.equal(higher.differenceExVat, 1000);
+
+  const openCost = {
+    fikenLines: [
+      { id: "dren", label: "Drenering", planned: 10, addition: 2, done: 3, unitPrice: 100 },
+    ],
+  };
+  const changed = liveCost({ cost: openCost, prices, items: [] });
+  assert.equal(changed.lines[0].basis, "endret");
+  assert.equal(changed.lines[0].countedEx, 1200);
+  assert.equal(changed.finalized.exVat, 0);
+  assert.equal(changed.estimated.exVat, 1200);
+  assert.equal(changed.remaining.exVat, 1200);
+  assert.equal(changed.baseline.exVat, 1000);
+  assert.equal(changed.differenceExVat, 200);
+  assert.equal(costReportText(changed, []).includes("Låst sluttpris"), false);
+
+  const withRequests = liveCost({
+    cost: openCost,
+    prices,
+    items: [],
+    requests: [
+      { id: "ok", status: "godkjent", quantity: 4, unitPrice: 50 },
+      { id: "nei", status: "avslatt", quantity: 9, unitPrice: 9000 },
+      { id: "venter", status: "besvart", quantity: 3, unitPrice: 100 },
+    ],
+  });
+  assert.equal(withRequests.estimated.exVat, 1200 + 200);
+  assert.equal(withRequests.remaining.exVat, withRequests.estimated.exVat);
+  const once = liveCost({
+    cost: { ...openCost, appliedRequests: ["ok"] },
+    prices,
+    items: [],
+    requests: [{ id: "ok", status: "godkjent", quantity: 4, unitPrice: 50 }],
+  });
+  assert.equal(once.estimated.exVat, changed.estimated.exVat);
+});
+
+test("Fiken-tilbud 10102: to låste poster flytter totalen, gjenstår er total minus låst", () => {
+  const summary = liveCost({
+    cost: {
+      fikenLines: [
+        {
+          id: "masse",
+          label: "Masseutskifting under nybygg",
+          planned: 1,
+          done: 0.5,
+          unitPrice: 172500,
+          final: true,
+          source: "fra Fiken-tilbud nr 10102",
+        },
+        {
+          id: "transport",
+          label: "Transport maskin",
+          planned: 1,
+          done: 1.2,
+          unitPrice: 50000,
+          final: true,
+          source: "fra Fiken-tilbud nr 10102",
+        },
+        {
+          id: "dren",
+          label: "Drenering",
+          planned: 100,
+          done: 40,
+          unitPrice: 1500,
+          source: "fra Fiken-tilbud nr 10102",
+        },
+      ],
+    },
+    prices,
+    items: [{ id: "avslatt", kind: "tillegg", approved: true, approvalRequested: true, approvalStatus: "avslatt", alternatives: [] }],
+  });
+  const byId = Object.fromEntries(summary.lines.map((line) => [line.id, line]));
+  assert.equal(byId.masse.basis, "låst");
+  assert.equal(byId.masse.countedEx, 86250);
+  assert.equal(byId.transport.basis, "låst");
+  assert.equal(byId.transport.countedEx, 60000);
+  assert.equal(byId.dren.basis, "planlagt");
+  assert.equal(byId.dren.countedEx, 150000);
+  assert.equal(summary.baseline.exVat, 372500);
+  assert.equal(summary.baseline.label, "Fra Fiken-tilbud 10102");
+  assert.equal(summary.finalized.exVat, 146250);
+  assert.equal(summary.estimated.exVat, 296250);
+  assert.equal(summary.remaining.exVat, 150000);
+  assert.equal(summary.remaining.exVat, summary.estimated.exVat - summary.finalized.exVat);
+  assert.equal(summary.differenceExVat, -76250);
+  assert.equal(summary.incurred.exVat, 206250);
+  assert.match(costReportText(summary, []), /Låst sluttpris \(ferdige poster\)/);
 });

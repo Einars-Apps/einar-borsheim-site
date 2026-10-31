@@ -262,7 +262,35 @@ export function originalOffer({ agreedExVat = 0, lines = [], offers, quotes = []
   return { exVat: 0, kind: "ingen", label: "", number: "" };
 }
 
-export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices = null, quotes = null } = {}) {
+function requestKey(id) {
+  return String(id || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 30);
+}
+
+function unappliedApprovedEx(requests, rawCost, state) {
+  const applied = new Set(Array.isArray(rawCost?.appliedRequests) ? rawCost.appliedRequests.map((id) => String(id)) : []);
+  const known = new Set([
+    ...Object.keys(state.lines || {}),
+    ...(state.fikenLines || []).map((line) => line.id),
+    ...(state.extras || []).map((line) => line.id),
+  ]);
+  let extra = 0;
+  for (const request of requests || []) {
+    if (request?.status !== "godkjent") continue;
+    const id = String(request.id || "");
+    if (id && applied.has(id)) continue;
+    const key = requestKey(id);
+    const lineId = `rq-${key || "post"}`.slice(0, 39);
+    const extraId = `ta${key || "onske"}`.slice(0, 39);
+    if (known.has(lineId) || known.has(extraId)) continue;
+    const quantity = round2(request.quantity);
+    const price = round2(request.unitPrice);
+    if (quantity == null || quantity <= 0 || price == null || price < 0) continue;
+    extra += round2(quantity * price);
+  }
+  return round2(extra);
+}
+
+export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices = null, quotes = null, requests = null } = {}) {
   const state = normalizeCost(cost, prices);
   const offers = offerContribution(items, previewChoices);
   let doneEx = 0;
@@ -270,6 +298,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   let openEx = 0;
   const takeLine = (line, money) => {
     doneEx += money.doneSum;
+    // Låst post: sluttmengde × pris. Åpen post: Endret til (planlagt + avtalt tillegg) ellers planlagt.
     if (line.final === true) finalEx += money.doneSum;
     else openEx += money.plannedSum;
   };
@@ -290,6 +319,8 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       doneSum: money.doneSum,
       final: line.final === true,
       finalizedAt: line.final === true ? (line.finalizedAt ?? null) : null,
+      countedEx: line.final === true ? money.doneSum : money.plannedSum,
+      basis: line.final === true ? "låst" : (money.addition ? "endret" : "planlagt"),
       fromFiken: false,
       source: "",
       manual: false,
@@ -306,6 +337,8 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       doneSum: money.doneSum,
       final: line.final === true,
       finalizedAt: line.final === true ? (line.finalizedAt ?? null) : null,
+      countedEx: line.final === true ? money.doneSum : money.plannedSum,
+      basis: line.final === true ? "låst" : (money.addition ? "endret" : "planlagt"),
       fromFiken: true,
     };
   });
@@ -316,12 +349,14 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   });
   const extrasExVat = round2(extras.reduce((sum, line) => sum + line.sum, 0));
   openEx += extrasExVat;
+  openEx += unappliedApprovedEx(requests, cost, state);
   const lines = [...catalog, ...fiken];
   const finalBase = round2(finalEx);
   const openBase = round2(state.agreedExVat + offers.approvedExVat + openEx);
-  const estimated = withVat(finalBase + openBase);
+  const totalEx = round2(finalBase + openBase);
+  const estimated = withVat(totalEx);
   const finalized = withVat(finalBase);
-  const remaining = withVat(openBase);
+  const remaining = withVat(round2(totalEx - finalBase));
   const incurred = withVat(state.agreedExVat + offers.approvedExVat + doneEx);
   const preview = withVat(finalBase + state.agreedExVat + offers.previewExVat + openEx);
   const baseline = originalOffer({
@@ -349,8 +384,13 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   };
 }
 
+function isFinal(line) {
+  const value = line?.final;
+  return value === true || value === 1 || value === "1" || value === "true";
+}
+
 function finalFields(line) {
-  const final = line?.final === true;
+  const final = isFinal(line);
   return {
     final,
     finalizedAt: final ? (line.finalizedAt ?? null) : null,
@@ -703,7 +743,9 @@ export function costReportText(summary, history = [], payments = []) {
     summary?.baseline?.label
       ? `Opprinnelig tilbud ${formatKr(summary.baseline.exVat)} eks. mva. ${summary.baseline.label}.`
       : "",
-    `Ferdige poster (endelig) ${formatKr(summary?.finalized?.exVat || 0)} eks. mva, ${formatKr(summary?.finalized?.incVat || 0)} inkl. mva.`,
+    (summary?.finalized?.exVat || summary?.finalized?.incVat)
+      ? `Låst sluttpris (ferdige poster) ${formatKr(summary?.finalized?.exVat || 0)} eks. mva, ${formatKr(summary?.finalized?.incVat || 0)} inkl. mva.`
+      : "",
     `Gjenstår (estimert) ${formatKr(summary?.remaining?.exVat || 0)} eks. mva, ${formatKr(summary?.remaining?.incVat || 0)} inkl. mva.`,
     `Totalt ${formatKr(summary?.estimated?.exVat || 0)} eks. mva, ${formatKr(summary?.estimated?.incVat || 0)} inkl. mva.`,
     `Estimert total ${formatKr(summary?.estimated?.exVat || 0)} eks. mva, ${formatKr(summary?.estimated?.incVat || 0)} inkl. mva.`,
