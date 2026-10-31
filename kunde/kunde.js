@@ -49,7 +49,8 @@ import {
   offerTypeLabel,
 } from "../www/js/offers.js";
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
-import { renderCostOverview } from "../www/js/cost-view.js";
+import { renderCostOverview, renderCustomerHistory, renderPaymentSummary } from "../www/js/cost-view.js";
+import { renderCustomerRequests } from "../www/js/requests-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
 import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem, sortPhotos } from "../www/js/photos.js";
 import { gpsLabel, photoWhen, showGpsInReport } from "../www/js/place.js";
@@ -80,8 +81,20 @@ let hmsDocs = [];
 let thread = [];
 let costState = null;
 let costHistory = [];
+let payments = [];
+let requests = [];
 let stopCost = null;
 let stopCostLog = null;
+let stopPayments = null;
+
+function watchPayments() {
+  if (stopPayments) return;
+  stopPayments = onSnapshot(collection(db, "projects", projectId, "payments"), (snap) => {
+    payments = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+    if (document.getElementById("cost-slot")) paintCost();
+    else paintPayments();
+  }, (error) => console.error(error));
+}
 
 function watchCost() {
   if (!customerSeesCost(project)) {
@@ -218,13 +231,59 @@ function paintCost() {
   slot.replaceChildren(renderCostOverview({
     summary,
     history: costHistory.map((entry) => ({
+      at: entry.at,
       when: formatWhen(entry.at),
       byName: entry.byName || "Einar",
       text: entry.text || changeText(entry),
+      field: entry.field,
+      from: entry.from,
+      to: entry.to,
+      unit: entry.unit || "",
+      label: entry.label || "",
+      lineId: entry.lineId || "",
     })),
+    items,
+    audience: "kunde",
     editable: false,
     showPreview: true,
+    payments,
   }));
+}
+
+function paintPayments() {
+  const slot = document.getElementById("payment-slot");
+  if (!slot) return;
+  slot.replaceChildren(renderPaymentSummary({
+    payments,
+    showBalance: false,
+    editable: false,
+  }));
+}
+
+function paintRequests() {
+  const slot = document.getElementById("request-slot");
+  if (!slot) return;
+  slot.replaceChildren(renderCustomerRequests({
+    requests,
+    onCreate: async (text) => {
+      if (previewMode) return;
+      await addDoc(collection(db, "projects", projectId, "requests"), {
+        status: "ny",
+        text: String(text || "").trim().slice(0, 1999),
+        createdBy: uid,
+        createdAt: serverTimestamp(),
+      });
+    },
+    onDecide: async (request, status) => {
+      if (previewMode || !request?.id) return;
+      await updateDoc(doc(db, "projects", projectId, "requests", request.id), {
+        status,
+        decidedAt: serverTimestamp(),
+        decidedBy: uid,
+      });
+    },
+  }));
+  if (previewMode) applyPortalPreviewLock(slot);
 }
 
 function render() {
@@ -233,6 +292,8 @@ function render() {
   const typing = active && viewProject.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
   if (typing) {
     paintCost();
+    paintPayments();
+    paintRequests();
     if (!renderAfterBlur) {
       renderAfterBlur = true;
       active.addEventListener("blur", () => {
@@ -284,6 +345,11 @@ function render() {
   ]));
 
   const offerPosts = items.filter((item) => isOfferItem(item) && item.fikenBase !== true && item.approved === true && item.approvalRequested === true);
+  if (!customerSeesCost(project)) {
+    viewProject.append(el("section", { class: "k-card k-stack", id: "payment-card" }, [
+      el("div", { id: "payment-slot" }),
+    ]));
+  }
   if (offerPosts.length || customerSeesCost(project)) {
     const box = el("section", { class: "k-card k-stack", id: "offers" }, [
       el("h2", {}, "Tilbud og endringer"),
@@ -293,8 +359,16 @@ function render() {
       for (const item of offerPosts) box.append(offerCard(item));
     }
     if (customerSeesCost(project)) box.append(el("div", { id: "cost-slot" }));
+    else {
+      const story = renderCustomerHistory({ items: offerPosts, audience: "kunde" });
+      if (story) box.append(story);
+    }
     viewProject.append(box);
   }
+
+  const requestSlot = el("div", { id: "request-slot" });
+  viewProject.append(requestSlot);
+  paintRequests();
 
   const groups = [
     ["tilbud", "Tilbud"],
@@ -333,6 +407,7 @@ function render() {
   }
   viewProject.append(rate);
   paintCost();
+  paintPayments();
 
   paintPortalPhotos();
   for (const item of items) hydrate(item);
@@ -916,6 +991,7 @@ async function openPortalAccess(userId) {
 function startPortal() {
   try {
     watchCost();
+    watchPayments();
     watchGps();
     render();
     const items = collection(db, "projects", projectId, "items");
@@ -954,6 +1030,11 @@ function startPortal() {
     ), (snap) => {
       hmsDocs = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       render();
+    }, (error) => console.error(error));
+    onSnapshot(query(collection(db, "projects", projectId, "requests"), where("createdBy", "==", uid)), (snap) => {
+      requests = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      requests.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      if (document.getElementById("request-slot")) paintRequests();
     }, (error) => console.error(error));
     onSnapshot(query(collection(db, "projects", projectId, "messages"), orderBy("createdAt", "asc")), (snap) => {
       thread = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));

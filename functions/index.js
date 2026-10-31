@@ -3,9 +3,10 @@ const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const { initializeApp } = require("firebase-admin/app");
-const { getFirestore } = require("firebase-admin/firestore");
+const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { getMessaging } = require("firebase-admin/messaging");
 const billable = require("./fiken-billable");
+const { applyApprovedRequest } = require("./request-apply");
 const fikenImport = require("./fiken-import");
 const fikenOffers = require("./fiken-offers");
 
@@ -46,6 +47,68 @@ exports.onCustomerDocument = onDocumentCreated("projects/{projectId}/documents/{
   const data = event.data?.data() || {};
   if (data.source !== "customer") return;
   await notifyAdmin("Nytt dokument fra kunde", data.name || "Dokument", event.params.projectId);
+});
+
+function requestLogText(change) {
+  const unit = change.unit ? ` ${change.unit}` : "";
+  return `${change.label}, ${change.field}: ${change.from} → ${change.to}${unit}`.slice(0, 299);
+}
+
+async function applyRequestCost(projectId, requestId) {
+  const db = getFirestore();
+  const ref = db.doc(`projects/${projectId}/requests/${requestId}`);
+  const qtyRef = db.doc(`projects/${projectId}/quantities/live`);
+  await db.runTransaction(async (tx) => {
+    const fresh = await tx.get(ref);
+    const data = fresh.data() || {};
+    if (data.status !== "godkjent" || data.appliedAt) return;
+    const qtySnap = await tx.get(qtyRef);
+    const current = qtySnap.exists ? qtySnap.data() : {};
+    const result = applyApprovedRequest(current, { ...data, id: requestId });
+    if (!result.ok || result.already) {
+      if (result.already) tx.update(ref, { appliedAt: FieldValue.serverTimestamp(), appliedAs: result.appliedAs });
+      return;
+    }
+    tx.set(qtyRef, { ...result.cost, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    for (const change of result.changes) {
+      tx.set(db.collection(`projects/${projectId}/costLog`).doc(), {
+        at: FieldValue.serverTimestamp(),
+        by: "system",
+        byName: "Einar",
+        lineId: change.lineId,
+        label: change.label,
+        field: change.field,
+        from: change.from,
+        to: change.to,
+        unit: change.unit,
+        text: requestLogText(change),
+      });
+    }
+    tx.update(ref, { appliedAt: FieldValue.serverTimestamp(), appliedAs: result.appliedAs });
+  });
+}
+
+exports.onCustomerRequest = onDocumentCreated("projects/{projectId}/requests/{requestId}", async (event) => {
+  const data = event.data?.data() || {};
+  await notifyAdmin("Nytt ønske fra kunde", data.text || "Ønske", event.params.projectId);
+});
+
+exports.onCustomerRequestDecision = onDocumentUpdated("projects/{projectId}/requests/{requestId}", async (event) => {
+  const before = event.data?.before?.data() || {};
+  const after = event.data?.after?.data() || {};
+  if (before.status === after.status) return;
+  if (after.status === "godkjent") {
+    await notifyAdmin("Kunde godkjente et ønske", after.postName || after.text || "Ønske", event.params.projectId);
+    try {
+      await applyRequestCost(event.params.projectId, event.params.requestId);
+    } catch (error) {
+      console.error("Ønske ble ikke lagt inn i kostnaden", error?.message || error);
+    }
+    return;
+  }
+  if (after.status === "avslatt") {
+    await notifyAdmin("Kunde avslo et ønske", after.postName || after.text || "Ønske", event.params.projectId);
+  }
 });
 
 exports.onCustomerItem = onDocumentCreated("projects/{projectId}/items/{itemId}", async (event) => {

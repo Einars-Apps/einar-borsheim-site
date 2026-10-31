@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_PRICES } from "../www/js/drainage.js";
-import { changeText, costChanges, costReportText, liveCost, patchCost, persistableCost } from "../www/js/cost.js";
+import { changeText, costChanges, costReportText, liveCost, patchCost, paymentBalance, paymentReportText, paymentTotals, persistableCost } from "../www/js/cost.js";
 
 const prices = {
   groftM: 350,
@@ -110,6 +110,121 @@ test("endring logges fra og til, og uendret mengde gir ingen linje", () => {
   assert.match(report, /Påløpt hittil/);
   assert.match(report, /planlagt 40 m, utført 28,5 m/);
   assert.match(report, /Einar: Grøft, utført/);
+});
+
+test("avtalt tillegg legges på planlagt i estimert og avvik, og mangler feltet er 0", () => {
+  const summary = liveCost({
+    cost: {
+      fikenLines: [
+        { id: "dren", label: "Drenering (meter)", unit: "stk", planned: 26, addition: 9, done: 20, unitPrice: 6000 },
+        { id: "gammel", label: "Gammel post", unit: "stk", planned: 4, done: 1, unitPrice: 100 },
+      ],
+    },
+    prices,
+    items: [],
+  });
+  const dren = summary.lines.find((line) => line.id === "dren");
+  assert.equal(dren.planned, 26);
+  assert.equal(dren.addition, 9);
+  assert.equal(dren.deviation, -15);
+  assert.equal(dren.plannedSum, 210000);
+  assert.equal(dren.doneSum, 120000);
+  const old = summary.lines.find((line) => line.id === "gammel");
+  assert.equal(old.addition, 0);
+  assert.equal(old.plannedSum, 400);
+  assert.equal(old.deviation, -3);
+  const logged = costChanges(
+    { fikenLines: [{ id: "dren", label: "Drenering (meter)", planned: 26, done: 20, unitPrice: 6000 }] },
+    { fikenLines: [{ id: "dren", label: "Drenering (meter)", planned: 26, addition: 9, done: 20, unitPrice: 6000 }] },
+  );
+  assert.deepEqual(logged.map((change) => change.field), ["addition"]);
+  assert.equal(logged[0].from, 0);
+  assert.equal(logged[0].to, 9);
+  assert.match(changeText(logged[0]), /avtalt tillegg: 0 → 9/);
+});
+
+test("ferdig post har endelig pris utført ganger enhetspris, og gamle poster er ikke ferdige", () => {
+  const open = liveCost({
+    cost: {
+      agreedExVat: 1000,
+      fikenLines: [
+        { id: "dren", label: "Drenering (meter)", unit: "meter", planned: 26, addition: 9, done: 20, unitPrice: 6000 },
+        { id: "aapen", label: "Åpen post", unit: "stk", planned: 4, done: 1, unitPrice: 100 },
+      ],
+    },
+    prices,
+    items: [],
+  });
+  assert.equal(open.lines.every((line) => line.final === false), true);
+  assert.equal(open.finalized.exVat, 0);
+  const stored = {
+    fikenLines: [
+      { id: "dren", label: "Drenering (meter)", unit: "meter", planned: 26, addition: 9, done: 20, unitPrice: 6000 },
+    ],
+  };
+  const closed = patchCost(stored, prices, { lineId: "dren", field: "final", value: true, finalizedAt: { seconds: 10 } });
+  assert.equal(closed.fikenLines[0].final, true);
+  assert.equal(closed.fikenLines[0].finalizedAt.seconds, 10);
+  const locked = patchCost(closed, prices, { lineId: "dren", field: "done", value: 5 });
+  assert.equal(locked.fikenLines[0].done, 20);
+  const summary = liveCost({ cost: { ...closed, agreedExVat: 1000, fikenLines: [
+    closed.fikenLines[0],
+    { id: "aapen", label: "Åpen post", unit: "stk", planned: 4, done: 1, unitPrice: 100 },
+  ] }, prices, items: [] });
+  const dren = summary.lines.find((line) => line.id === "dren");
+  assert.equal(dren.doneSum, 120000);
+  assert.equal(summary.finalized.exVat, 120000);
+  assert.equal(summary.remaining.exVat, 1000 + 400);
+  assert.equal(summary.estimated.exVat, 1000 + 400 + 120000);
+  const marked = costChanges(stored, closed, prices);
+  const finalChange = marked.find((change) => change.field === "final");
+  assert.equal(finalChange.field, "final");
+  assert.match(changeText(finalChange), /Posten er ferdig, endelig pris/);
+  assert.match(changeText(finalChange), /120[\s\u00a0\u202f]*000,00 eks\. mva/);
+  const opened = patchCost(closed, prices, { lineId: "dren", field: "final", value: false });
+  assert.equal(opened.fikenLines[0].final, false);
+  assert.equal(opened.fikenLines[0].finalizedAt, null);
+  assert.match(changeText(costChanges(closed, opened, prices).find((change) => change.field === "final")), /Posten er åpnet igjen/);
+  const report = costReportText(summary, []);
+  assert.match(report, /Ferdige poster \(endelig\)/);
+  assert.match(report, /Gjenstår \(estimert\)/);
+  assert.match(report, /Ferdig – endelig pris/);
+  assert.match(report, /Betalt hittil/);
+  assert.match(report, /Ingen betalinger er registrert/);
+  assert.match(changeText(costChanges(closed, opened, prices).find((change) => change.field === "final")), /kan være fakturert/);
+});
+
+test("betalinger summeres bare når mva er merket, og gjenstår bruker totalen", () => {
+  const summary = liveCost({ cost: { agreedExVat: 10000 }, prices, items: [] });
+  const payments = [
+    { amount: 1250, vat: "inkl", invoiceNumber: "1042", note: "Maskintransport", when: "15. okt. 2026" },
+    { amount: 800, vat: "eks" },
+    { amount: 500, vat: "" },
+    { amount: -10, vat: "inkl" },
+  ];
+  const paid = paymentTotals(payments);
+  assert.equal(paid.exVat, 1800);
+  assert.equal(paid.incVat, 2250);
+  const balance = paymentBalance(summary, payments);
+  assert.equal(balance.totalEx, 10000);
+  assert.equal(balance.totalInc, 12500);
+  assert.equal(balance.dueEx, 8200);
+  assert.equal(balance.dueInc, 10250);
+  const report = costReportText(summary, [], payments);
+  assert.match(report, /15\. okt\. 2026: kr .*1[\s\u00a0\u202f]*250,00 inkl\. mva\. Faktura 1042\. Maskintransport/);
+  assert.match(report, /kr .*800,00 eks\. mva/);
+  assert.match(report, /Mva er ikke merket, så beløpet er ikke med i summen/);
+  assert.match(report, /Betalt hittil/);
+  assert.match(report, /Totalt \(endelig \+ estimert\)/);
+  assert.match(report, /Gjenstår å betale/);
+  assert.doesNotMatch(report, /Det er betalt mer enn totalen/);
+  const over = paymentBalance(summary, [{ amount: 20000, vat: "eks" }]);
+  assert.equal(over.dueEx, -10000);
+  assert.match(paymentReportText([{ amount: 20000, vat: "eks" }], summary), /Det er betalt mer enn totalen/);
+  const hidden = paymentReportText([{ amount: 800, vat: "eks", when: "1. okt. 2026" }]);
+  assert.match(hidden, /Betalt hittil/);
+  assert.doesNotMatch(hidden, /Gjenstår å betale/);
+  assert.doesNotMatch(hidden, /Totalt \(endelig \+ estimert\)/);
 });
 
 test("uberørte standardlinjer vises ikke, mengde og Fiken beholdes, grøftpris blir i kalkulatoren", () => {

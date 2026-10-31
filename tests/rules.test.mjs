@@ -11,6 +11,7 @@ import {
   query,
   serverTimestamp,
   where,
+  deleteDoc,
   setDoc,
   updateDoc,
 } from "firebase/firestore";
@@ -449,6 +450,9 @@ test("kunde kan lese mengder bare når Einar har skrudd det på, og kan ikke skr
   assert.equal(snap.data().agreedExVat, 10000);
   await assertSucceeds(getDoc(doc(customer, "projects/p1/costLog/log1")));
   await assertFails(setDoc(doc(customer, "projects/p1/quantities/live"), { agreedExVat: 1 }));
+  await assertFails(updateDoc(doc(customer, "projects/p1/quantities/live"), {
+    fikenLines: [{ id: "dren", label: "Drenering", planned: 26, done: 20, unitPrice: 6000, final: true }],
+  }));
   await assertFails(updateDoc(doc(customer, "projects/p1"), { costOverview: { agreedExVat: 1 } }));
   await assertFails(addDoc(collection(customer, "projects/p1/costLog"), {
     at: serverTimestamp(),
@@ -710,6 +714,144 @@ test("henvendelse kan opprettes uten innlogging, og bare admin kan lese", async 
   await assertFails(uploadString(ref(open.storage(), `henvendelser/${id}/fil.exe`), "x", "raw", {
     contentType: "application/octet-stream",
   }));
+});
+
+test("kunden kan ønske og svare, men ikke sette pris eller røre et annet prosjekt", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(context.firestore(), "projects/p2"), { name: "Annen", shareToken: "TOK999999" });
+    await setDoc(doc(context.firestore(), "projects/p2/access/kunde2"), { token: "TOK999999" });
+  });
+  const customer = customerDb();
+  await assertFails(addDoc(collection(customer, "projects/p1/requests"), {
+    status: "ny",
+    text: "Ekstra drenering",
+    createdBy: "kunde1",
+    createdAt: serverTimestamp(),
+    unitPrice: 1,
+  }));
+  await assertFails(addDoc(collection(customer, "projects/p2/requests"), {
+    status: "ny",
+    text: "Ikke mitt prosjekt",
+    createdBy: "kunde1",
+    createdAt: serverTimestamp(),
+  }));
+  const created = await assertSucceeds(addDoc(collection(customer, "projects/p1/requests"), {
+    status: "ny",
+    text: "Ekstra drenering langs garasjen",
+    createdBy: "kunde1",
+    createdAt: serverTimestamp(),
+  }));
+  await assertFails(updateDoc(created, {
+    status: "godkjent",
+    decidedAt: serverTimestamp(),
+    decidedBy: "kunde1",
+  }));
+  await assertSucceeds(updateDoc(doc(adminDb(), created.path), {
+    status: "besvart",
+    answer: "Jeg kan legge ni meter til.",
+    postName: "Drenering (meter)",
+    postId: "dren",
+    unit: "meter",
+    quantity: 9,
+    unitPrice: 180,
+  }));
+  await assertFails(updateDoc(created, {
+    status: "godkjent",
+    decidedAt: serverTimestamp(),
+    decidedBy: "kunde1",
+    unitPrice: 1,
+  }));
+  await assertFails(updateDoc(doc(customerDb("kunde2"), created.path), {
+    status: "godkjent",
+    decidedAt: serverTimestamp(),
+    decidedBy: "kunde2",
+  }));
+  await assertFails(updateDoc(created, {
+    status: "godkjent",
+    decidedAt: serverTimestamp(),
+    decidedBy: "kunde1",
+    quantity: 1,
+  }));
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "projects/p1/access/kunde2"), { token: "TOK123456" });
+    await setDoc(doc(context.firestore(), "projects/p1/requests/annens"), {
+      status: "besvart",
+      text: "Fra en annen",
+      createdBy: "kunde2",
+      createdAt: new Date(),
+      answer: "Nei",
+      quantity: 1,
+      unitPrice: 10,
+    });
+  });
+  await assertFails(getDoc(doc(customer, "projects/p1/requests/annens")));
+  await assertFails(updateDoc(doc(customer, "projects/p1/requests/annens"), {
+    status: "godkjent",
+    decidedAt: serverTimestamp(),
+    decidedBy: "kunde1",
+  }));
+  await assertSucceeds(updateDoc(created, {
+    status: "godkjent",
+    decidedAt: serverTimestamp(),
+    decidedBy: "kunde1",
+  }));
+  const snap = await assertSucceeds(getDoc(created));
+  assert.equal(snap.data().status, "godkjent");
+  assert.equal(snap.data().unitPrice, 180);
+  const own = await assertSucceeds(getDocs(query(
+    collection(customer, "projects/p1/requests"),
+    where("createdBy", "==", "kunde1"),
+  )));
+  assert.equal(own.size, 1);
+  const all = await assertSucceeds(getDocs(collection(adminDb(), "projects/p1/requests")));
+  assert.equal(all.size, 2);
+  await assertFails(getDoc(doc(customerDb("kunde2"), created.path)));
+});
+
+test("bare admin skriver betalinger, og kunden leser dem på eget prosjekt", async () => {
+  await seedProject();
+  await env.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "projects/p1/access/kunde1"), { token: "TOK123456" });
+    await setDoc(doc(context.firestore(), "projects/p2"), { name: "Annen", shareToken: "TOK999999" });
+    await setDoc(doc(context.firestore(), "projects/p2/access/kunde2"), { token: "TOK999999" });
+  });
+  const payment = {
+    paidAt: new Date("2026-10-15T12:00:00Z"),
+    amount: 12500,
+    vat: "inkl",
+    invoiceNumber: "1042",
+    note: "Maskintransport",
+    createdAt: serverTimestamp(),
+    createdBy: "admin-user",
+  };
+  const customer = customerDb();
+  await assertFails(setDoc(doc(customer, "projects/p1/payments/bet1"), {
+    ...payment,
+    createdBy: "kunde1",
+  }));
+  await assertFails(setDoc(doc(adminDb(), "projects/p1/payments/bet1"), {
+    ...payment,
+    vat: "ukjent",
+  }));
+  await assertSucceeds(setDoc(doc(adminDb(), "projects/p1/payments/bet1"), payment));
+  const own = await assertSucceeds(getDoc(doc(customer, "projects/p1/payments/bet1")));
+  assert.equal(own.data().amount, 12500);
+  assert.equal(own.data().vat, "inkl");
+  const listed = await assertSucceeds(getDocs(collection(customer, "projects/p1/payments")));
+  assert.equal(listed.size, 1);
+  await assertFails(getDoc(doc(strangerDb(), "projects/p1/payments/bet1")));
+  await assertFails(getDoc(doc(customerDb("kunde2"), "projects/p1/payments/bet1")));
+  await assertFails(updateDoc(doc(customer, "projects/p1/payments/bet1"), { amount: 1 }));
+  await assertFails(deleteDoc(doc(customer, "projects/p1/payments/bet1")));
+  await assertFails(updateDoc(doc(adminDb(), "projects/p1/payments/bet1"), { createdBy: "kunde1" }));
+  await assertSucceeds(updateDoc(doc(adminDb(), "projects/p1/payments/bet1"), {
+    amount: 10000,
+    note: "Korrigert",
+  }));
+  await assertSucceeds(deleteDoc(doc(adminDb(), "projects/p1/payments/bet1")));
+  await assertFails(getDoc(doc(customer, "projects/p1/payments/bet1")));
 });
 
 test("regelfilene slipper ikke gjennom åpen skriving", () => {
