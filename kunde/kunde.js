@@ -49,7 +49,7 @@ import {
   offerTypeLabel,
 } from "../www/js/offers.js";
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
-import { renderCostOverview, renderCustomerHistory } from "../www/js/cost-view.js";
+import { renderCostOverview, renderCustomerHistory, renderPaymentSummary } from "../www/js/cost-view.js";
 import { renderCustomerRequests } from "../www/js/requests-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
 import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem, sortPhotos } from "../www/js/photos.js";
@@ -81,9 +81,20 @@ let hmsDocs = [];
 let thread = [];
 let costState = null;
 let costHistory = [];
+let payments = [];
 let requests = [];
 let stopCost = null;
 let stopCostLog = null;
+let stopPayments = null;
+
+function watchPayments() {
+  if (stopPayments) return;
+  stopPayments = onSnapshot(collection(db, "projects", projectId, "payments"), (snap) => {
+    payments = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+    if (document.getElementById("cost-slot")) paintCost();
+    else paintPayments();
+  }, (error) => console.error(error));
+}
 
 function watchCost() {
   if (!customerSeesCost(project)) {
@@ -235,6 +246,17 @@ function paintCost() {
     audience: "kunde",
     editable: false,
     showPreview: true,
+    payments,
+  }));
+}
+
+function paintPayments() {
+  const slot = document.getElementById("payment-slot");
+  if (!slot) return;
+  slot.replaceChildren(renderPaymentSummary({
+    payments,
+    showBalance: false,
+    editable: false,
   }));
 }
 
@@ -270,6 +292,7 @@ function render() {
   const typing = active && viewProject.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
   if (typing) {
     paintCost();
+    paintPayments();
     paintRequests();
     if (!renderAfterBlur) {
       renderAfterBlur = true;
@@ -322,6 +345,11 @@ function render() {
   ]));
 
   const offerPosts = items.filter((item) => isOfferItem(item) && item.fikenBase !== true && item.approved === true && item.approvalRequested === true);
+  if (!customerSeesCost(project)) {
+    viewProject.append(el("section", { class: "k-card k-stack", id: "payment-card" }, [
+      el("div", { id: "payment-slot" }),
+    ]));
+  }
   if (offerPosts.length || customerSeesCost(project)) {
     const box = el("section", { class: "k-card k-stack", id: "offers" }, [
       el("h2", {}, "Tilbud og endringer"),
@@ -379,6 +407,7 @@ function render() {
   }
   viewProject.append(rate);
   paintCost();
+  paintPayments();
 
   paintPortalPhotos();
   for (const item of items) hydrate(item);
@@ -962,6 +991,7 @@ async function openPortalAccess(userId) {
 function startPortal() {
   try {
     watchCost();
+    watchPayments();
     watchGps();
     render();
     const items = collection(db, "projects", projectId, "items");

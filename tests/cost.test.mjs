@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_PRICES } from "../www/js/drainage.js";
-import { changeText, costChanges, costReportText, liveCost, patchCost, persistableCost } from "../www/js/cost.js";
+import { changeText, costChanges, costReportText, liveCost, patchCost, paymentBalance, paymentReportText, paymentTotals, persistableCost } from "../www/js/cost.js";
 
 const prices = {
   groftM: 350,
@@ -189,6 +189,42 @@ test("ferdig post har endelig pris utført ganger enhetspris, og gamle poster er
   assert.match(report, /Ferdige poster \(endelig\)/);
   assert.match(report, /Gjenstår \(estimert\)/);
   assert.match(report, /Ferdig – endelig pris/);
+  assert.match(report, /Betalt hittil/);
+  assert.match(report, /Ingen betalinger er registrert/);
+  assert.match(changeText(costChanges(closed, opened, prices).find((change) => change.field === "final")), /kan være fakturert/);
+});
+
+test("betalinger summeres bare når mva er merket, og gjenstår bruker totalen", () => {
+  const summary = liveCost({ cost: { agreedExVat: 10000 }, prices, items: [] });
+  const payments = [
+    { amount: 1250, vat: "inkl", invoiceNumber: "1042", note: "Maskintransport", when: "15. okt. 2026" },
+    { amount: 800, vat: "eks" },
+    { amount: 500, vat: "" },
+    { amount: -10, vat: "inkl" },
+  ];
+  const paid = paymentTotals(payments);
+  assert.equal(paid.exVat, 1800);
+  assert.equal(paid.incVat, 2250);
+  const balance = paymentBalance(summary, payments);
+  assert.equal(balance.totalEx, 10000);
+  assert.equal(balance.totalInc, 12500);
+  assert.equal(balance.dueEx, 8200);
+  assert.equal(balance.dueInc, 10250);
+  const report = costReportText(summary, [], payments);
+  assert.match(report, /15\. okt\. 2026: kr .*1[\s\u00a0\u202f]*250,00 inkl\. mva\. Faktura 1042\. Maskintransport/);
+  assert.match(report, /kr .*800,00 eks\. mva/);
+  assert.match(report, /Mva er ikke merket, så beløpet er ikke med i summen/);
+  assert.match(report, /Betalt hittil/);
+  assert.match(report, /Totalt \(endelig \+ estimert\)/);
+  assert.match(report, /Gjenstår å betale/);
+  assert.doesNotMatch(report, /Det er betalt mer enn totalen/);
+  const over = paymentBalance(summary, [{ amount: 20000, vat: "eks" }]);
+  assert.equal(over.dueEx, -10000);
+  assert.match(paymentReportText([{ amount: 20000, vat: "eks" }], summary), /Det er betalt mer enn totalen/);
+  const hidden = paymentReportText([{ amount: 800, vat: "eks", when: "1. okt. 2026" }]);
+  assert.match(hidden, /Betalt hittil/);
+  assert.doesNotMatch(hidden, /Gjenstår å betale/);
+  assert.doesNotMatch(hidden, /Totalt \(endelig \+ estimert\)/);
 });
 
 test("uberørte standardlinjer vises ikke, mengde og Fiken beholdes, grøftpris blir i kalkulatoren", () => {

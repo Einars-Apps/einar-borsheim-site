@@ -358,6 +358,26 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .cost-diff-up { color: var(--danger); font-weight: 700; margin: 0; }
 .cost-diff-down { color: var(--accent); font-weight: 700; margin: 0; }
 .cost-preview { background: #f3e2c8; border-radius: 12px; padding: 10px 12px; margin: 0; }
+.payment-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #e7f2ec;
+  border: 1px solid #b7dfd0;
+}
+.payment-box h3 { margin: 0; }
+.payment-figure { margin: 0; font-size: 1.05rem; font-weight: 700; }
+.payment-over { color: var(--danger); }
+.payment-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.payment-row { display: flex; flex-direction: column; gap: 2px; }
+.payment-amount { margin: 0; font-weight: 700; }
+.payment-form { display: flex; flex-direction: column; gap: 8px; }
+.payment-vat { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.payment-vat legend { font-weight: 700; padding: 0; }
+.payment-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.payment-actions .btn { flex: 1 1 140px; }
 .qty-line { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
 .qty-line-final { background: #e5f3ee; border: 1px solid #b7dfd0; border-radius: 14px; padding: 12px; }
 .qty-step.is-locked { opacity: 0.55; }

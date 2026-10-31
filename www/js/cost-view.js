@@ -1,7 +1,8 @@
 import { button, el, field, icon } from "./dom.js";
 import { formatKr } from "./offers.js";
-import { formatQty, signedKr, signedQty } from "./cost.js";
+import { formatQty, paymentBalance, paymentTotals, signedKr, signedQty } from "./cost.js";
 import { buildCustomerHistory, customerPostSummary, extraTilleggText, unitWord } from "./cost-history.js";
+import { formatDay, toDate } from "./logic.js";
 
 function moneyLine(label, exVat, incVat) {
   return el("p", { class: "cost-money" }, `${label}: ${formatKr(exVat)} eks. mva, ${formatKr(incVat)} inkl. mva`);
@@ -57,6 +58,166 @@ function lockStepper(step) {
   step.classList.add("is-locked");
   step.querySelectorAll("button, input").forEach((node) => { node.disabled = true; });
   return step;
+}
+
+function confirmUnlock(label, onYes) {
+  document.querySelector(".unlock-dialog")?.remove();
+  const root = el("div", { class: "sheet-back unlock-dialog" }, [
+    el("div", {
+      class: "sheet",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-labelledby": "unlock-title",
+    }, [
+      el("h2", { id: "unlock-title" }, "Låse opp endelig pris?"),
+      el("p", {}, `${label} er merket ferdig. Prisen er endelig og kan være fakturert. Hvis du låser opp, kan tallene endres igjen. Endringen blir logget.`),
+      el("div", { class: "payment-actions" }, [
+        button("Avbryt", { class: "btn btn-ghost", onClick: () => root.remove() }),
+        button("Lås opp likevel", {
+          class: "btn btn-danger",
+          onClick: () => {
+            root.remove();
+            onYes();
+          },
+        }),
+      ]),
+    ]),
+  ]);
+  document.body.append(root);
+  root.querySelector("button")?.focus();
+}
+
+function parseAmount(value) {
+  const parsed = Number(String(value ?? "").replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.round(parsed * 100) / 100;
+}
+
+function todayInputValue() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+function paymentMoment(payment) {
+  return toDate(payment?.paidAt)?.getTime() || toDate(payment?.createdAt)?.getTime() || 0;
+}
+
+function paymentForm(onAddPayment) {
+  const date = el("input", { type: "date", required: true, value: todayInputValue(), "aria-label": "Dato" });
+  const amount = el("input", { type: "text", inputmode: "decimal", "aria-label": "Beløp" });
+  const inkl = el("input", { type: "radio", name: "payment-vat", value: "inkl" });
+  const eks = el("input", { type: "radio", name: "payment-vat", value: "eks" });
+  const invoice = el("input", { type: "text", maxlength: "39", "aria-label": "Fakturanummer" });
+  const note = el("input", { type: "text", maxlength: "299", "aria-label": "Notat" });
+  const status = el("p", { class: "meta", role: "status" });
+  const form = el("form", { class: "payment-form" }, [
+    field("Dato", date),
+    field("Beløp", amount),
+    el("fieldset", { class: "payment-vat" }, [
+      el("legend", {}, "Er beløpet inkl. eller eks. mva?"),
+      el("label", { class: "checkline" }, [inkl, el("span", {}, "Inkl. mva")]),
+      el("label", { class: "checkline" }, [eks, el("span", {}, "Eks. mva")]),
+    ]),
+    field("Fakturanummer (valgfritt)", invoice),
+    field("Notat (valgfritt)", note),
+    status,
+    button("Registrer betaling", { class: "btn btn-block", type: "submit" }),
+  ]);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const parsed = parseAmount(amount.value);
+    const vat = inkl.checked ? "inkl" : eks.checked ? "eks" : "";
+    if (!date.value) {
+      status.textContent = "Velg dato.";
+      return;
+    }
+    if (parsed == null) {
+      status.textContent = "Skriv beløpet som er betalt.";
+      return;
+    }
+    if (!vat) {
+      status.textContent = "Velg om beløpet er inkl. eller eks. mva.";
+      return;
+    }
+    const [year, month, day] = date.value.split("-").map(Number);
+    if (!year || !month || !day) {
+      status.textContent = "Velg dato.";
+      return;
+    }
+    try {
+      await onAddPayment?.({
+        paidAt: new Date(year, month - 1, day, 12, 0, 0),
+        amount: parsed,
+        vat,
+        invoiceNumber: invoice.value.trim().slice(0, 39),
+        note: note.value.trim().slice(0, 299),
+      });
+    } catch (error) {
+      console.error(error);
+      status.textContent = "Betalingen ble ikke lagret.";
+      return;
+    }
+    amount.value = "";
+    invoice.value = "";
+    note.value = "";
+    inkl.checked = false;
+    eks.checked = false;
+    status.textContent = "Betalingen er registrert.";
+  });
+  return form;
+}
+
+export function renderPaymentSummary({
+  payments = [],
+  summary = null,
+  showBalance = false,
+  editable = false,
+  onAddPayment,
+  onDeletePayment,
+} = {}) {
+  const paid = paymentTotals(payments);
+  const balance = showBalance && summary ? paymentBalance(summary, payments) : null;
+  const rows = [...(payments || [])]
+    .filter((payment) => Number.isFinite(Number(payment?.amount)) && Number(payment.amount) >= 0)
+    .sort((a, b) => paymentMoment(b) - paymentMoment(a));
+  const list = el("ul", { class: "payment-list" });
+  if (!rows.length) list.append(el("li", { class: "meta" }, "Ingen betalinger er registrert."));
+  for (const payment of rows) {
+    const amount = Number(payment.amount);
+    const labeled = payment.vat === "inkl" || payment.vat === "eks";
+    const vatLabel = payment.vat === "inkl" ? "inkl. mva" : payment.vat === "eks" ? "eks. mva" : "mva er ikke merket";
+    const when = formatDay(payment.paidAt) || "Uten dato";
+    list.append(el("li", { class: "payment-row" }, [
+      el("p", { class: "payment-amount" }, `${when} · ${formatKr(amount)} ${vatLabel}`),
+      payment.invoiceNumber ? el("p", { class: "meta" }, `Faktura ${payment.invoiceNumber}`) : null,
+      payment.note ? el("p", { class: "meta" }, payment.note) : null,
+      labeled ? null : el("p", { class: "meta" }, "Beløpet er ikke med i summen, fordi mva ikke er merket."),
+      editable && payment.id ? button("Slett betaling", {
+        class: "btn btn-ghost",
+        onClick: () => {
+          const remove = window.confirm("Slette denne betalingen? Kunden ser den ikke lenger.");
+          if (!remove) return;
+          onDeletePayment?.(payment.id);
+        },
+      }) : null,
+    ]));
+  }
+  const over = balance && (balance.dueInc < 0 || balance.dueEx < 0);
+  return el("section", { class: "payment-box", "aria-label": "Betalinger" }, [
+    el("h3", { class: "h-app" }, "Betalinger"),
+    el("p", { class: "meta" }, editable
+      ? "Skriv inn det kunden har betalt. Merk om beløpet er inkl. eller eks. mva."
+      : "Einar registrerer betalingene. Du kan ikke endre dem."),
+    el("p", { class: "payment-figure" }, `Betalt hittil: ${formatKr(paid.exVat)} eks. mva, ${formatKr(paid.incVat)} inkl. mva`),
+    balance ? el("p", { class: "payment-figure" }, `Totalt (endelig + estimert): ${formatKr(balance.totalEx)} eks. mva, ${formatKr(balance.totalInc)} inkl. mva`) : null,
+    balance ? el("p", { class: over ? "payment-figure payment-over" : "payment-figure" }, over
+      ? `Gjenstår å betale: ${formatKr(balance.dueEx)} eks. mva, ${formatKr(balance.dueInc)} inkl. mva. Det er betalt mer enn totalen.`
+      : `Gjenstår å betale: ${formatKr(balance.dueEx)} eks. mva, ${formatKr(balance.dueInc)} inkl. mva`) : null,
+    list,
+    editable ? paymentForm(onAddPayment) : null,
+  ]);
 }
 
 function commitField(input, onCommit) {
@@ -225,11 +386,14 @@ export function renderCostOverview({
   showPreview = false,
   showToCustomer = false,
   extras = [],
+  payments = [],
   onAgreed,
   onQuantity,
   onAddExtra,
   onDeleteExtra,
   onExtra,
+  onAddPayment,
+  onDeletePayment,
 }) {
   const diffClass = summary.differenceExVat > 0 ? "cost-diff-up" : summary.differenceExVat < 0 ? "cost-diff-down" : "meta";
   const approved = (summary.offers?.rows || []).filter((row) => row.status === "godkjent");
@@ -270,7 +434,7 @@ export function renderCostOverview({
     const body = [
       el("p", { class: "cost-line-title" }, !editable && facts ? customerPostSummary(line.label, facts) : line.label),
       line.final
-        ? el("p", { class: "final-badge" }, `Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva`)
+        ? el("p", { class: "final-badge" }, `Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva${line.finalizedAt ? ` · Fakturert ${formatDay(line.finalizedAt)}` : ""}`)
         : el("p", { class: "estimate-badge" }, "Estimert"),
       line.source ? el("p", { class: "meta" }, line.source) : null,
       editable && line.fromFiken ? null : el("p", { class: "meta" }, `à ${formatKr(line.unitPrice)} eks. mva`),
@@ -305,7 +469,15 @@ export function renderCostOverview({
       }
       const finalBox = el("input", { type: "checkbox", "aria-label": `Ferdig – endelig pris ${line.label}` });
       finalBox.checked = line.final === true;
-      finalBox.addEventListener("change", () => onQuantity?.(line.id, "final", finalBox.checked));
+      finalBox.addEventListener("change", () => {
+        if (finalBox.checked) {
+          onQuantity?.(line.id, "final", true);
+          return;
+        }
+        finalBox.checked = true;
+        confirmUnlock(line.label, () => onQuantity?.(line.id, "final", false));
+      });
+      const invoiced = line.finalizedAt ? `Fakturert ${formatDay(line.finalizedAt)}` : (line.final ? "Fakturert" : "");
       body.push(
         el("p", { class: "qty-label" }, `Planlagt, ${shownUnit}`),
         plannedStep,
@@ -314,6 +486,7 @@ export function renderCostOverview({
         el("p", { class: "qty-label" }, `Utført hittil, ${shownUnit}`),
         doneStep,
         el("label", { class: "checkline" }, [finalBox, el("span", {}, "Ferdig – endelig pris")]),
+        invoiced ? el("p", { class: "meta" }, invoiced) : null,
       );
     }
     body.push(
@@ -373,6 +546,14 @@ export function renderCostOverview({
     moneyLine("Totalt", summary.estimated.exVat, summary.estimated.incVat),
     moneyLine("Påløpt hittil", summary.incurred.exVat, summary.incurred.incVat),
     el("p", { class: diffClass }, `Differanse mot opprinnelig tilbud: ${signedKr(summary.differenceExVat)} eks. mva, ${signedKr(summary.differenceIncVat)} inkl. mva`),
+    renderPaymentSummary({
+      payments,
+      summary,
+      showBalance: true,
+      editable,
+      onAddPayment,
+      onDeletePayment,
+    }),
     showPreview && summary.previewDeltaExVat
       ? el("p", { class: "cost-preview" }, `Forhåndsvisning hvis du godkjenner valget: ${formatKr(summary.preview.exVat)} eks. mva, ${formatKr(summary.preview.incVat)} inkl. mva. Det er ${signedKr(summary.previewDeltaExVat)} eks. mva mot nåværende estimat.`)
       : null,

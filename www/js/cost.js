@@ -451,7 +451,7 @@ function pushFinalChange(changes, id, label, left, right) {
 export function changeText(change) {
   if (change?.field === "final") {
     if (Number(change.to) === 1) return `Posten er ferdig, endelig pris ${formatKr(change.amount)} eks. mva`;
-    return "Posten er åpnet igjen. Prisen er estimert.";
+    return "Posten er åpnet igjen. Den var merket ferdig med endelig pris og kan være fakturert. Prisen er estimert.";
   }
   const what = FIELD_LABEL[change?.field] || "endring";
   const unit = change?.unit ? ` ${change.unit}` : "";
@@ -459,7 +459,71 @@ export function changeText(change) {
   return `${label}, ${what}: ${formatQty(change?.from)} → ${formatQty(change?.to)}${unit}`;
 }
 
-export function costReportText(summary, history = []) {
+export function paymentTotals(payments = []) {
+  let exVat = 0;
+  let incVat = 0;
+  for (const payment of payments || []) {
+    const amount = Number(payment?.amount);
+    if (!Number.isFinite(amount) || amount < 0) continue;
+    if (payment.vat === "inkl") {
+      incVat += amount;
+      exVat += amount / (1 + VAT_RATE);
+    } else if (payment.vat === "eks") {
+      exVat += amount;
+      incVat += amount * (1 + VAT_RATE);
+    }
+  }
+  return { exVat: round2(exVat), incVat: round2(incVat) };
+}
+
+export function paymentBalance(summary, payments = []) {
+  const paid = paymentTotals(payments);
+  const totalEx = round2(summary?.estimated?.exVat || 0);
+  const totalInc = round2(summary?.estimated?.incVat || 0);
+  return {
+    paid,
+    totalEx,
+    totalInc,
+    dueEx: round2(totalEx - paid.exVat),
+    dueInc: round2(totalInc - paid.incVat),
+  };
+}
+
+function paymentReportLines(payments = [], summary = null) {
+  const lines = [];
+  let labeled = 0;
+  let unlabeled = 0;
+  for (const payment of payments || []) {
+    const amount = Number(payment?.amount);
+    if (!Number.isFinite(amount) || amount < 0) continue;
+    const when = payment.when ? `${payment.when}: ` : "";
+    const invoice = payment.invoiceNumber ? ` Faktura ${payment.invoiceNumber}.` : "";
+    const note = payment.note ? ` ${payment.note}` : "";
+    if (payment.vat === "inkl" || payment.vat === "eks") {
+      labeled += 1;
+      const vatLabel = payment.vat === "inkl" ? "inkl. mva" : "eks. mva";
+      lines.push(`${when}${formatKr(amount)} ${vatLabel}.${invoice}${note}`.trim());
+    } else {
+      unlabeled += 1;
+      lines.push(`${when}${formatKr(amount)}. Mva er ikke merket, så beløpet er ikke med i summen.${invoice}${note}`.trim());
+    }
+  }
+  if (!labeled && !unlabeled) lines.push("Ingen betalinger er registrert.");
+  const balance = paymentBalance(summary, payments);
+  lines.push(`Betalt hittil ${formatKr(balance.paid.incVat)} inkl. mva, ${formatKr(balance.paid.exVat)} eks. mva.`);
+  if (summary) {
+    lines.push(`Totalt (endelig + estimert) ${formatKr(balance.totalInc)} inkl. mva, ${formatKr(balance.totalEx)} eks. mva.`);
+    const over = balance.dueInc < 0 || balance.dueEx < 0;
+    lines.push(`Gjenstår å betale ${formatKr(balance.dueInc)} inkl. mva, ${formatKr(balance.dueEx)} eks. mva.${over ? " Det er betalt mer enn totalen." : ""}`);
+  }
+  return lines;
+}
+
+export function paymentReportText(payments = [], summary = null) {
+  return ["Betalinger", ...paymentReportLines(payments, summary)].join("\n");
+}
+
+export function costReportText(summary, history = [], payments = []) {
   const lines = [
     "Nåværende kostnad",
     `Avtalt pris ${formatKr(summary?.agreedExVat || 0)} eks. mva.`,
@@ -494,6 +558,7 @@ export function costReportText(summary, history = []) {
     lines.push(`${line.description || "Tillegg"}: ${formatQty(line.quantity)} à ${formatKr(line.unitPrice)} eks. mva. Linjesum ${formatKr(line.sum)} eks. mva.`);
   }
   if (extras.length) lines.push(`Sum tilleggsarbeider ${formatKr(summary?.extrasExVat || 0)} eks. mva.`);
+  lines.push("", ...paymentReportText(payments, summary).split("\n"));
   lines.push("", "Historikk");
   if (!history.length) lines.push("Ingen endringer er logget.");
   for (const entry of history) {

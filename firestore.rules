@@ -148,6 +148,36 @@ service cloud.firestore {
         && request.resource.data.text.size() < 2000;
     }
 
+    // Betaling. Bare admin skriver. Kunden leser betalingene på eget prosjekt.
+    function validPayment() {
+      return request.resource.data.keys().hasOnly([
+          'paidAt', 'amount', 'vat', 'invoiceNumber', 'note', 'createdAt', 'createdBy'
+        ])
+        && request.resource.data.paidAt is timestamp
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.amount < 100000000
+        && request.resource.data.vat in ['eks', 'inkl']
+        && request.resource.data.invoiceNumber is string
+        && request.resource.data.invoiceNumber.size() < 40
+        && request.resource.data.note is string
+        && request.resource.data.note.size() < 300
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdBy is string;
+    }
+
+    function validPaymentCreate() {
+      return validPayment() && request.resource.data.createdAt == request.time;
+    }
+
+    function validPaymentUpdate() {
+      let keys = request.resource.data.diff(resource.data).affectedKeys();
+      return validPayment()
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && keys.hasOnly(['paidAt', 'amount', 'vat', 'invoiceNumber', 'note']);
+    }
+
     function validCustomerRequestDecision() {
       let keys = request.resource.data.diff(resource.data).affectedKeys();
       return resource.data.status == 'besvart'
@@ -445,6 +475,14 @@ service cloud.firestore {
         allow read: if isAdmin() || customerMayReadCost(projectId);
         allow create: if isAdmin() && validCostLog();
         allow update, delete: if false;
+      }
+
+      // Innbetalinger. Bare admin skriver. Kunden med tilgang leser eget prosjekt, også når kostnadsoversikten er skjult.
+      match /payments/{paymentId} {
+        allow read: if isAdmin() || hasAccess(projectId);
+        allow create: if isAdmin() && validPaymentCreate();
+        allow update: if isAdmin() && validPaymentUpdate();
+        allow delete: if isAdmin();
       }
 
       // Forespørsel om tillegg. Kunden skriver bare teksten.

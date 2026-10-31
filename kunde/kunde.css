@@ -184,6 +184,21 @@ textarea { min-height: 96px; }
 .cost-diff-up { color: #8e2f2f; font-weight: 700; margin: 0; }
 .cost-diff-down { color: #0f6b4c; font-weight: 700; margin: 0; }
 .cost-preview { background: #f3e2c8; border-radius: 12px; padding: 10px 12px; margin: 0; }
+.payment-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #e7f2ec;
+  border: 1px solid #b7dfd0;
+}
+.payment-box h3 { margin: 0; font-size: 1.15rem; }
+.payment-figure { margin: 0; font-size: 1.05rem; font-weight: 700; }
+.payment-over { color: #8e2f2f; }
+.payment-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.payment-row { display: flex; flex-direction: column; gap: 2px; }
+.payment-amount { margin: 0; font-weight: 700; }
 .qty-line { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
 .qty-line-final { background: #e5f3ee; border: 1px solid #b7dfd0; border-radius: 14px; padding: 12px; }
 .final-badge, .estimate-badge {

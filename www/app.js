@@ -84,7 +84,7 @@ import { fieldsFromFiken, fikenUnreachableMessage, isFikenLinked, unimportedFike
 import { firestoreReadMessage, firestoreTransportSettings, readDocWithRetry } from "./js/firestore-read.js";
 import { fikenQuoteRecord, mergeFikenLines, quotesFromFikenResult } from "./js/fiken-offers.js";
 import { renderFikenQuoteList } from "./js/fiken-quote-view.js";
-import { changeText, costChanges, costReportText, customerSeesCost, liveCost, newExtraId, patchCost, persistableCost } from "./js/cost.js";
+import { changeText, costChanges, costReportText, customerSeesCost, liveCost, newExtraId, patchCost, paymentReportText, persistableCost } from "./js/cost.js";
 import { applyApprovedRequest } from "./js/requests.js";
 import { renderAdminRequests } from "./js/requests-view.js";
 import { renderCostOverview } from "./js/cost-view.js";
@@ -1108,6 +1108,17 @@ async function saveReportPdf(project, reportText) {
     }
     sections.push({ title: "Drenering – dokumentasjon og vurdering", items: drainageItems });
   }
+  let paymentRows = [];
+  try {
+    const paySnap = await db.collection("projects").doc(project.id).collection("payments").get();
+    paymentRows = paySnap.docs.map((entry) => {
+      const data = entry.data();
+      return { ...data, when: formatDay(data.paidAt) };
+    });
+    paymentRows.sort((a, b) => (toDate(b.paidAt)?.getTime() || 0) - (toDate(a.paidAt)?.getTime() || 0));
+  } catch (error) {
+    console.error(error);
+  }
   if (customerSeesCost(project)) {
     const costSnap = await db.collection("projects").doc(project.id).collection("quantities").doc("live").get();
     const logSnap = await db.collection("projects").doc(project.id).collection("costLog").orderBy("at", "desc").limit(80).get();
@@ -1122,7 +1133,17 @@ async function saveReportPdf(project, reportText) {
           when: formatWhen(entry.at),
           byName: entry.byName || "Einar",
           text: entry.text || changeText(entry),
-        }))),
+        })), paymentRows),
+        photos: [],
+        comments: [],
+      }],
+    });
+  } else if (paymentRows.length) {
+    sections.push({
+      title: "Betalinger",
+      items: [{
+        title: "Oversikt",
+        text: paymentReportText(paymentRows),
         photos: [],
         comments: [],
       }],
@@ -1499,6 +1520,7 @@ function mountOffers(route) {
   main.append(root);
   let items = [];
   let requests = [];
+  let payments = [];
   let costDoc = null;
   let costLog = [];
   const applyingRequests = new Set();
@@ -1665,6 +1687,38 @@ function mountOffers(route) {
         onAddExtra: () => savePatch({ addExtra: true, extraId: newExtraId() }),
         onDeleteExtra: (extraId) => savePatch({ deleteExtraId: extraId }),
         onExtra: (extraId, field, value) => savePatch({ extraId, field, value }),
+        payments,
+        onAddPayment: async (payment) => {
+          if (!(payment?.paidAt instanceof Date) || !payment.amount || (payment.vat !== "eks" && payment.vat !== "inkl")) {
+            throw new Error("ufullstendig");
+          }
+          try {
+            await db.collection("projects").doc(route.projectId).collection("payments").add({
+              paidAt: firebase.firestore.Timestamp.fromDate(payment.paidAt),
+              amount: payment.amount,
+              vat: payment.vat,
+              invoiceNumber: String(payment.invoiceNumber || "").slice(0, 39),
+              note: String(payment.note || "").slice(0, 299),
+              createdAt: stamp(),
+              createdBy: user?.uid || "",
+            });
+            toast("Betalingen er registrert");
+          } catch (error) {
+            console.error(error);
+            toast("Kunne ikke lagre betalingen");
+            throw error;
+          }
+        },
+        onDeletePayment: async (paymentId) => {
+          if (!paymentId) return;
+          try {
+            await db.collection("projects").doc(route.projectId).collection("payments").doc(paymentId).delete();
+            toast("Betalingen er slettet");
+          } catch (error) {
+            console.error(error);
+            toast("Kunne ikke slette betalingen");
+          }
+        },
       }),
     }), renderAdminRequests({
         requests,
@@ -1712,6 +1766,10 @@ function mountOffers(route) {
     for (const request of requests) applyApproved(request);
     draw();
   }, (error) => console.error(error)));
+  subs.push(db.collection("projects").doc(route.projectId).collection("payments").onSnapshot((snap) => {
+    payments = snap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
+    draw();
+  }, onCostReadError));
   subs.push(db.collection("projects").doc(route.projectId).collection("costLog").orderBy("at", "desc").limit(40).onSnapshot((snap) => {
     costSeen = true;
     clearTimeout(costTimer);
