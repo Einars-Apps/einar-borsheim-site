@@ -87,7 +87,6 @@ import { renderFikenQuoteList } from "./js/fiken-quote-view.js";
 import { changeText, costChanges, costReportText, customerSeesCost, liveCost, newExtraId, patchCost, persistableCost } from "./js/cost.js";
 import { applyApprovedRequest } from "./js/requests.js";
 import { renderAdminRequests } from "./js/requests-view.js";
-import { renderAdminJobRequests } from "./js/job-requests-view.js";
 import { renderCostOverview } from "./js/cost-view.js";
 import { fetchFrostRain } from "./js/frost.js";
 import { button, el, field, icon, sheet, toast } from "./js/dom.js";
@@ -1500,7 +1499,6 @@ function mountOffers(route) {
   main.append(root);
   let items = [];
   let requests = [];
-  let jobRequests = [];
   let costDoc = null;
   let costLog = [];
   const applyingRequests = new Set();
@@ -1680,31 +1678,6 @@ function mountOffers(route) {
           toast("Svaret er sendt til kunden");
         },
       }),
-      renderAdminJobRequests({
-        requests: jobRequests,
-        lines: summary.lines,
-        onBesvart: async (request) => {
-          await db.collection("projects").doc(route.projectId).collection("jobRequests").doc(request.id).update({
-            status: "besvart",
-            answeredAt: stamp(),
-          });
-          toast("Markert som besvart");
-        },
-        onAddTillegg: async (request, fields) => {
-          const fiken = (costDoc?.fikenLines || []).find((line) => line.id === fields.postId);
-          const current = Number(fiken?.addition ?? costDoc?.lines?.[fields.postId]?.addition) || 0;
-          const next = Math.round((current + fields.quantity) * 100) / 100;
-          savePatch({ lineId: fields.postId, field: "addition", value: next });
-          await db.collection("projects").doc(route.projectId).collection("jobRequests").doc(request.id).update({
-            status: "tillegg",
-            postId: fields.postId,
-            postLabel: String(fields.postLabel || "").slice(0, 200),
-            addedQuantity: fields.quantity,
-            addedAt: stamp(),
-          });
-          toast("Lagt til som tillegg. Prisen er ikke endret.");
-        },
-      }),
     );
   };
 
@@ -1729,10 +1702,6 @@ function mountOffers(route) {
     costDoc = snap.exists ? snap.data() : null;
     draw();
   }, onCostReadError));
-  subs.push(db.collection("projects").doc(route.projectId).collection("jobRequests").orderBy("createdAt", "desc").onSnapshot((snap) => {
-    jobRequests = snap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
-    draw();
-  }, (error) => console.error(error)));
   subs.push(db.collection("projects").doc(route.projectId).collection("requests").orderBy("createdAt", "desc").onSnapshot((snap) => {
     requests = snap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
     for (const request of requests) applyApproved(request);

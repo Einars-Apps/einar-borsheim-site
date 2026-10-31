@@ -33,8 +33,8 @@ export function renderCustomerRequests({ requests = [], onCreate, onDecide }) {
   });
   const note = el("p", { class: "meta", hidden: true });
   const form = el("form", { class: "request-form" }, [
-    field("Hva ønsker du?", text),
-    el("button", { type: "submit", class: "btn btn-primary" }, "Send ønske"),
+    field("Hva vil du ha pris på?", text),
+    el("button", { type: "submit", class: "btn btn-primary" }, "Send forespørsel"),
     note,
   ]);
   form.addEventListener("submit", async (event) => {
@@ -51,7 +51,7 @@ export function renderCustomerRequests({ requests = [], onCreate, onDecide }) {
     try {
       await onCreate?.(value);
       text.value = "";
-      note.textContent = "Ønsket er sendt. Det er ikke en bestilling. Einar svarer med pris før noe legges til.";
+      note.textContent = "Forespørselen er sendt. Einar svarer med pris. Ingenting legges til før du godkjenner.";
     } catch (error) {
       console.error(error);
       note.textContent = "Ønsket ble ikke sendt. Prøv igjen.";
@@ -60,11 +60,11 @@ export function renderCustomerRequests({ requests = [], onCreate, onDecide }) {
     }
   });
   const list = el("div", { class: "request-list" });
-  if (!requests.length) list.append(el("p", { class: "meta" }, "Du har ikke sendt et ønske ennå."));
+  if (!requests.length) list.append(el("p", { class: "meta" }, "Du har ingen forespørsler ennå."));
   for (const request of requests) list.append(customerCard(request, onDecide));
   return el("section", { class: "request-box" }, [
-    el("h2", { class: "h-app" }, "Ønsker"),
-    el("p", { class: "meta" }, "Beskriv hva du ønsker. Det er ikke en bestilling, og prisen endres ikke før du godkjenner Einars svar."),
+    el("h2", { class: "h-app" }, "Forespør tillegg / be om pris"),
+    el("p", { class: "meta" }, "Beskriv tillegget du vil ha pris på. Einar svarer med forklaring og pris. Du kan godkjenne eller avslå. Ingenting legges til før du godkjenner."),
     form,
     list,
   ]);
@@ -85,7 +85,7 @@ function customerCard(request, onDecide) {
   }
   if (status === "besvart") {
     body.push(el("div", { class: "k-actions" }, [
-      button("Godkjenn svaret", {
+      button("Godkjenn", {
         class: "btn btn-primary",
         onClick: () => onDecide?.(request, "godkjent"),
       }),
@@ -111,11 +111,11 @@ function unitIdFromLine(line) {
 
 export function renderAdminRequests({ requests = [], lines = [], onAnswer }) {
   const list = el("div", { class: "request-list" });
-  if (!requests.length) list.append(el("p", { class: "meta" }, "Ingen ønsker fra kunden ennå."));
+  if (!requests.length) list.append(el("p", { class: "meta" }, "Ingen forespørsler fra kunden ennå."));
   for (const request of requests) list.append(adminCard(request, lines, onAnswer));
   return el("section", { class: "card request-box" }, [
-    el("h2", { class: "h-app" }, "Ønsker fra kunden"),
-    el("p", { class: "meta" }, "Kunden ber om noe. Svar med forklaring og en prislinje. Kunden godkjenner eller avslår. Ingenting bestilles før godkjenning."),
+    el("h2", { class: "h-app" }, "Forespørsler om tillegg"),
+    el("p", { class: "meta" }, "Svar med en forklaring og en prislinje. Kunden godkjenner eller avslår. Godkjent antall legges i Avtalt tillegg, eller som en ny post."),
     list,
   ]);
 }
@@ -180,6 +180,7 @@ function answerForm(request, lines, onAnswer) {
     field("Antall", quantity),
     field("Enhetspris, kr eks. mva", price),
     sum,
+    el("p", { class: "meta" }, "Ny post får denne enhetsprisen. En post som finnes fra før får antallet i Avtalt tillegg."),
     el("button", { type: "submit", class: "btn btn-primary" }, "Send svar"),
     note,
   ]);

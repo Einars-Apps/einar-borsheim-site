@@ -70,17 +70,18 @@ test("samme enhetspris øker avtalt tillegg, og planlagt blir stående", () => {
   assert.equal(again.cost.fikenLines[0].addition, 9);
 });
 
-test("annen enhetspris blir et tillegg på posten, uten å endre postens pris", () => {
+test("annen enhetspris på en eksisterende post legger likevel antallet i avtalt tillegg", () => {
   const result = applyApprovedRequest({
     fikenLines: [{ id: "dren", label: "Drenering (meter)", unit: "meter", planned: 26, done: 20, unitPrice: 180 }],
   }, { ...wish, postId: "dren", unitPrice: 200 });
-  assert.equal(result.appliedAs, "tillegg");
+  assert.equal(result.appliedAs, "linje");
   assert.equal(result.cost.fikenLines[0].planned, 26);
+  assert.equal(result.cost.fikenLines[0].addition, 9);
   assert.equal(result.cost.fikenLines[0].unitPrice, 180);
-  assert.equal(result.cost.extras[0].postId, "dren");
-  assert.equal(result.cost.extras[0].quantity, 9);
-  assert.equal(result.cost.extras[0].unitPrice, 200);
+  assert.equal(result.cost.extras.length, 0);
+  assert.deepEqual(result.changes.map((change) => change.field), ["addition"]);
   const summary = liveCost({ cost: result.cost, prices: {}, items: [] });
-  assert.equal(summary.estimated.exVat, 26 * 180 + 9 * 200);
-  assert.equal(summary.extras[0].postId, "dren");
+  const line = summary.lines.find((item) => item.id === "dren");
+  assert.equal(line.plannedSum, 35 * 180);
+  assert.equal(summary.estimated.exVat, 35 * 180);
 });

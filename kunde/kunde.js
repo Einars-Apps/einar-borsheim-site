@@ -51,8 +51,6 @@ import {
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
 import { renderCostOverview, renderCustomerHistory } from "../www/js/cost-view.js";
 import { renderCustomerRequests } from "../www/js/requests-view.js";
-import { jobRequestFields } from "../www/js/job-requests.js";
-import { renderJobRequests } from "../www/js/job-requests-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
 import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem, sortPhotos } from "../www/js/photos.js";
 import { gpsLabel, photoWhen, showGpsInReport } from "../www/js/place.js";
@@ -84,7 +82,6 @@ let thread = [];
 let costState = null;
 let costHistory = [];
 let requests = [];
-let jobRequests = [];
 let stopCost = null;
 let stopCostLog = null;
 
@@ -267,35 +264,6 @@ function paintRequests() {
   if (previewMode) applyPortalPreviewLock(slot);
 }
 
-function paintJobRequests() {
-  const slot = document.getElementById("job-request-slot");
-  if (!slot) return;
-  const active = document.activeElement;
-  if (active && slot.contains(active)) return;
-  slot.replaceChildren(renderJobRequests({
-    requests: jobRequests,
-    onSubmit: async ({ kind, text, quantity, file }) => {
-      if (previewMode) return;
-      const fields = jobRequestFields({ kind, text, quantity });
-      if (!fields.text) return;
-      if (file) {
-        const blob = await compressImage(file);
-        const photoPath = `projects/${projectId}/media/job-${Date.now()}.jpg`;
-        const stored = ref(storage, photoPath);
-        await uploadBytes(stored, blob, { contentType: "image/jpeg" });
-        fields.photoUrl = await getDownloadURL(stored);
-        fields.photoPath = photoPath;
-      }
-      await addDoc(collection(db, "projects", projectId, "jobRequests"), {
-        ...fields,
-        createdBy: uid,
-        createdAt: serverTimestamp(),
-      });
-    },
-  }));
-  if (previewMode) applyPortalPreviewLock(slot);
-}
-
 function render() {
   if (!project) return;
   const active = document.activeElement;
@@ -303,7 +271,6 @@ function render() {
   if (typing) {
     paintCost();
     paintRequests();
-    paintJobRequests();
     if (!renderAfterBlur) {
       renderAfterBlur = true;
       active.addEventListener("blur", () => {
@@ -374,9 +341,6 @@ function render() {
   const requestSlot = el("div", { id: "request-slot" });
   viewProject.append(requestSlot);
   paintRequests();
-  const jobSlot = el("div", { id: "job-request-slot" });
-  viewProject.append(jobSlot);
-  paintJobRequests();
 
   const groups = [
     ["tilbud", "Tilbud"],
@@ -1037,14 +1001,10 @@ function startPortal() {
       hmsDocs = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
       render();
     }, (error) => console.error(error));
-    onSnapshot(query(collection(db, "projects", projectId, "requests"), orderBy("createdAt", "desc")), (snap) => {
+    onSnapshot(query(collection(db, "projects", projectId, "requests"), where("createdBy", "==", uid)), (snap) => {
       requests = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      requests.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       if (document.getElementById("request-slot")) paintRequests();
-    }, (error) => console.error(error));
-    onSnapshot(query(collection(db, "projects", projectId, "jobRequests"), where("createdBy", "==", uid)), (snap) => {
-      jobRequests = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-      jobRequests.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-      if (document.getElementById("job-request-slot")) paintJobRequests();
     }, (error) => console.error(error));
     onSnapshot(query(collection(db, "projects", projectId, "messages"), orderBy("createdAt", "asc")), (snap) => {
       thread = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));

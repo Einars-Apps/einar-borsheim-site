@@ -88,12 +88,6 @@ async function applyRequestCost(projectId, requestId) {
   });
 }
 
-exports.onJobRequest = onDocumentCreated("projects/{projectId}/jobRequests/{requestId}", async (event) => {
-  const data = event.data?.data() || {};
-  const title = data.kind === "bestilling" ? "Ny bestilling fra kunde" : "Ny prisforespørsel fra kunde";
-  await notifyAdmin(title, data.text || "Forespørsel", event.params.projectId);
-});
-
 exports.onCustomerRequest = onDocumentCreated("projects/{projectId}/requests/{requestId}", async (event) => {
   const data = event.data?.data() || {};
   await notifyAdmin("Nytt ønske fra kunde", data.text || "Ønske", event.params.projectId);

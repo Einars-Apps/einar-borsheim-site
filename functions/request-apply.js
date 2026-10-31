@@ -84,29 +84,16 @@ function applyApprovedRequest(rawCost, request) {
     const planned = round2(target.planned) ?? 0;
     const addition = round2(target.addition) ?? 0;
     const done = round2(target.done) ?? 0;
-    const samePrice = Math.abs(currentPrice - price) < 0.001;
     const empty = planned === 0 && addition === 0 && done === 0;
-    if (samePrice || empty) {
-      const nextAddition = round2(addition + qty);
-      const changes = [change(postId, target.label || name, "addition", addition, nextAddition, target.unit || unit)];
-      target.addition = nextAddition;
-      if (empty && Math.abs(currentPrice - price) >= 0.001) {
-        changes.push(change(postId, target.label || name, "unitPrice", currentPrice, price, "kr"));
-        target.unitPrice = price;
-      }
-      if (fiken) fiken.manual = true;
-      return { ok: true, already: false, cost, changes, appliedAs: "linje" };
+    const nextAddition = round2(addition + qty);
+    const changes = [change(postId, target.label || name, "addition", addition, nextAddition, target.unit || unit)];
+    target.addition = nextAddition;
+    if (empty && Math.abs(currentPrice - price) >= 0.001) {
+      changes.push(change(postId, target.label || name, "unitPrice", currentPrice, price, "kr"));
+      target.unitPrice = price;
     }
-    cost.extras.push({
-      id: extraId,
-      description: name,
-      unitPrice: price,
-      quantity: qty,
-      postId: postId.slice(0, 39),
-    });
-    const changes = [change(extraId, name, "quantity", 0, qty, "stk")];
-    if (price > 0) changes.push(change(extraId, name, "unitPrice", 0, price, "kr"));
-    return { ok: true, already: false, cost, changes, appliedAs: "tillegg" };
+    if (fiken) fiken.manual = true;
+    return { ok: true, already: false, cost, changes, appliedAs: "linje" };
   }
   cost.fikenLines.push({
     id: lineId,
@@ -114,8 +101,9 @@ function applyApprovedRequest(rawCost, request) {
     unit,
     planned: qty,
     done: 0,
+    addition: 0,
     unitPrice: price,
-    source: "Fra ønsket",
+    source: "Fra forespørsel",
     manual: true,
   });
   const changes = [change(lineId, name, "planned", 0, qty, unit)];
