@@ -1,3 +1,5 @@
+import { storedTimestamp } from "./cost.js";
+
 function cloneLine(line) {
   const copy = {
     id: line.id,
@@ -14,7 +16,8 @@ function cloneLine(line) {
   const locked = line?.final === true || line?.final === 1 || line?.final === "1" || line?.final === "true";
   if (locked) {
     copy.final = true;
-    if (line.finalizedAt != null) copy.finalizedAt = line.finalizedAt;
+    const when = storedTimestamp(line.finalizedAt);
+    if (when != null) copy.finalizedAt = when;
   }
   const note = String(line?.finalNote || "").replace(/\s+/g, " ").trim().slice(0, 200);
   if (note) copy.finalNote = note;

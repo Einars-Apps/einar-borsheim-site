@@ -34,6 +34,14 @@ export function firestoreReadMessage(error) {
   return message ? message.slice(0, 300) : "Kunne ikke hente dataene. Prøv igjen.";
 }
 
+export function firestoreWriteMessage(error, fallback) {
+  const code = String(error?.code || "").replace(/^firestore\//, "").trim();
+  const message = String(error?.message || "").replace(/^FirebaseError:\s*/i, "").trim();
+  const short = message.length > 160 ? `${message.slice(0, 157)}…` : message;
+  const detail = [code, short].filter(Boolean).join(" — ");
+  return detail ? `${fallback} (${detail})` : fallback;
+}
+
 export async function readDocWithRetry(get, { attempts = 3, wait = async () => {} } = {}) {
   let source = "default";
   let last = null;

@@ -81,7 +81,7 @@ import {
 import { renderFikenProjectBox, renderOfferEditor, renderOfferList, renderQuickOrder } from "./js/offers-view.js";
 import { renderFikenPicker } from "./js/fiken-import-view.js";
 import { fieldsFromFiken, fikenUnreachableMessage, isFikenLinked, unimportedFikenProjects } from "./js/fiken-import.js";
-import { firestoreReadMessage, firestoreTransportSettings, readDocWithRetry } from "./js/firestore-read.js";
+import { firestoreReadMessage, firestoreTransportSettings, firestoreWriteMessage, readDocWithRetry } from "./js/firestore-read.js";
 import { fikenQuoteRecord, mergeFikenLines, quotesFromFikenResult } from "./js/fiken-offers.js";
 import { renderFikenQuoteList } from "./js/fiken-quote-view.js";
 import { changeText, costChanges, costReportText, customerSeesCost, liveCost, newExtraId, nextInstallmentNumber, patchCost, paymentReportText, persistableCost } from "./js/cost.js";
@@ -1593,17 +1593,24 @@ function mountOffers(route) {
   const savePatch = (patch) => {
     const projectId = route.projectId;
     costQueue = costQueue.then(async () => {
-      const next = patchCost(costDoc, priceTable, patch);
-      const changes = costChanges(costDoc, next, priceTable);
+      const previous = costDoc;
+      const next = patchCost(previous, priceTable, patch);
+      const changes = costChanges(previous, next, priceTable);
       const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description" || patch.field === "postId" || patch.field === "finalNote";
       if (!changes.length && !structural) return;
       const stored = persistableCost(next);
-      costDoc = { ...costDoc, ...stored };
+      costDoc = { ...previous, ...stored };
       draw();
-      await db.collection("projects").doc(projectId).collection("quantities").doc("live").set({
-        ...stored,
-        updatedAt: stamp(),
-      }, { merge: true });
+      try {
+        await db.collection("projects").doc(projectId).collection("quantities").doc("live").set({
+          ...stored,
+          updatedAt: stamp(),
+        }, { merge: true });
+      } catch (error) {
+        costDoc = previous;
+        draw();
+        throw error;
+      }
       if (!changes.length) return;
       try {
         await Promise.all(changes.map((change) => db.collection("projects").doc(projectId).collection("costLog").add({
@@ -1620,11 +1627,11 @@ function mountOffers(route) {
         })));
       } catch (error) {
         console.error(error);
-        toast("Mengden er lagret, men historikken ble ikke skrevet.");
+        toast(firestoreWriteMessage(error, "Mengden er lagret, men historikken ble ikke skrevet"));
       }
     }).catch((error) => {
       console.error(error);
-      toast("Kunne ikke lagre mengden");
+      toast(firestoreWriteMessage(error, "Kunne ikke lagre mengden"));
     });
   };
 
@@ -1668,9 +1675,11 @@ function mountOffers(route) {
 
   const draw = () => {
     const active = document.activeElement;
-    if (active && root.contains(active) && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")) {
-      return;
-    }
+    const typing = active && root.contains(active)
+      && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.tagName === "SELECT")
+      && active.type !== "checkbox"
+      && active.type !== "radio";
+    if (typing) return;
     const project = projectById(route.projectId);
     if (!project) {
       root.replaceChildren(el("p", { class: "empty" }, "Fant ikke prosjektet."));
@@ -1743,7 +1752,7 @@ function mountOffers(route) {
           lineId,
           field,
           value,
-          finalizedAt: field === "final" && value === true ? stamp() : null,
+          finalizedAt: field === "final" && value === true ? new Date() : null,
         }),
         onAddExtra: () => savePatch({ addExtra: true, extraId: newExtraId() }),
         onDeleteExtra: (extraId) => savePatch({ deleteExtraId: extraId }),

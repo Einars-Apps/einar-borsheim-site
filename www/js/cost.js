@@ -455,11 +455,27 @@ function noteField(line) {
   return note ? { finalNote: note } : {};
 }
 
-function finalFields(line) {
+// serverTimestamp() er et FieldValue-merke. Firestore avviser det inni en array,
+// og fikenLines er en array. Et vanlig tidspunkt (Date, Timestamp eller { seconds }) er lov.
+export function storedTimestamp(value, now = new Date()) {
+  if (value == null || value === false) return null;
+  if (typeof value._methodName === "string") {
+    const ms = now.getTime();
+    return { seconds: Math.floor(ms / 1000), nanoseconds: (ms % 1000) * 1e6 };
+  }
+  if (typeof value.toDate === "function" || value instanceof Date) return value;
+  if (typeof value.seconds === "number" && Number.isFinite(value.seconds)) {
+    const nanos = Number(value.nanoseconds);
+    return { seconds: value.seconds, nanoseconds: Number.isFinite(nanos) ? nanos : 0 };
+  }
+  return null;
+}
+
+function finalFields(line, now = new Date()) {
   const final = isFinal(line);
   return {
     final,
-    finalizedAt: final ? (line.finalizedAt ?? null) : null,
+    finalizedAt: final ? storedTimestamp(line.finalizedAt, now) : null,
   };
 }
 
@@ -496,7 +512,7 @@ function applyQtyPatch(target, field, value, patch) {
   if (field === "final") {
     const on = value === true || value === "true" || value === 1 || value === "1";
     target.final = on;
-    target.finalizedAt = on ? (patch.finalizedAt ?? target.finalizedAt ?? null) : null;
+    target.finalizedAt = on ? storedTimestamp(patch.finalizedAt ?? target.finalizedAt ?? null) : null;
     return true;
   }
   if (target.final === true) return false;
