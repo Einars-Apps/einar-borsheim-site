@@ -70,6 +70,35 @@ select:disabled {
   padding: 1rem;
 }
 .k-card h2, .k-card h3 { margin: 0 0 0.4rem; }
+.fdv-wait {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #f7f4ee;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+.fdv-wait p { margin: 0; font-weight: 500; line-height: 1.5; }
+.fdv-wait-icon {
+  display: inline-flex;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: #0c5344;
+  margin-top: 2px;
+}
+.fdv-wait-icon svg { width: 22px; height: 22px; display: block; }
+.allocation-box { display: flex; flex-direction: column; gap: 10px; }
+.allocation-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.allocation-row h3, .allocation-row p { margin: 0; }
 .muted { color: var(--muted); }
 .customer-name, .project-identity { margin: 0; font-weight: 700; }
 .notice { background: #e5f3ee; color: #0c5344; border-radius: 12px; padding: 12px 14px; }

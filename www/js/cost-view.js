@@ -1,5 +1,7 @@
 import { button, el, field, icon } from "./dom.js";
 import { formatKr } from "./offers.js";
+import { householdAllocation } from "./households.js";
+import { renderHouseholdAllocation } from "./household-view.js";
 import {
   formatQty,
   nextInstallmentNumber,
@@ -111,7 +113,15 @@ function todayInputValue() {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
-function paymentForm(onAddPayment, nextNumber) {
+function householdCaption(payment, households) {
+  if (!households?.length) return "";
+  const id = String(payment?.householdId || "");
+  const match = households.find((row) => row.id === id);
+  if (match) return `Husstand: ${match.name}`;
+  return "Fordeles etter andel";
+}
+
+function paymentForm(onAddPayment, nextNumber, households = []) {
   const date = el("input", { type: "date", required: true, value: todayInputValue(), "aria-label": "Dato" });
   const amount = el("input", { type: "text", inputmode: "decimal", "aria-label": "Beløp" });
   const inkl = el("input", { type: "radio", name: "payment-vat", value: "inkl" });
@@ -121,6 +131,10 @@ function paymentForm(onAddPayment, nextNumber) {
   sendt.checked = true;
   const invoice = el("input", { type: "text", maxlength: "39", "aria-label": "Fakturanummer" });
   const note = el("input", { type: "text", maxlength: "299", "aria-label": "Notat" });
+  const finalInvoice = el("input", { type: "checkbox" });
+  const household = el("select", { "aria-label": "Husstand" });
+  household.append(el("option", { value: "" }, "Fordeles etter andel"));
+  for (const row of households) household.append(el("option", { value: row.id }, row.name));
   const status = el("p", { class: "meta", role: "status" });
   const panel = el("form", { class: "payment-form", hidden: true }, [
     el("p", { class: "payment-amount" }, `Delfaktura ${nextNumber}`),
@@ -137,6 +151,8 @@ function paymentForm(onAddPayment, nextNumber) {
       el("label", { class: "checkline" }, [sendt, el("span", {}, "Sendt")]),
       el("label", { class: "checkline" }, [betalt, el("span", {}, "Betalt")]),
     ]),
+    households.length ? field("Husstand (valgfritt)", household) : null,
+    el("label", { class: "checkline" }, [finalInvoice, el("span", {}, "Dette er sluttfakturaen")]),
     field("Notat (valgfritt)", note),
     status,
     button("Lagre delfaktura", { class: "btn btn-primary btn-block", type: "submit" }),
@@ -171,6 +187,8 @@ function paymentForm(onAddPayment, nextNumber) {
         note: note.value.trim().slice(0, 299),
         status: betalt.checked ? "betalt" : "sendt",
         installment: nextNumber,
+        householdId: household.value,
+        sluttfaktura: finalInvoice.checked === true,
       });
     } catch (error) {
       console.error(error);
@@ -184,6 +202,8 @@ function paymentForm(onAddPayment, nextNumber) {
     eks.checked = false;
     sendt.checked = true;
     betalt.checked = false;
+    finalInvoice.checked = false;
+    household.value = "";
     panel.hidden = true;
     status.textContent = "Delfakturaen er lagret.";
   });
@@ -228,9 +248,12 @@ export function renderPaymentSummary({
   showBalance = false,
   prominent = false,
   editable = false,
+  households = [],
   onAddPayment,
   onDeletePayment,
   onMarkPaid,
+  onAssignHousehold,
+  onToggleSluttfaktura,
 } = {}) {
   const paid = paymentTotals(payments);
   const balance = showBalance && summary ? paymentBalance(summary, payments) : null;
@@ -249,8 +272,25 @@ export function renderPaymentSummary({
       el("p", {}, `${when} · ${formatKr(amount)} ${vatLabel}`),
       payment.invoiceNumber ? el("p", { class: "meta" }, `Faktura ${payment.invoiceNumber}`) : el("p", { class: "meta" }, "Uten fakturanummer"),
       el("p", {}, el("span", { class: `pay-status pay-status-${state}` }, paymentStatusLabel(state))),
+      payment.sluttfaktura === true ? el("p", {}, el("span", { class: "pay-status pay-status-slutt" }, "Sluttfaktura")) : null,
+      householdCaption(payment, households) ? el("p", { class: "meta" }, householdCaption(payment, households)) : null,
       payment.note ? el("p", { class: "meta" }, payment.note) : null,
       labeled ? null : el("p", { class: "meta" }, "Beløpet er ikke med i summen, fordi mva ikke er merket."),
+      editable && payment.id && households.length ? field("Husstand", (() => {
+        const select = el("select", { "aria-label": `Husstand for delfaktura ${payment.number}` });
+        select.append(el("option", { value: "" }, "Fordeles etter andel"));
+        for (const row of households) {
+          const option = el("option", { value: row.id }, row.name);
+          if (row.id === payment.householdId) option.selected = true;
+          select.append(option);
+        }
+        select.addEventListener("change", () => onAssignHousehold?.(payment.id, select.value));
+        return select;
+      })()) : null,
+      editable && payment.id ? button(payment.sluttfaktura === true ? "Fjern sluttfaktura" : "Merk som sluttfaktura", {
+        class: "btn btn-ghost",
+        onClick: () => onToggleSluttfaktura?.(payment.id, payment.sluttfaktura !== true),
+      }) : null,
       editable && payment.id && state === "sendt" ? button("Merk som betalt", {
         class: "btn btn-ghost",
         onClick: () => onMarkPaid?.(payment.id),
@@ -268,13 +308,13 @@ export function renderPaymentSummary({
   return el("section", { class: prominent ? "payment-box payment-hero" : "payment-box", id: id || null, "aria-label": "Betalinger" }, [
     el("h3", { class: "h-app" }, "Betalinger"),
     el("p", { class: "meta" }, editable
-      ? "Ny delfaktura får neste nummer. Sendt er fakturert, men teller ikke som betalt før du merker den betalt."
+      ? "Ny delfaktura får neste nummer. Sendt er fakturert, men teller ikke som betalt før du merker den betalt. Merk én delfaktura som sluttfaktura. FDV-dokumentasjonen kan lastes ned når den er betalt."
       : "Einar sender delfaktura underveis. Du kan ikke endre dem."),
     paymentProgressView(progress),
     showBalance && balance ? el("p", { class: "meta" }, `Totalt for oppdraget: ${formatKr(balance.totalInc)} inkl. mva.`) : null,
     el("p", { class: "meta" }, `Betalt hittil: ${formatKr(paid.exVat)} eks. mva, ${formatKr(paid.incVat)} inkl. mva`),
     list,
-    editable ? paymentForm(onAddPayment, nextInstallmentNumber(payments)) : null,
+    editable ? paymentForm(onAddPayment, nextInstallmentNumber(payments), households) : null,
   ]);
 }
 
@@ -474,6 +514,9 @@ export function renderCostOverview({
   onAddPayment,
   onDeletePayment,
   onMarkPaid,
+  households = [],
+  onAssignHousehold,
+  onToggleSluttfaktura,
   quotes = [],
   onAgreeQuote,
 }) {
@@ -655,9 +698,23 @@ export function renderCostOverview({
       summary,
       showBalance: true,
       editable,
+      households,
       onAddPayment,
       onDeletePayment,
       onMarkPaid,
+      onAssignHousehold,
+      onToggleSluttfaktura,
+    }) : null,
+    audience === "einar" && households.length ? renderHouseholdAllocation({
+      allocation: householdAllocation({
+        households,
+        totalEx: summary?.estimated?.exVat || 0,
+        totalInc: summary?.estimated?.incVat || 0,
+        payments,
+      }),
+      showTotal: true,
+      showPayments: true,
+      heading: "h3",
     }) : null,
     showPreview && summary.previewDeltaExVat
       ? el("p", { class: "cost-preview" }, `Forhåndsvisning hvis du godkjenner valget: ${formatKr(summary.preview.exVat)} eks. mva, ${formatKr(summary.preview.incVat)} inkl. mva. Det er ${signedKr(summary.previewDeltaExVat)} eks. mva mot nåværende estimat.`)
