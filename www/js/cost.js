@@ -94,6 +94,7 @@ export function normalizeFikenLines(raw) {
       source: String(line?.source || "").replace(/\s+/g, " ").trim().slice(0, 80),
       manual: line?.manual === true,
       ...finalFields(line),
+      ...noteField(line),
     });
   }
   return lines;
@@ -132,6 +133,7 @@ export function normalizeCost(raw, prices = DEFAULT_PRICES) {
       done: clampQty(line.done),
       unitPrice: storedPrice != null && storedPrice >= 0 ? round2(storedPrice) : next.lines[id].unitPrice,
       ...finalFields(line),
+      ...noteField(line),
     };
   }
   next.fikenLines = normalizeFikenLines(raw);
@@ -321,6 +323,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       finalizedAt: line.final === true ? (line.finalizedAt ?? null) : null,
       countedEx: line.final === true ? money.doneSum : money.plannedSum,
       basis: line.final === true ? "låst" : (money.addition ? "endret" : "planlagt"),
+      finalNote: line.finalNote || "",
       fromFiken: false,
       source: "",
       manual: false,
@@ -339,6 +342,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       finalizedAt: line.final === true ? (line.finalizedAt ?? null) : null,
       countedEx: line.final === true ? money.doneSum : money.plannedSum,
       basis: line.final === true ? "låst" : (money.addition ? "endret" : "planlagt"),
+      finalNote: line.finalNote || "",
       fromFiken: true,
     };
   });
@@ -348,8 +352,9 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
     return { ...line, sum };
   });
   const extrasExVat = round2(extras.reduce((sum, line) => sum + line.sum, 0));
+  const requestEx = unappliedApprovedEx(requests, cost, state);
   openEx += extrasExVat;
-  openEx += unappliedApprovedEx(requests, cost, state);
+  openEx += requestEx;
   const lines = [...catalog, ...fiken];
   const finalBase = round2(finalEx);
   const openBase = round2(state.agreedExVat + offers.approvedExVat + openEx);
@@ -366,6 +371,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
     quotes,
   });
   const differenceExVat = round2(estimated.exVat - baseline.exVat);
+  const budget = budgetRoom({ lines, extrasExVat, approvedOfferEx: offers.approvedExVat, requestEx });
   return {
     agreedExVat: state.agreedExVat,
     baseline,
@@ -378,15 +384,75 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
     remaining,
     incurred,
     preview,
+    budget,
     differenceExVat,
     differenceIncVat: round2(differenceExVat * (1 + VAT_RATE)),
     previewDeltaExVat: round2(preview.exVat - estimated.exVat),
   };
 }
 
+function scopeKr(value) {
+  const number = round2(value);
+  const body = formatKr(Math.abs(number)).replace(/^kr[\s\u00a0\u202f]*/, "");
+  if (number < 0) return `kr −${body}`;
+  if (number > 0) return `kr +${body}`;
+  return `kr ${body}`;
+}
+
+export function scopeChangeText(change) {
+  return `${change.label}: planlagt ${formatQty(change.planned)}, utført ${formatQty(change.done)} – ${scopeKr(change.deltaEx)} eks. mva`;
+}
+
+function budgetRoom({ lines, extrasExVat, approvedOfferEx, requestEx }) {
+  const changes = [];
+  let lockedGap = 0;
+  let tillegg = round2((extrasExVat || 0) + (approvedOfferEx || 0) + (requestEx || 0));
+  for (const line of lines || []) {
+    const planned = round2(line?.planned) || 0;
+    const done = round2(line?.done) || 0;
+    const price = round2(line?.unitPrice) || 0;
+    const addition = round2(line?.addition) || 0;
+    tillegg += round2(addition * price);
+    if (line?.final !== true || planned === done) continue;
+    const deltaEx = round2((done - planned) * price);
+    lockedGap += round2((planned - done) * price);
+    changes.push({
+      id: line.id,
+      label: line.label,
+      planned,
+      done,
+      deltaEx,
+      note: String(line.finalNote || "").trim(),
+    });
+  }
+  const signedEx = round2(lockedGap - tillegg);
+  const amount = withVat(Math.abs(signedEx));
+  return {
+    direction: signedEx > 0 ? "under" : signedEx < 0 ? "over" : "even",
+    exVat: amount.exVat,
+    incVat: amount.incVat,
+    signedEx,
+    changes,
+  };
+}
+
+export function budgetStatusText(budget) {
+  if (!budget || budget.direction === "even" || !(budget.exVat > 0)) return "";
+  const money = `${formatKr(budget.exVat)} eks. mva (${formatKr(budget.incVat)} inkl. mva)`;
+  if (budget.direction === "under") {
+    return `Under tilbudet så langt: ${money}. Ved ønske om ekstra arbeid kan du sende en forespørsel.`;
+  }
+  return `Over tilbudet så langt: ${money}. Det kommer av avtalt tillegg og avvik på ferdige poster.`;
+}
+
 function isFinal(line) {
   const value = line?.final;
   return value === true || value === 1 || value === "1" || value === "true";
+}
+
+function noteField(line) {
+  const note = String(line?.finalNote || "").replace(/\s+/g, " ").trim().slice(0, 200);
+  return note ? { finalNote: note } : {};
 }
 
 function finalFields(line) {
@@ -421,6 +487,12 @@ const FIELD_LABEL = {
 
 function applyQtyPatch(target, field, value, patch) {
   if (!target) return false;
+  if (field === "finalNote") {
+    const note = String(value || "").replace(/\s+/g, " ").trim().slice(0, 200);
+    if (note) target.finalNote = note;
+    else delete target.finalNote;
+    return true;
+  }
   if (field === "final") {
     const on = value === true || value === "true" || value === 1 || value === "1";
     target.final = on;
@@ -439,7 +511,7 @@ export function patchCost(raw, prices, patch = {}) {
   const { lineId, field, value } = patch;
   const next = pricedCost(raw, prices);
   if (field === "agreedExVat") next.agreedExVat = clampQty(value);
-  if (field === "planned" || field === "done" || field === "addition" || field === "final") {
+  if (field === "planned" || field === "done" || field === "addition" || field === "final" || field === "finalNote") {
     applyQtyPatch(next.lines[lineId], field, value, patch);
   }
   const fiken = next.fikenLines.find((line) => line.id === lineId);
@@ -739,6 +811,11 @@ export function paymentReportText(payments = [], summary = null) {
 export function costReportText(summary, history = [], payments = []) {
   const lines = [
     "Nåværende kostnad",
+    ...(summary?.budget?.changes || []).flatMap((change) => [
+      scopeChangeText(change),
+      change.note || "",
+    ]),
+    budgetStatusText(summary?.budget),
     `Avtalt pris ${formatKr(summary?.agreedExVat || 0)} eks. mva.`,
     summary?.baseline?.label
       ? `Opprinnelig tilbud ${formatKr(summary.baseline.exVat)} eks. mva. ${summary.baseline.label}.`

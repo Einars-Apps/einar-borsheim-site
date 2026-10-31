@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { DEFAULT_PRICES } from "../www/js/drainage.js";
 import {
+  budgetStatusText,
+  scopeChangeText,
   changeText,
   costChanges,
   costReportText,
@@ -505,4 +508,67 @@ test("Fiken-tilbud 10102: to låste poster flytter totalen, gjenstår er total m
   assert.equal(summary.differenceExVat, -76250);
   assert.equal(summary.incurred.exVat, 206250);
   assert.match(costReportText(summary, []), /Låst sluttpris \(ferdige poster\)/);
+});
+
+test("budsjettrom kommer bare fra låste poster, minus godkjent tillegg", () => {
+  const lines = [
+    { id: "transport", label: "Transport maskin (stk)", planned: 1, done: 1, unitPrice: 5000, final: true, source: "fra Fiken-tilbud nr 10102" },
+    { id: "dren", label: "Drenering (meter)", planned: 26, done: 20, unitPrice: 6000, source: "fra Fiken-tilbud nr 10102" },
+    { id: "masse", label: "Masseutskifte grøft under nybygg (RS)", planned: 1, done: 0.5, unitPrice: 142000, final: true, source: "fra Fiken-tilbud nr 10102" },
+    { id: "forsterk", label: "Forsterkningsmasse vei (RS)", planned: 1, done: 0, unitPrice: 12000, source: "fra Fiken-tilbud nr 10102" },
+  ];
+  const under = liveCost({ cost: { fikenLines: lines }, prices, items: [] });
+  assert.equal(under.budget.direction, "under");
+  assert.equal(under.budget.signedEx, 71000);
+  assert.equal(under.budget.exVat, 71000);
+  assert.equal(under.budget.incVat, 88750);
+  assert.equal(under.estimated.exVat, 244000);
+  assert.equal(under.finalized.exVat, 76000);
+  assert.equal(under.remaining.exVat, 168000);
+  assert.equal(under.remaining.exVat, under.estimated.exVat - under.finalized.exVat);
+  assert.notEqual(under.remaining.exVat, 372500);
+  assert.equal(under.budget.changes.length, 1);
+  assert.match(scopeChangeText(under.budget.changes[0]), /Masseutskifte grøft under nybygg \(RS\): planlagt 1, utført 0,5 – kr −71[\s\u00a0\u202f]*000,00 eks\. mva/);
+  assert.match(budgetStatusText(under.budget), /Under tilbudet så langt: kr 71[\s\u00a0\u202f]*000,00 eks\. mva \(kr 88[\s\u00a0\u202f]*750,00 inkl\. mva\)\. Ved ønske om ekstra arbeid kan du sende en forespørsel\./);
+  const noted = patchCost({ fikenLines: lines }, prices, { lineId: "masse", field: "finalNote", value: "Halve jobben var ikke mulig å utføre" });
+  const withNote = liveCost({ cost: noted, prices, items: [] });
+  assert.equal(withNote.budget.changes[0].note, "Halve jobben var ikke mulig å utføre");
+  assert.match(costReportText(under, []), /Under tilbudet så langt/);
+  assert.equal(under.lines.find((line) => line.id === "dren").final, false);
+
+  const withTillegg = liveCost({
+    cost: {
+      fikenLines: lines.map((line) => line.id === "dren" ? { ...line, addition: 1 } : line),
+    },
+    prices,
+    items: [],
+    requests: [
+      { id: "nei", status: "avslatt", quantity: 10, unitPrice: 9000 },
+      { id: "ok", status: "godkjent", quantity: 2, unitPrice: 500 },
+    ],
+  });
+  assert.equal(withTillegg.budget.signedEx, 71000 - 6000 - 1000);
+  assert.equal(withTillegg.budget.direction, "under");
+
+  const over = liveCost({
+    cost: {
+      fikenLines: [
+        { id: "transport", label: "Transport maskin", planned: 1, done: 3, unitPrice: 5000, final: true },
+      ],
+    },
+    prices,
+    items: [],
+  });
+  assert.equal(over.budget.direction, "over");
+  assert.equal(over.budget.exVat, 10000);
+  assert.match(budgetStatusText(over.budget), /^Over tilbudet så langt: kr 10[\s\u00a0\u202f]*000,00 eks\. mva/);
+  assert.match(budgetStatusText(over.budget), /avtalt tillegg og avvik på ferdige poster/);
+  assert.equal(budgetStatusText({ direction: "even", exVat: 0, incVat: 0 }), "");
+
+  const view = readFileSync("www/js/cost-view.js", "utf8");
+  assert.match(view, /class: "final-badge" \}, "Ferdig"/);
+  assert.match(view, /budgetStatusText\(summary\.budget\)/);
+  assert.match(view, /Send en forespørsel/);
+  assert.match(readFileSync("kunde/kunde.js", "utf8"), /requestHref:/);
+  assert.match(readFileSync("www/app.js", "utf8"), /requestHref: "#seksjon-foresporsler"/);
 });

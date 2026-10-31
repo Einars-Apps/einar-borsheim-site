@@ -1595,7 +1595,7 @@ function mountOffers(route) {
     costQueue = costQueue.then(async () => {
       const next = patchCost(costDoc, priceTable, patch);
       const changes = costChanges(costDoc, next, priceTable);
-      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description" || patch.field === "postId";
+      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description" || patch.field === "postId" || patch.field === "finalNote";
       if (!changes.length && !structural) return;
       const stored = persistableCost(next);
       costDoc = { ...costDoc, ...stored };
@@ -1857,6 +1857,7 @@ function mountOffers(route) {
             toast("Kunne ikke merke delfakturaen som betalt");
           }
         },
+        requestHref: "#seksjon-foresporsler",
       }),
     }), renderAdminRequests({
         requests,

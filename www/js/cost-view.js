@@ -11,6 +11,8 @@ import {
   paymentProgress,
   paymentStatusLabel,
   paymentTotals,
+  budgetStatusText,
+  scopeChangeText,
   signedKr,
   signedQty,
 } from "./cost.js";
@@ -519,6 +521,7 @@ export function renderCostOverview({
   onToggleSluttfaktura,
   quotes = [],
   onAgreeQuote,
+  requestHref = "",
 }) {
   const lockedEx = summary.finalized?.exVat || 0;
   const lockedInc = summary.finalized?.incVat || 0;
@@ -562,11 +565,7 @@ export function renderCostOverview({
     const body = [
       el("p", { class: "cost-line-title" }, !editable && facts ? customerPostSummary(line.label, facts) : line.label),
       line.final
-        ? el("p", { class: "final-badge" }, [
-          partialFinalText(line) ? `${partialFinalText(line)}. ` : "",
-          `Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva`,
-          line.finalizedAt ? ` · Fakturert ${formatDay(line.finalizedAt)}` : "",
-        ].join(""))
+        ? el("p", { class: "final-badge" }, "Ferdig")
         : el("p", { class: "estimate-badge" }, "Estimert"),
       line.source ? el("p", { class: "meta" }, line.source) : null,
       editable && line.fromFiken ? null : el("p", { class: "meta" }, `à ${formatKr(line.unitPrice)} eks. mva`),
@@ -629,6 +628,13 @@ export function renderCostOverview({
         doneStep,
         el("label", { class: "checkline" }, [finalBox, el("span", {}, "Ferdig – endelig pris")]),
         invoiced ? el("p", { class: "meta" }, invoiced) : null,
+        line.final ? field("Årsak til endret omfang (valgfritt)", commitField(el("input", {
+          type: "text",
+          maxlength: "200",
+          value: line.finalNote || "",
+          placeholder: "F.eks. Halve jobben var ikke mulig å utføre",
+          "aria-label": `Årsak til endret omfang ${line.label}`,
+        }), (value) => onQuantity?.(line.id, "finalNote", value))) : null,
       );
     }
     body.push(
@@ -671,8 +677,31 @@ export function renderCostOverview({
     extraBlock.push(extraSum);
   }
 
+  const scopeChanges = summary.budget?.changes || [];
+  const budgetText = budgetStatusText(summary.budget);
+  const budgetUnder = summary.budget?.direction === "under";
+  const scopeNote = scopeChanges.length
+    ? el("div", { class: "scope-changes" }, [
+      el("h3", { class: "h-app" }, "Endringer i omfang"),
+      el("ul", { class: "scope-list" }, scopeChanges.map((change) => el("li", {}, [
+        el("p", {}, scopeChangeText(change)),
+        change.note ? el("p", { class: "meta" }, change.note) : null,
+      ]))),
+    ])
+    : null;
+  const budgetNote = budgetText
+    ? el("div", { class: budgetUnder ? "budget-under" : "budget-over", role: "status" }, [
+      el("p", {}, budgetText),
+      budgetUnder && requestHref
+        ? el("a", { class: "btn btn-primary", href: requestHref }, "Send en forespørsel")
+        : null,
+    ])
+    : null;
+
   return el("section", { class: "card continue cost-box" }, [
     el("h2", { class: "h-app" }, "Nåværende kostnad"),
+    scopeNote,
+    budgetNote,
     el("p", { class: "meta" }, editable
       ? (showToCustomer
         ? "Mengdene oppdateres med en gang. Kunden ser det samme, men kan ikke endre tallene. Utført kan justeres underveis, også med desimaler, til Ferdig – endelig pris er krysset av."

@@ -297,6 +297,22 @@ textarea { min-height: 96px; }
 }
 .final-badge { background: #0c5344; color: #fff; }
 .estimate-badge { background: #f3e2c8; color: #6d4712; }
+.budget-under, .budget-over {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+}
+.budget-under { background: #e5f3ee; color: #0c5344; }
+.budget-over { background: #f7f4ee; color: var(--ink); border: 1px solid var(--line); }
+.budget-under p, .budget-over p { margin: 0; font-weight: 600; line-height: 1.45; }
+.budget-under .btn { align-self: flex-start; text-decoration: none; }
+.scope-changes { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.scope-changes h3 { margin: 0; font-size: 1.05rem; }
+.scope-list { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 8px; }
+.scope-list p { margin: 0; }
 .cost-log { margin: 0; padding-left: 1.1rem; }
 .cost-log li { margin: 0.25rem 0; overflow-wrap: anywhere; }
 .post-tillegg {

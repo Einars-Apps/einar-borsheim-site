@@ -16,6 +16,8 @@ function cloneLine(line) {
     copy.final = true;
     if (line.finalizedAt != null) copy.finalizedAt = line.finalizedAt;
   }
+  const note = String(line?.finalNote || "").replace(/\s+/g, " ").trim().slice(0, 200);
+  if (note) copy.finalNote = note;
   return copy;
 }
 
