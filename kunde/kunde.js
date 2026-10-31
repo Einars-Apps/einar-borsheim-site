@@ -25,6 +25,7 @@ import {
 import {
   PORTAL_PREVIEW_APP,
   PORTAL_PREVIEW_BANNER,
+  PORTAL_PREVIEW_NOTE,
   applyPortalPreviewLock,
   approvalLine,
   customerOwnPending,
@@ -51,6 +52,8 @@ import {
 } from "../www/js/offers.js";
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
 import { renderCostOverview, renderCustomerHistory, renderPaymentSummary } from "../www/js/cost-view.js";
+import { portalSectionVisible } from "../www/js/portal-visibility.js";
+import { fillPortalNav, renderPortalNav } from "../www/js/portal-visibility-view.js";
 import { renderCustomerRequests } from "../www/js/requests-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
 import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem, sortPhotos } from "../www/js/photos.js";
@@ -92,8 +95,8 @@ function watchPayments() {
   if (stopPayments) return;
   stopPayments = onSnapshot(collection(db, "projects", projectId, "payments"), (snap) => {
     payments = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+    if (document.getElementById("payment-slot")) paintPayments();
     if (document.getElementById("cost-slot")) paintCost();
-    else paintPayments();
   }, (error) => console.error(error));
 }
 
@@ -111,12 +114,14 @@ function watchCost() {
     stopCost = onSnapshot(doc(db, "projects", projectId, "quantities", "live"), (snap) => {
       costState = snap.exists() ? snap.data() : null;
       if (document.getElementById("cost-slot")) paintCost();
+      if (document.getElementById("payment-slot")) paintPayments();
     }, (error) => console.error(error));
   }
   if (!stopCostLog) {
     stopCostLog = onSnapshot(query(collection(db, "projects", projectId, "costLog"), orderBy("at", "desc")), (snap) => {
       costHistory = snap.docs.map((docSnap) => docSnap.data());
       if (document.getElementById("cost-slot")) paintCost();
+      if (document.getElementById("payment-slot")) paintPayments();
     }, (error) => console.error(error));
   }
 }
@@ -247,6 +252,7 @@ function paintCost() {
     audience: "kunde",
     editable: false,
     showPreview: true,
+    showPayments: false,
     payments,
   }));
 }
@@ -254,9 +260,15 @@ function paintCost() {
 function paintPayments() {
   const slot = document.getElementById("payment-slot");
   if (!slot) return;
+  const summary = customerSeesCost(project)
+    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), previewChoices })
+    : null;
   slot.replaceChildren(renderPaymentSummary({
+    id: "seksjon-betalinger",
     payments,
-    showBalance: false,
+    summary,
+    showBalance: summary != null,
+    prominent: true,
     editable: false,
   }));
 }
@@ -264,7 +276,7 @@ function paintPayments() {
 function paintRequests() {
   const slot = document.getElementById("request-slot");
   if (!slot) return;
-  slot.replaceChildren(renderCustomerRequests({
+  const node = renderCustomerRequests({
     requests,
     onCreate: async (text) => {
       if (previewMode) return;
@@ -283,7 +295,9 @@ function paintRequests() {
         decidedBy: uid,
       });
     },
-  }));
+  });
+  node.id = "seksjon-foresporsler";
+  slot.replaceChildren(node);
   if (previewMode) applyPortalPreviewLock(slot);
 }
 
@@ -308,12 +322,16 @@ function render() {
   portalPhotos.clear();
   const items = mergedItems();
   const finished = isCompleted(project);
+  const docsOn = portalSectionVisible(project, "dokumentasjon");
   const pdfSlot = el("p", { class: "muted" }, "Sluttrapporten legges her når den er klar.");
   const pdfPath = `projects/${projectId}/rapport/sluttrapport.pdf`;
   viewProject.replaceChildren();
   if (previewMode) {
     viewProject.append(el("p", { class: "preview-banner", role: "status" }, PORTAL_PREVIEW_BANNER));
+    viewProject.append(el("p", { class: "preview-note", role: "note" }, PORTAL_PREVIEW_NOTE));
   }
+  const nav = renderPortalNav();
+  viewProject.append(nav);
   const customerName = normalizedCustomerName(project.customerName);
   viewProject.append(el("section", { class: "k-card k-stack" }, [
     el("p", { class: "muted" }, "Ditt prosjekt"),
@@ -322,38 +340,47 @@ function render() {
     project.description ? el("p", { class: "pre" }, project.description) : null,
     project.address ? el("p", { class: "muted" }, project.address) : null,
     finished ? el("p", { class: "muted" }, `Ferdig ${formatDay(project.completedAt) || ""}`.trim()) : null,
-    finished ? pdfSlot : el("p", { class: "muted" }, "Sluttrapporten kan lastes ned når oppdraget er ferdig og godkjent."),
+    docsOn
+      ? (finished ? pdfSlot : el("p", { class: "muted" }, "Sluttrapporten kan lastes ned når oppdraget er ferdig og godkjent."))
+      : null,
   ]));
   const knownPdf = displayUrl(project.pdfUrl);
-  if (finished && project.pdfPath === pdfPath) {
+  if (docsOn && finished && project.pdfPath === pdfPath) {
     getDownloadURL(ref(storage, pdfPath)).then((url) => {
       const href = displayUrl(url);
       if (!href || !pdfSlot.isConnected) return;
       pdfSlot.replaceWith(el("a", { class: "pdf-link", href, target: "_blank", rel: "noopener" }, "Last ned sluttrapport (PDF)"));
     }).catch(() => {});
-  } else if (finished && knownPdf) {
+  } else if (docsOn && finished && knownPdf) {
     pdfSlot.replaceWith(el("a", { class: "pdf-link", href: knownPdf, target: "_blank", rel: "noopener" }, "Last ned sluttrapport (PDF)"));
   }
 
-  if (project.reportText && project.reportText.trim()) {
-    viewProject.append(el("section", { class: "k-card" }, [
-      el("h2", {}, "Arbeid utført"),
-      el("p", { class: "pre" }, project.reportText.trim()),
-    ]));
-  }
-  viewProject.append(el("section", { id: "report-photos", class: "k-card k-stack", hidden: true }, [
-    el("h2", {}, "Bilder"),
-  ]));
-
-  const offerPosts = items.filter((item) => isOfferItem(item) && item.fikenBase !== true && item.approved === true && item.approvalRequested === true);
-  if (!customerSeesCost(project)) {
+  if (portalSectionVisible(project, "betalinger")) {
     viewProject.append(el("section", { class: "k-card k-stack", id: "payment-card" }, [
       el("div", { id: "payment-slot" }),
     ]));
   }
+
+  const reportCopy = docsOn ? String(project.reportText || "").trim() : "";
+  if (reportCopy) {
+    viewProject.append(el("section", { class: "k-card", id: "seksjon-dokumentasjon" }, [
+      el("h2", {}, "Arbeid utført"),
+      el("p", { class: "pre" }, reportCopy),
+    ]));
+  }
+  if (portalSectionVisible(project, "bilder")) {
+    viewProject.append(el("section", { id: "seksjon-bilder", class: "k-card k-stack", hidden: true }, [
+      el("h2", {}, "Bilder"),
+    ]));
+  }
+
+  const offerPosts = (portalSectionVisible(project, "tilbudEndringer") ? items : []).filter((item) => isOfferItem(item) && item.fikenBase !== true && item.approved === true && item.approvalRequested === true);
   if (offerPosts.length || customerSeesCost(project)) {
-    const box = el("section", { class: "k-card k-stack", id: "offers" }, [
-      el("h2", {}, "Tilbud og endringer"),
+    const box = el("section", {
+      class: "k-card k-stack",
+      id: offerPosts.length ? "seksjon-tilbud-endringer" : null,
+    }, [
+      offerPosts.length ? el("h2", {}, "Tilbud og endringer") : null,
     ]);
     if (offerPosts.length) {
       box.append(el("p", { class: "muted" }, "Velg ett alternativ og trykk Godkjenn valgt løsning. Tidspunkt og navn lagres. Pris kr 0,00 er inkludert."));
@@ -367,50 +394,68 @@ function render() {
     viewProject.append(box);
   }
 
-  const requestSlot = el("div", { id: "request-slot" });
-  viewProject.append(requestSlot);
-  paintRequests();
+  if (portalSectionVisible(project, "foresporsler")) {
+    const requestSlot = el("div", { id: "request-slot" });
+    viewProject.append(requestSlot);
+    paintRequests();
+  }
 
   const groups = [
-    ["tilbud", "Tilbud"],
-    ["endring", "Endringer"],
-    ["avvik", "Avvik"],
+    ["tilbud", "Tilbud", "seksjon-tilbud", "tilbud"],
+    ["endring", "Endringer", "seksjon-endringer", "endringer"],
+    ["avvik", "Avvik", "seksjon-avvik", "endringer"],
   ];
-  for (const [kind, title] of groups) {
+  for (const [kind, title, sectionId, flag] of groups) {
+    if (!portalSectionVisible(project, flag)) continue;
     const rows = items.filter((item) => item.kind === kind && item.approved === true && !isOfferItem(item));
-    const section = el("section", { class: "k-card k-stack" }, [el("h2", {}, title)]);
+    const section = el("section", { class: "k-card k-stack", id: sectionId }, [el("h2", {}, title)]);
     if (!rows.length) section.append(el("p", { class: "muted" }, "Ingenting er lagt ut her ennå."));
     for (const item of rows) section.append(itemCard(item));
     viewProject.append(section);
   }
 
-  const mine = items.filter((item) => item.kind === "kunde" && item.createdBy === uid);
-  const inbox = el("section", { class: "k-card k-stack" }, [
-    el("h2", {}, "Grunnlag fra deg"),
-    el("p", { class: "muted" }, "Har du bilder eller informasjon vi ikke har? Last opp f.eks. eldre bilder av tomten, fuktige steder, rør eller tegninger. Einar ser gjennom alt og legger det som er nyttig inn i dokumentasjonen."),
-    notice ? el("p", { class: "notice" }, notice) : null,
-    submissionForm(),
-    ...mine.map((item) => itemCard(item, true)),
-  ]);
-  viewProject.append(inbox);
-  viewProject.append(messageSection());
-  viewProject.append(documentSection());
-  const hms = renderCustomerHms(hmsDocs);
-  if (hms) viewProject.append(hms);
-
-  const rate = el("section", { class: "k-card k-stack" }, [el("h2", {}, "Vurdering")]);
-  const ratings = items.filter((item) => item.kind === "vurdering" && item.createdBy === uid);
-  if (!finished) {
-    rate.append(el("p", { class: "muted" }, "Du kan legge igjen stjerner og en kommentar når oppdraget er markert ferdig."));
-  } else {
-    for (const item of ratings) rate.append(itemCard(item, true));
-    rate.append(ratingForm());
+  if (portalSectionVisible(project, "grunnlag")) {
+    const mine = items.filter((item) => item.kind === "kunde" && item.createdBy === uid);
+    const inbox = el("section", { class: "k-card k-stack", id: "seksjon-grunnlag" }, [
+      el("h2", {}, "Grunnlag fra deg"),
+      el("p", { class: "muted" }, "Har du bilder eller informasjon vi ikke har? Last opp f.eks. eldre bilder av tomten, fuktige steder, rør eller tegninger. Einar ser gjennom alt og legger det som er nyttig inn i dokumentasjonen."),
+      notice ? el("p", { class: "notice" }, notice) : null,
+      submissionForm(),
+      ...mine.map((item) => itemCard(item, true)),
+    ]);
+    viewProject.append(inbox);
   }
-  viewProject.append(rate);
+  if (portalSectionVisible(project, "meldinger")) {
+    const messages = messageSection();
+    messages.id = "seksjon-meldinger";
+    viewProject.append(messages);
+  }
+  if (docsOn) {
+    const documents = documentSection();
+    if (!reportCopy) documents.id = "seksjon-dokumentasjon";
+    viewProject.append(documents);
+  }
+  if (portalSectionVisible(project, "hms")) {
+    const hms = renderCustomerHms(hmsDocs);
+    if (hms) viewProject.append(hms);
+  }
+
+  if (portalSectionVisible(project, "vurdering")) {
+    const rate = el("section", { class: "k-card k-stack", id: "seksjon-vurdering" }, [el("h2", {}, "Vurdering")]);
+    const ratings = items.filter((item) => item.kind === "vurdering" && item.createdBy === uid);
+    if (!finished) {
+      rate.append(el("p", { class: "muted" }, "Du kan legge igjen stjerner og en kommentar når oppdraget er markert ferdig."));
+    } else {
+      for (const item of ratings) rate.append(itemCard(item, true));
+      rate.append(ratingForm());
+    }
+    viewProject.append(rate);
+  }
   paintCost();
   paintPayments();
 
   paintPortalPhotos();
+  fillPortalNav(nav);
   for (const item of items) hydrate(item);
   applyPortalPreviewLock(previewMode ? viewProject : null);
 }
@@ -501,11 +546,12 @@ function reportGalleryPhotos() {
 
 function paintPortalPhotos() {
   const flat = portalFlat();
-  const gallery = reportGalleryPhotos();
+  const photosOn = portalSectionVisible(project, "bilder");
+  const gallery = photosOn ? reportGalleryPhotos() : [];
   const galleryKeys = new Set(gallery.map(photoKey));
-  const host = document.getElementById("report-photos");
+  const host = document.getElementById("seksjon-bilder");
   if (host) {
-    host.hidden = gallery.length === 0;
+    host.hidden = !photosOn || gallery.length === 0;
     host.replaceChildren(el("h2", {}, "Bilder"));
     const figures = portalFigures(gallery);
     if (figures) host.append(figures);
@@ -516,15 +562,18 @@ function paintPortalPhotos() {
     const card = document.getElementById(`item-${itemId}`);
     if (!media) continue;
     const item = mergedItems().find((entry) => entry.id === itemId);
-    const keep = photos.filter((photo) => (
-      !galleryKeys.has(photoKey(photo))
-      && (shown.has(photoKey(photo)) || customerOwnPending(photo, uid))
-    ));
     media.replaceChildren();
-    const figures = portalFigures(keep);
-    if (figures) media.append(figures);
+    if (photosOn) {
+      const keep = photos.filter((photo) => (
+        !galleryKeys.has(photoKey(photo))
+        && (shown.has(photoKey(photo)) || customerOwnPending(photo, uid))
+      ));
+      const figures = portalFigures(keep);
+      if (figures) media.append(figures);
+    }
     if (card && item) card.hidden = redundantPhotoItem(item, flat);
   }
+  fillPortalNav(document.getElementById("portal-nav"));
 }
 
 async function hydrate(item) {

@@ -148,10 +148,11 @@ service cloud.firestore {
         && request.resource.data.text.size() < 2000;
     }
 
-    // Betaling. Bare admin skriver. Kunden leser betalingene på eget prosjekt.
+    // Betaling og delfaktura. Bare admin skriver. Kunden leser dem på eget prosjekt.
+    // status og installment kan mangle på eldre betalinger. De teller da som betalt.
     function validPayment() {
       return request.resource.data.keys().hasOnly([
-          'paidAt', 'amount', 'vat', 'invoiceNumber', 'note', 'createdAt', 'createdBy'
+          'paidAt', 'amount', 'vat', 'invoiceNumber', 'note', 'createdAt', 'createdBy', 'status', 'installment'
         ])
         && request.resource.data.paidAt is timestamp
         && request.resource.data.amount is number
@@ -163,7 +164,19 @@ service cloud.firestore {
         && request.resource.data.note is string
         && request.resource.data.note.size() < 300
         && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.createdBy is string;
+        && request.resource.data.createdBy is string
+        && (
+          !request.resource.data.keys().hasAny(['status'])
+          || request.resource.data.status in ['sendt', 'betalt']
+        )
+        && (
+          !request.resource.data.keys().hasAny(['installment'])
+          || (
+            request.resource.data.installment is int
+            && request.resource.data.installment >= 1
+            && request.resource.data.installment <= 500
+          )
+        );
     }
 
     function validPaymentCreate() {
@@ -175,7 +188,7 @@ service cloud.firestore {
       return validPayment()
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.createdBy == resource.data.createdBy
-        && keys.hasOnly(['paidAt', 'amount', 'vat', 'invoiceNumber', 'note']);
+        && keys.hasOnly(['paidAt', 'amount', 'vat', 'invoiceNumber', 'note', 'status', 'installment']);
     }
 
     function validCustomerRequestDecision() {

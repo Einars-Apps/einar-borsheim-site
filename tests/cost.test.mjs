@@ -1,7 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_PRICES } from "../www/js/drainage.js";
-import { changeText, costChanges, costReportText, liveCost, patchCost, paymentBalance, paymentReportText, paymentTotals, persistableCost } from "../www/js/cost.js";
+import {
+  changeText,
+  costChanges,
+  costReportText,
+  liveCost,
+  nextInstallmentNumber,
+  originalOffer,
+  partialFinalText,
+  patchCost,
+  paymentBalance,
+  paymentInstallments,
+  paymentProgress,
+  paymentReportText,
+  paymentTotals,
+  persistableCost,
+} from "../www/js/cost.js";
 
 const prices = {
   groftM: 350,
@@ -225,6 +240,89 @@ test("betalinger summeres bare når mva er merket, og gjenstår bruker totalen",
   assert.match(hidden, /Betalt hittil/);
   assert.doesNotMatch(hidden, /Gjenstår å betale/);
   assert.doesNotMatch(hidden, /Totalt \(endelig \+ estimert\)/);
+});
+
+test("Fiken-linjer uten avtalt pris er det opprinnelige tilbudet, ikke en rød økning", () => {
+  const summary = liveCost({
+    cost: {
+      agreedExVat: 0,
+      fikenLines: [
+        { id: "masse", label: "Masseutskifte grøft under nybygg (RS)", unit: "stk", planned: 1, done: 0.5, unitPrice: 1000, source: "fra Fiken-tilbud nr 10102" },
+        { id: "rest", label: "Rest", unit: "stk", planned: 10, done: 0, unitPrice: 100, source: "fra Fiken-tilbud nr 10102" },
+      ],
+    },
+    prices,
+    items: [],
+  });
+  assert.equal(summary.baseline.kind, "planlagt");
+  assert.equal(summary.baseline.exVat, 2000);
+  assert.equal(summary.baseline.label, "Fra Fiken-tilbud 10102");
+  assert.equal(summary.estimated.exVat, 2000);
+  assert.equal(summary.differenceExVat, 0);
+  const withExtra = liveCost({
+    cost: {
+      fikenLines: [
+        { id: "masse", label: "Masseutskifte", planned: 1, addition: 1, done: 0.5, unitPrice: 1000, source: "fra Fiken-tilbud nr 10102" },
+      ],
+    },
+    prices,
+    items: [],
+  });
+  assert.equal(withExtra.differenceExVat, 1000);
+  const agreedQuote = liveCost({
+    cost: {
+      fikenLines: [
+        { id: "masse", label: "Masseutskifte", planned: 1, done: 0, unitPrice: 1000, source: "fra Fiken-tilbud nr 10102" },
+      ],
+    },
+    prices,
+    items: [],
+    quotes: [{ id: "ft-1", number: "10102", exVat: 1000, agreed: true }],
+  });
+  assert.equal(agreedQuote.baseline.kind, "fiken");
+  assert.equal(agreedQuote.baseline.exVat, 1000);
+  assert.equal(originalOffer({ agreedExVat: 500, lines: summary.lines, offers: summary.offers }).kind, "manuell");
+});
+
+test("utført kan være 0,5 uten å bli endelig, og en ferdig halv post sier det", () => {
+  const open = patchCost({
+    fikenLines: [{ id: "masse", label: "Masseutskifte grøft under nybygg (RS)", planned: 1, done: 0, unitPrice: 1000 }],
+  }, prices, { lineId: "masse", field: "done", value: "0,5" });
+  const line = open.fikenLines.find((entry) => entry.id === "masse");
+  assert.equal(line.done, 0.5);
+  assert.equal(line.final, false);
+  assert.equal(partialFinalText(line), "");
+  const blocked = patchCost({
+    fikenLines: [{ id: "masse", label: "Masseutskifte", planned: 1, done: 0.5, unitPrice: 1000, final: true }],
+  }, prices, { lineId: "masse", field: "done", value: 1 });
+  assert.equal(blocked.fikenLines[0].done, 0.5);
+  assert.equal(blocked.fikenLines[0].final, true);
+  const summary = liveCost({ cost: blocked, prices, items: [] });
+  const shown = summary.lines.find((entry) => entry.id === "masse");
+  assert.equal(partialFinalText(shown), "Endelig: 0,5 av 1");
+  assert.match(costReportText(summary, []), /Endelig: 0,5 av 1/);
+  assert.equal(summary.differenceExVat, -500);
+});
+
+test("gammel betaling er betalt, og en sendt delfaktura får neste nummer", () => {
+  const legacy = [{ amount: 1000, vat: "eks", invoiceNumber: "10", paidAt: new Date("2026-10-01") }];
+  const rows = paymentInstallments(legacy);
+  assert.equal(rows[0].number, 1);
+  assert.equal(rows[0].status, "betalt");
+  assert.equal(nextInstallmentNumber(legacy), 2);
+  const mixed = [
+    ...legacy,
+    { amount: 500, vat: "eks", status: "sendt", installment: 2 },
+  ];
+  assert.equal(paymentTotals(mixed).exVat, 1000);
+  const progress = paymentProgress(null, mixed);
+  assert.equal(progress.paidEx, 1000);
+  assert.equal(progress.totalEx, 1500);
+  assert.equal(progress.dueEx, 500);
+  assert.match(paymentReportText(mixed), /Delfaktura 1/);
+  assert.match(paymentReportText(mixed), /Delfaktura 2/);
+  assert.match(paymentReportText(mixed), /Sendt/);
+  assert.match(paymentReportText(mixed), /Gjenstår/);
 });
 
 test("uberørte standardlinjer vises ikke, mengde og Fiken beholdes, grøftpris blir i kalkulatoren", () => {

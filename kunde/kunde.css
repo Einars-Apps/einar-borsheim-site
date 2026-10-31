@@ -8,6 +8,14 @@
 
 .hidden { display: none !important; }
 
+.preview-note {
+  margin: 0;
+  background: #e5f3ee;
+  color: #0c5344;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-weight: 600;
+}
 .preview-banner {
   position: sticky;
   top: 0;
@@ -18,6 +26,33 @@
   font-weight: 700;
   border-radius: 12px;
   padding: 12px 14px;
+}
+.portal-nav {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 0.6rem;
+}
+.portal-nav[hidden] { display: none !important; }
+.portal-nav a {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  padding: 0.75rem 0.9rem;
+  background: #fff;
+  border: 1px solid #0c5344;
+  border-radius: 14px;
+  color: #0c5344;
+  font-weight: 700;
+  line-height: 1.25;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.portal-nav a:active { background: #e7f2ec; }
+#view-project section,
+#cost-slot,
+#seksjon-betalinger,
+#seksjon-dokumentasjon {
+  scroll-margin-top: 4.2rem;
 }
 button:disabled,
 textarea:disabled,
@@ -199,6 +234,28 @@ textarea { min-height: 96px; }
 .payment-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .payment-row { display: flex; flex-direction: column; gap: 2px; }
 .payment-amount { margin: 0; font-weight: 700; }
+.payment-hero { background: #fff; border: 2px solid #0c5344; }
+#payment-card { padding: 0; border: 0; background: transparent; }
+.pay-progress { display: flex; flex-direction: column; gap: 8px; }
+.pay-track {
+  height: 16px;
+  border-radius: 999px;
+  background: #e7efe9;
+  overflow: hidden;
+}
+.pay-fill { height: 100%; background: #0c5344; border-radius: 999px; }
+.pay-fill-over { background: #8e2f2f; }
+.pay-due { font-size: 1.2rem; }
+.pay-status {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  font-weight: 700;
+}
+.pay-status-betalt { background: #e5f3ee; color: #0c5344; }
+.pay-status-sendt { background: #f3e2c8; color: #6d4712; }
 .qty-line { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
 .qty-line-final { background: #e5f3ee; border: 1px solid #b7dfd0; border-radius: 14px; padding: 12px; }
 .final-badge, .estimate-badge {

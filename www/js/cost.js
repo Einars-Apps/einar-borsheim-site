@@ -30,6 +30,14 @@ export function formatQty(value) {
   return new Intl.NumberFormat("nb-NO", { maximumFractionDigits: 2 }).format(round2(value));
 }
 
+export function partialFinalText(line) {
+  if (line?.final !== true) return "";
+  const target = round2((round2(line.planned) || 0) + (round2(line.addition) || 0));
+  const done = round2(line.done) || 0;
+  if (!(target > done)) return "";
+  return `Endelig: ${formatQty(done)} av ${formatQty(target)}`;
+}
+
 export function signedKr(value) {
   const number = round2(value);
   if (number > 0) return `+ ${formatKr(number)}`;
@@ -202,7 +210,59 @@ export function offerContribution(items, previewChoices = null) {
   };
 }
 
-export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices = null } = {}) {
+function plannedLineExVat(line) {
+  return round2((round2(line?.planned) || 0) * (round2(line?.unitPrice) || 0));
+}
+
+function fikenOfferNumbers(lines) {
+  const numbers = [];
+  for (const line of lines || []) {
+    const match = String(line?.source || "").match(/Fiken-tilbud nr\s+(\S+)/i);
+    if (!match) continue;
+    const number = match[1].replace(/[.,;:]+$/, "");
+    if (number && !numbers.includes(number)) numbers.push(number);
+  }
+  return numbers;
+}
+
+function quoteAgreed(quote) {
+  return quote?.agreed === true || String(quote?.accepted || "").trim().length > 0;
+}
+
+export function originalOffer({ agreedExVat = 0, lines = [], offers, quotes = [] } = {}) {
+  const manual = round2(agreedExVat);
+  if (manual > 0) {
+    return { exVat: manual, kind: "manuell", label: "Skrevet inn som avtalt pris", number: "" };
+  }
+  const approved = (offers?.rows || []).some((row) => row.status === "godkjent");
+  if (approved) {
+    return { exVat: 0, kind: "godkjent", label: "Godkjente poster i Tilbud og endringer", number: "" };
+  }
+  const numbers = fikenOfferNumbers(lines);
+  const planned = round2((lines || []).reduce((sum, line) => sum + plannedLineExVat(line), 0));
+  const quote = (quotes || []).find((entry) => quoteAgreed(entry) && round2(entry?.exVat) > 0);
+  if (quote) {
+    const number = String(quote.number || numbers[0] || "").trim();
+    return {
+      exVat: round2(quote.exVat),
+      kind: "fiken",
+      label: number ? `Fra Fiken-tilbud ${number}` : "Fra Fiken-tilbud",
+      number,
+    };
+  }
+  if (planned > 0) {
+    const number = numbers.join(", ");
+    return {
+      exVat: planned,
+      kind: "planlagt",
+      label: number ? `Fra Fiken-tilbud ${number}` : "Planlagt mengde ganger enhetspris",
+      number,
+    };
+  }
+  return { exVat: 0, kind: "ingen", label: "", number: "" };
+}
+
+export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices = null, quotes = null } = {}) {
   const state = normalizeCost(cost, prices);
   const offers = offerContribution(items, previewChoices);
   let doneEx = 0;
@@ -264,9 +324,16 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   const remaining = withVat(openBase);
   const incurred = withVat(state.agreedExVat + offers.approvedExVat + doneEx);
   const preview = withVat(finalBase + state.agreedExVat + offers.previewExVat + openEx);
-  const differenceExVat = round2(estimated.exVat - state.agreedExVat);
+  const baseline = originalOffer({
+    agreedExVat: state.agreedExVat,
+    lines,
+    offers,
+    quotes,
+  });
+  const differenceExVat = round2(estimated.exVat - baseline.exVat);
   return {
     agreedExVat: state.agreedExVat,
+    baseline,
     lines,
     extras,
     extrasExVat,
@@ -459,21 +526,120 @@ export function changeText(change) {
   return `${label}, ${what}: ${formatQty(change?.from)} → ${formatQty(change?.to)}${unit}`;
 }
 
-export function paymentTotals(payments = []) {
-  let exVat = 0;
-  let incVat = 0;
-  for (const payment of payments || []) {
-    const amount = Number(payment?.amount);
-    if (!Number.isFinite(amount) || amount < 0) continue;
-    if (payment.vat === "inkl") {
-      incVat += amount;
-      exVat += amount / (1 + VAT_RATE);
-    } else if (payment.vat === "eks") {
-      exVat += amount;
-      incVat += amount * (1 + VAT_RATE);
-    }
+export function paymentStatus(payment) {
+  return payment?.status === "sendt" ? "sendt" : "betalt";
+}
+
+export function paymentStatusLabel(status) {
+  return status === "sendt" ? "Sendt" : "Betalt";
+}
+
+function storedInstallment(payment) {
+  const number = Number(payment?.installment);
+  if (!Number.isInteger(number) || number < 1 || number > 500) return 0;
+  return number;
+}
+
+function paymentMoment(payment) {
+  const paid = payment?.paidAt;
+  const created = payment?.createdAt;
+  const paidMs = paid?.toDate?.()?.getTime?.() || (paid instanceof Date ? paid.getTime() : 0) || 0;
+  const createdMs = created?.toDate?.()?.getTime?.() || (created instanceof Date ? created.getTime() : 0) || 0;
+  return paidMs || createdMs || 0;
+}
+
+function addVatAmount(bucket, payment) {
+  const amount = Number(payment?.amount);
+  if (!Number.isFinite(amount) || amount < 0) return false;
+  if (payment.vat === "inkl") {
+    bucket.incVat += amount;
+    bucket.exVat += amount / (1 + VAT_RATE);
+    return true;
   }
-  return { exVat: round2(exVat), incVat: round2(incVat) };
+  if (payment.vat === "eks") {
+    bucket.exVat += amount;
+    bucket.incVat += amount * (1 + VAT_RATE);
+    return true;
+  }
+  return false;
+}
+
+export function paymentInstallments(payments = []) {
+  const rows = [];
+  (payments || []).forEach((payment, index) => {
+    const amount = Number(payment?.amount);
+    if (!Number.isFinite(amount) || amount < 0) return;
+    rows.push({ payment, index });
+  });
+  const used = new Set();
+  for (const row of rows) {
+    const number = storedInstallment(row.payment);
+    if (number) used.add(number);
+  }
+  const ordered = [...rows].sort((a, b) => paymentMoment(a.payment) - paymentMoment(b.payment) || a.index - b.index);
+  let cursor = 1;
+  const numbered = ordered.map((row) => {
+    let number = storedInstallment(row.payment);
+    if (!number) {
+      while (used.has(cursor)) cursor += 1;
+      number = cursor;
+      used.add(number);
+      cursor += 1;
+    }
+    return {
+      ...row.payment,
+      number,
+      status: paymentStatus(row.payment),
+    };
+  });
+  numbered.sort((a, b) => a.number - b.number);
+  return numbered;
+}
+
+export function nextInstallmentNumber(payments = []) {
+  const rows = paymentInstallments(payments);
+  return rows.reduce((max, row) => Math.max(max, row.number), 0) + 1;
+}
+
+export function paymentTotals(payments = []) {
+  const bucket = { exVat: 0, incVat: 0 };
+  for (const payment of payments || []) {
+    if (paymentStatus(payment) !== "betalt") continue;
+    addVatAmount(bucket, payment);
+  }
+  return { exVat: round2(bucket.exVat), incVat: round2(bucket.incVat) };
+}
+
+export function paymentInvoicedTotals(payments = []) {
+  const bucket = { exVat: 0, incVat: 0 };
+  for (const payment of payments || []) addVatAmount(bucket, payment);
+  return { exVat: round2(bucket.exVat), incVat: round2(bucket.incVat) };
+}
+
+export function paymentProgress(summary, payments = []) {
+  const paid = paymentTotals(payments);
+  const invoiced = paymentInvoicedTotals(payments);
+  if (summary) {
+    const balance = paymentBalance(summary, payments);
+    return {
+      paidInc: paid.incVat,
+      paidEx: paid.exVat,
+      totalInc: balance.totalInc,
+      totalEx: balance.totalEx,
+      dueInc: balance.dueInc,
+      dueEx: balance.dueEx,
+      hasTotal: true,
+    };
+  }
+  return {
+    paidInc: paid.incVat,
+    paidEx: paid.exVat,
+    totalInc: invoiced.incVat,
+    totalEx: invoiced.exVat,
+    dueInc: round2(invoiced.incVat - paid.incVat),
+    dueEx: round2(invoiced.exVat - paid.exVat),
+    hasTotal: false,
+  };
 }
 
 export function paymentBalance(summary, payments = []) {
@@ -493,28 +659,35 @@ function paymentReportLines(payments = [], summary = null) {
   const lines = [];
   let labeled = 0;
   let unlabeled = 0;
-  for (const payment of payments || []) {
-    const amount = Number(payment?.amount);
-    if (!Number.isFinite(amount) || amount < 0) continue;
+  for (const payment of paymentInstallments(payments)) {
+    const amount = Number(payment.amount);
     const when = payment.when ? `${payment.when}: ` : "";
     const invoice = payment.invoiceNumber ? ` Faktura ${payment.invoiceNumber}.` : "";
     const note = payment.note ? ` ${payment.note}` : "";
+    const head = `Delfaktura ${payment.number}. ${when}`;
     if (payment.vat === "inkl" || payment.vat === "eks") {
       labeled += 1;
       const vatLabel = payment.vat === "inkl" ? "inkl. mva" : "eks. mva";
-      lines.push(`${when}${formatKr(amount)} ${vatLabel}.${invoice}${note}`.trim());
+      const state = payment.status === "sendt" ? " Sendt." : " Betalt.";
+      lines.push(`${head}${formatKr(amount)} ${vatLabel}.${invoice}${note}${state}`.trim());
     } else {
       unlabeled += 1;
-      lines.push(`${when}${formatKr(amount)}. Mva er ikke merket, så beløpet er ikke med i summen.${invoice}${note}`.trim());
+      lines.push(`${head}${formatKr(amount)}. Mva er ikke merket, så beløpet er ikke med i summen.${invoice}${note}`.trim());
     }
   }
   if (!labeled && !unlabeled) lines.push("Ingen betalinger er registrert.");
   const balance = paymentBalance(summary, payments);
+  const progress = paymentProgress(summary, payments);
+  if (progress.totalInc > 0 || progress.paidInc > 0) {
+    lines.push(`Betalt ${formatKr(progress.paidInc)} av ${formatKr(progress.totalInc)}.`);
+  }
   lines.push(`Betalt hittil ${formatKr(balance.paid.incVat)} inkl. mva, ${formatKr(balance.paid.exVat)} eks. mva.`);
   if (summary) {
     lines.push(`Totalt (endelig + estimert) ${formatKr(balance.totalInc)} inkl. mva, ${formatKr(balance.totalEx)} eks. mva.`);
     const over = balance.dueInc < 0 || balance.dueEx < 0;
     lines.push(`Gjenstår å betale ${formatKr(balance.dueInc)} inkl. mva, ${formatKr(balance.dueEx)} eks. mva.${over ? " Det er betalt mer enn totalen." : ""}`);
+  } else if (progress.dueInc > 0 || progress.dueEx > 0) {
+    lines.push(`Gjenstår ${formatKr(progress.dueInc)} inkl. mva, ${formatKr(progress.dueEx)} eks. mva.`);
   }
   return lines;
 }
@@ -527,6 +700,9 @@ export function costReportText(summary, history = [], payments = []) {
   const lines = [
     "Nåværende kostnad",
     `Avtalt pris ${formatKr(summary?.agreedExVat || 0)} eks. mva.`,
+    summary?.baseline?.label
+      ? `Opprinnelig tilbud ${formatKr(summary.baseline.exVat)} eks. mva. ${summary.baseline.label}.`
+      : "",
     `Ferdige poster (endelig) ${formatKr(summary?.finalized?.exVat || 0)} eks. mva, ${formatKr(summary?.finalized?.incVat || 0)} inkl. mva.`,
     `Gjenstår (estimert) ${formatKr(summary?.remaining?.exVat || 0)} eks. mva, ${formatKr(summary?.remaining?.incVat || 0)} inkl. mva.`,
     `Totalt ${formatKr(summary?.estimated?.exVat || 0)} eks. mva, ${formatKr(summary?.estimated?.incVat || 0)} inkl. mva.`,
@@ -546,8 +722,9 @@ export function costReportText(summary, history = [], payments = []) {
     if (!line.planned && !line.done && !line.addition && !line.final) continue;
     const source = line.source ? ` (${line.source})` : "";
     const tillegg = line.addition ? `, avtalt tillegg ${formatQty(line.addition)} ${line.unit}` : "";
+    const partial = partialFinalText(line);
     const priceNote = line.final
-      ? `Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva.`
+      ? `${partial ? `${partial}. ` : ""}Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva.`
       : `Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva.`;
     lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}${tillegg}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. ${priceNote} Enhetspris ${formatKr(line.unitPrice)}.`);
   }

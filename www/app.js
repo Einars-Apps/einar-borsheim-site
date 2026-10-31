@@ -84,10 +84,19 @@ import { fieldsFromFiken, fikenUnreachableMessage, isFikenLinked, unimportedFike
 import { firestoreReadMessage, firestoreTransportSettings, readDocWithRetry } from "./js/firestore-read.js";
 import { fikenQuoteRecord, mergeFikenLines, quotesFromFikenResult } from "./js/fiken-offers.js";
 import { renderFikenQuoteList } from "./js/fiken-quote-view.js";
-import { changeText, costChanges, costReportText, customerSeesCost, liveCost, newExtraId, patchCost, paymentReportText, persistableCost } from "./js/cost.js";
+import { changeText, costChanges, costReportText, customerSeesCost, liveCost, newExtraId, nextInstallmentNumber, patchCost, paymentReportText, persistableCost } from "./js/cost.js";
 import { applyApprovedRequest } from "./js/requests.js";
 import { renderAdminRequests } from "./js/requests-view.js";
 import { renderCostOverview } from "./js/cost-view.js";
+import {
+  applyPortalPatch,
+  clonePortalVisibility,
+  portalAllSectionsPatch,
+  portalSectionPatch,
+  portalSectionVisible,
+  restorePortalVisibility,
+} from "./js/portal-visibility.js";
+import { renderCustomerVisibility } from "./js/portal-visibility-view.js";
 import { fetchFrostRain } from "./js/frost.js";
 import { button, el, field, icon, sheet, toast } from "./js/dom.js";
 import {
@@ -1521,6 +1530,7 @@ function mountOffers(route) {
   let items = [];
   let requests = [];
   let payments = [];
+  let quotes = [];
   let costDoc = null;
   let costLog = [];
   const applyingRequests = new Set();
@@ -1616,7 +1626,7 @@ function mountOffers(route) {
       root.replaceChildren(el("p", { class: "empty" }, "Fant ikke prosjektet."));
       return;
     }
-    const summary = liveCost({ cost: costDoc, prices: priceTable, items });
+    const summary = liveCost({ cost: costDoc, prices: priceTable, items, quotes });
     const shareCost = el("input", { type: "checkbox" });
     shareCost.checked = customerSeesCost(project);
     shareCost.addEventListener("change", async () => {
@@ -1637,6 +1647,7 @@ function mountOffers(route) {
         shareCost,
         el("span", {}, "Vis kostnad for kunden i portalen"),
       ]),
+      el("p", { class: "meta" }, "Samme valg som Nåværende kostnad under Synlig for kunden. Se som kunde viser bare det som er huket av."),
     ];
     if (project.fikenProjectId) {
       costExtras.push(button("Hent linjer fra Fiken", {
@@ -1693,16 +1704,21 @@ function mountOffers(route) {
             throw new Error("ufullstendig");
           }
           try {
+            const installment = Number.isInteger(payment.installment) && payment.installment >= 1
+              ? payment.installment
+              : nextInstallmentNumber(payments);
             await db.collection("projects").doc(route.projectId).collection("payments").add({
               paidAt: firebase.firestore.Timestamp.fromDate(payment.paidAt),
               amount: payment.amount,
               vat: payment.vat,
               invoiceNumber: String(payment.invoiceNumber || "").slice(0, 39),
               note: String(payment.note || "").slice(0, 299),
+              status: payment.status === "sendt" ? "sendt" : "betalt",
+              installment,
               createdAt: stamp(),
               createdBy: user?.uid || "",
             });
-            toast("Betalingen er registrert");
+            toast(payment.status === "sendt" ? "Delfakturaen er sendt" : "Delfakturaen er registrert som betalt");
           } catch (error) {
             console.error(error);
             toast("Kunne ikke lagre betalingen");
@@ -1713,10 +1729,36 @@ function mountOffers(route) {
           if (!paymentId) return;
           try {
             await db.collection("projects").doc(route.projectId).collection("payments").doc(paymentId).delete();
-            toast("Betalingen er slettet");
+            toast("Delfakturaen er slettet");
           } catch (error) {
             console.error(error);
-            toast("Kunne ikke slette betalingen");
+            toast("Kunne ikke slette delfakturaen");
+          }
+        },
+        quotes,
+        onAgreeQuote: async (quote) => {
+          if (!quote?.id) return;
+          try {
+            await db.collection("projects").doc(route.projectId).collection("fikenOffers").doc(quote.id).update({
+              agreed: true,
+              agreedAt: stamp(),
+            });
+            toast(quote.number ? `Fiken-tilbud ${quote.number} er merket som avtalt` : "Fiken-tilbudet er merket som avtalt");
+          } catch (error) {
+            console.error(error);
+            toast("Kunne ikke merke tilbudet som avtalt");
+          }
+        },
+        onMarkPaid: async (paymentId) => {
+          if (!paymentId) return;
+          try {
+            await db.collection("projects").doc(route.projectId).collection("payments").doc(paymentId).update({
+              status: "betalt",
+            });
+            toast("Delfakturaen er merket betalt");
+          } catch (error) {
+            console.error(error);
+            toast("Kunne ikke merke delfakturaen som betalt");
           }
         },
       }),
@@ -1764,6 +1806,10 @@ function mountOffers(route) {
   subs.push(db.collection("projects").doc(route.projectId).collection("requests").orderBy("createdAt", "desc").onSnapshot((snap) => {
     requests = snap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
     for (const request of requests) applyApproved(request);
+    draw();
+  }, (error) => console.error(error)));
+  subs.push(db.collection("projects").doc(route.projectId).collection("fikenOffers").onSnapshot((snap) => {
+    quotes = snap.docs.map((entry) => ({ id: entry.id, ...entry.data() }));
     draw();
   }, (error) => console.error(error)));
   subs.push(db.collection("projects").doc(route.projectId).collection("payments").onSnapshot((snap) => {
@@ -2324,6 +2370,15 @@ function mountProject(route) {
     ]);
     root.append(
       info,
+      renderCustomerVisibility({
+        project,
+        items,
+        onToggle: (id, visible, box) => persistPortalVisibility(project, portalSectionPatch(id, visible), () => {
+          const latest = projectById(project.id) || project;
+          if (box) box.checked = portalSectionVisible(latest, id);
+        }),
+        onSetAll: (visible) => persistPortalVisibility(project, portalAllSectionsPatch(visible), () => refresh?.()),
+      }),
       renderFikenProjectBox({
         project,
         onList: () => callFiken("listFikenProjects", {}),
@@ -2490,7 +2545,13 @@ async function saveFikenQuotes(projectId, quotes) {
     if (!keys.has(doc.id)) await doc.ref.delete();
   }
   for (const record of records) {
-    await col.doc(record.key).set({ ...record, updatedAt: stamp() });
+    const prev = existing.docs.find((doc) => doc.id === record.key)?.data() || {};
+    const kept = {};
+    if (prev.agreed === true) {
+      kept.agreed = true;
+      if (prev.agreedAt) kept.agreedAt = prev.agreedAt;
+    }
+    await col.doc(record.key).set({ ...record, ...kept, updatedAt: stamp() });
   }
   const items = await db.collection("projects").doc(projectId).collection("items").get();
   for (const doc of items.docs) {
@@ -2703,6 +2764,24 @@ function saveCustomerName(project, value) {
     toast("Kunne ikke lagre kundenavnet");
     return false;
   });
+}
+
+async function persistPortalVisibility(project, patch, after) {
+  const current = projectById(project.id) || project;
+  const previous = clonePortalVisibility(current);
+  applyPortalPatch(current, patch);
+  try {
+    await db.collection("projects").doc(project.id).update({
+      ...patch,
+      updatedAt: stamp(),
+    });
+  } catch (error) {
+    console.error(error);
+    const latest = projectById(project.id) || current;
+    if (latest === current) restorePortalVisibility(current, previous);
+    toast("Kunne ikke lagre valget");
+  }
+  after?.();
 }
 
 function customerBox(project) {

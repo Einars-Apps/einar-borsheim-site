@@ -166,6 +166,7 @@ export function portalAccessStep({ accessExists = false, token = "" } = {}) {
 
 export const PORTAL_PREVIEW_APP = "kunde-forhandsvisning";
 export const PORTAL_PREVIEW_BANNER = "Forhåndsvisning – slik ser kunden det";
+export const PORTAL_PREVIEW_NOTE = "Dette følger Synlig for kunden. Det som er skjult der, er skjult for kunden også.";
 
 export function isPortalPreview(search) {
   const params = typeof search === "string"
