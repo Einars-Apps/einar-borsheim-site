@@ -205,7 +205,7 @@ test("ferdig post har endelig pris utført ganger enhetspris, og gamle poster er
   assert.equal(opened.fikenLines[0].finalizedAt, null);
   assert.match(changeText(costChanges(closed, opened, prices).find((change) => change.field === "final")), /Posten er åpnet igjen/);
   const report = costReportText(summary, []);
-  assert.match(report, /Låst sluttpris \(ferdige poster\)/);
+  assert.match(report, /Ferdigstilt pris \(ferdige poster\)/);
   assert.equal(summary.remaining.exVat, summary.estimated.exVat - summary.finalized.exVat);
   assert.match(report, /Gjenstår \(estimert\)/);
   assert.match(report, /Ferdig – endelig pris/);
@@ -454,7 +454,7 @@ test("låst sluttmengde flytter totalen, og åpne poster bruker endret mengde", 
   assert.equal(changed.remaining.exVat, 1200);
   assert.equal(changed.baseline.exVat, 1000);
   assert.equal(changed.differenceExVat, 200);
-  assert.equal(costReportText(changed, []).includes("Låst sluttpris"), false);
+  assert.equal(costReportText(changed, []).includes("Ferdigstilt pris"), false);
 
   const withRequests = liveCost({
     cost: openCost,
@@ -527,7 +527,7 @@ test("Fiken-tilbud 10102: to låste poster flytter totalen, gjenstår er total m
   assert.equal(summary.remaining.exVat, summary.estimated.exVat - summary.finalized.exVat);
   assert.equal(summary.differenceExVat, -76250);
   assert.equal(summary.incurred.exVat, 206250);
-  assert.match(costReportText(summary, []), /Låst sluttpris \(ferdige poster\)/);
+  assert.match(costReportText(summary, []), /Ferdigstilt pris \(ferdige poster\)/);
 });
 
 test("budsjettrom kommer bare fra låste poster, minus godkjent tillegg", () => {

@@ -89,11 +89,11 @@ function confirmUnlock(label, onYes) {
       "aria-modal": "true",
       "aria-labelledby": "unlock-title",
     }, [
-      el("h2", { id: "unlock-title" }, "Låse opp endelig pris?"),
-      el("p", {}, `${label} er merket ferdig. Prisen er endelig og kan være fakturert. Hvis du låser opp, kan tallene endres igjen. Endringen blir logget.`),
+      el("h2", { id: "unlock-title" }, "Åpne ferdigstilt post?"),
+      el("p", {}, `${label} er merket ferdig. Prisen er endelig og kan være fakturert. Hvis du merker den som ikke ferdig, kan tallene endres igjen. Endringen blir logget.`),
       el("div", { class: "payment-actions" }, [
         button("Avbryt", { class: "btn btn-ghost", onClick: () => root.remove() }),
-        button("Lås opp likevel", {
+        button("Merk som ikke ferdig", {
           class: "btn btn-danger",
           onClick: () => {
             root.remove();
@@ -619,9 +619,13 @@ export function renderCostOverview({
           const target = Math.round(((Number(line.planned) || 0) + (Number(line.addition) || 0)) * 100) / 100;
           const done = Math.round((Number(line.done) || 0) * 100) / 100;
           const partial = target > done;
-          const question = partial
-            ? `${line.label} er bare delvis utført (${formatQty(done)} av ${formatQty(target)}). Merke den som ferdig likevel? Utført kan ikke endres etterpå, før du låser opp.`
-            : `Merke «${line.label}» som ferdig med endelig pris? Utført låses til du låser opp.`;
+          const question = roundSum
+            ? (done > target
+              ? `${line.label}: utført ${formatQty(done)} er over avtalt omfang ${formatQty(target)}. Sluttprisen blir den avtalte runden, ikke mer. Merk som ferdig?`
+              : `${line.label}: merke som ferdig med ${formatQty(done)} av ${formatQty(target)}? 1 er hele omfanget. Det skal ikke gjøres mer på posten.`)
+            : partial
+              ? `${line.label} er bare delvis utført (${formatQty(done)} av ${formatQty(target)}). Merke den som ferdig likevel? Utført kan ikke endres etterpå, før du merker posten som ikke ferdig.`
+              : `Merke «${line.label}» som ferdig med endelig pris? Utført kan ikke endres før posten merkes som ikke ferdig.`;
           if (!window.confirm(question)) {
             finalBox.checked = false;
             return;
@@ -736,11 +740,11 @@ export function renderCostOverview({
       : "Einar oppdaterer mengdene. Du kan ikke endre mengder eller priser."),
     ...extras,
     fromLines ? el("p", { class: "meta" }, `Opprinnelig tilbud: ${formatKr(baseline.exVat)} eks. mva. ${baseline.label}. Det er planlagt mengde ganger enhetspris, uten avtalt tillegg.`) : null,
-    fromLines ? el("p", { class: "meta" }, "Differansen er totalen mot det opprinnelige tilbudet. Låst sluttmengde og avtalt tillegg flytter totalen opp eller ned.") : null,
+    fromLines ? el("p", { class: "meta" }, "Differansen er totalen mot det opprinnelige tilbudet. Ferdigstilt mengde og avtalt tillegg flytter totalen opp eller ned.") : null,
     ...agreeQuoteActions(quotes, editable ? onAgreeQuote : null, audience),
     agreed,
     agreementNote,
-    lockedEx || lockedInc ? moneyLine("Låst sluttpris (ferdige poster)", lockedEx, lockedInc) : null,
+    lockedEx || lockedInc ? moneyLine("Ferdigstilt pris (ferdige poster)", lockedEx, lockedInc) : null,
     moneyLine("Gjenstår (estimert)", summary.remaining?.exVat || 0, summary.remaining?.incVat || 0),
     moneyLine("Totalt", summary.estimated.exVat, summary.estimated.incVat),
     moneyLine("Påløpt hittil", summary.incurred.exVat, summary.incurred.incVat),

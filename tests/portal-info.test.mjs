@@ -8,7 +8,9 @@ import {
   isRoundSumLine,
   lineAmountText,
   liveCost,
+  scopeChangeText,
 } from "../www/js/cost.js";
+import { householdAllocation } from "../www/js/households.js";
 import { customerOfferStatusLabel, offerShareText } from "../www/js/offers.js";
 import { customerRequestStatusLabel } from "../www/js/requests.js";
 
@@ -16,10 +18,12 @@ test("estimert og rund sum skilles, uten å finne på en pris", () => {
   assert.match(ESTIMATE_HELP, /kan fortsatt endre seg/);
   assert.match(ESTIMATE_HELP, /mengde ganger enhetspris/);
   assert.equal(/ikke låst ennå/.test(ESTIMATE_HELP), false);
-  assert.match(ROUND_SUM_HELP, /fast sum/);
-  assert.match(ROUND_SUM_HELP, /ikke øke den av seg selv/);
-  assert.match(ROUND_SUM_HELP, /bare der mindre omfang er avtalt/);
-  assert.equal(/\d/.test(ROUND_SUM_HELP), false);
+  assert.match(ROUND_SUM_HELP, /1 er hele det opprinnelige omfanget/);
+  assert.match(ROUND_SUM_HELP, /0,5 er halvparten/);
+  assert.match(ROUND_SUM_HELP, /Merk Ferdig/);
+  assert.match(ROUND_SUM_HELP, /ikke skal gjøres mer/);
+  assert.match(ROUND_SUM_HELP, /går ikke over den avtalte summen/);
+  assert.equal(/kr\s*\d/.test(ROUND_SUM_HELP), false);
   assert.equal(/arealet/.test(ROUND_SUM_HELP), false);
   assert.match(COST_INFO_NOTE, /ta kontakt med Einar/);
   assert.match(COST_INFO_NOTE, /faktureres etter avtale/);
@@ -43,9 +47,10 @@ test("estimert og rund sum skilles, uten å finne på en pris", () => {
   const unit = summary.lines.find((line) => line.id === "dren");
   assert.equal(round.plannedSum, 1000);
   assert.equal(round.doneSum, 2000);
+  assert.equal(round.countedEx, 1000);
   assert.equal(summary.estimated.exVat, 2000);
   assert.match(lineAmountText(round), /Rund sum kr/);
-  assert.match(lineAmountText(round), /øker ikke rundsummen/);
+  assert.match(lineAmountText(round), /øker ikke summen/);
   assert.equal(lineAmountText(unit), "");
   const locked = liveCost({
     cost: {
@@ -62,7 +67,7 @@ test("estimert og rund sum skilles, uten å finne på en pris", () => {
     prices: {},
     items: [],
   }).lines[0];
-  assert.match(lineAmountText(locked), /Låst beløp/);
+  assert.match(lineAmountText(locked), /Ferdig beløp/);
   assert.match(lineAmountText(locked), /Avtalt omfang: Halve jobben var ikke mulig/);
   assert.equal(locked.doneSum, 500);
 });
@@ -100,4 +105,92 @@ test("kundetekst om tilbud og tillegg er informasjon, ikke bestilling", () => {
   assert.equal(costView.includes("Forhåndsvisning hvis du godkjenner valget"), false);
   assert.equal(costView.includes("godkjent av kunden"), false);
   assert.equal(costView.includes("Estimert = ikke låst"), false);
+  assert.equal(/Lås opp|Låst sluttpris|låser opp/.test(costView), false);
+  assert.match(costView, /Ferdigstilt pris \(ferdige poster\)/);
+  assert.match(costView, /Merk som ikke ferdig/);
+});
+
+test("rund sum: hel, halv ferdig, uferdig, og ikke stille økning", () => {
+  const prices = {};
+  const full = liveCost({
+    cost: { fikenLines: [{ id: "rs", label: "Masse (RS)", planned: 1, done: 1, unitPrice: 1000, final: true }] },
+    prices,
+    items: [],
+  });
+  assert.equal(full.lines[0].countedEx, 1000);
+  assert.equal(full.estimated.exVat, 1000);
+  assert.equal(full.finalized.exVat, 1000);
+  assert.equal(full.remaining.exVat, 0);
+  assert.equal(full.budget.changes.length, 0);
+
+  const half = liveCost({
+    cost: { fikenLines: [{ id: "rs", label: "Masse (RS)", planned: 1, done: 0.5, unitPrice: 1000, final: true, finalNote: "Halve arealet" }] },
+    prices,
+    items: [],
+  });
+  assert.equal(half.lines[0].countedEx, 500);
+  assert.equal(half.estimated.exVat, 500);
+  assert.equal(half.finalized.exVat, 500);
+  assert.equal(half.remaining.exVat, 0);
+  assert.equal(half.differenceExVat, -500);
+  assert.equal(half.budget.changes.length, 1);
+  assert.match(scopeChangeText(half.budget.changes[0]), /planlagt 1, utført 0,5/);
+  assert.match(scopeChangeText(half.budget.changes[0]), /−/);
+  assert.equal(/rabatt|discount/i.test(scopeChangeText(half.budget.changes[0])), false);
+  const homes = householdAllocation({
+    households: [
+      { id: "a", name: "Første", share: 50 },
+      { id: "b", name: "Andre", share: 50 },
+    ],
+    totalEx: half.estimated.exVat,
+    totalInc: half.estimated.incVat,
+    payments: [],
+  });
+  assert.equal(homes.totalEx, 500);
+  assert.equal(homes.rows[0].exVat, 250);
+  assert.equal(homes.rows[1].exVat, 250);
+
+  const open = liveCost({
+    cost: { fikenLines: [{ id: "rs", label: "Masse (RS)", planned: 1, done: 0.5, unitPrice: 1000 }] },
+    prices,
+    items: [],
+  });
+  assert.equal(open.lines[0].countedEx, 1000);
+  assert.equal(open.estimated.exVat, 1000);
+  assert.equal(open.finalized.exVat, 0);
+  assert.equal(open.remaining.exVat, 1000);
+  assert.equal(open.budget.changes.length, 0);
+  assert.match(lineAmountText(open.lines[0]), /endrer ikke rundsummen før posten er merket Ferdig/);
+
+  const overDone = liveCost({
+    cost: { fikenLines: [{ id: "rs", label: "Masse (RS)", planned: 1, done: 1.5, unitPrice: 1000, final: true }] },
+    prices,
+    items: [],
+  });
+  assert.equal(overDone.lines[0].done, 1.5);
+  assert.equal(overDone.lines[0].countedEx, 1000);
+  assert.equal(overDone.estimated.exVat, 1000);
+  assert.equal(overDone.finalized.exVat, 1000);
+  assert.equal(overDone.differenceExVat, 0);
+  assert.equal(overDone.budget.changes.length, 0);
+  assert.match(lineAmountText(overDone.lines[0]), /øker ikke summen/);
+
+  const agreedMore = liveCost({
+    cost: { fikenLines: [{ id: "rs", label: "Masse (RS)", planned: 1, addition: 0.5, done: 1.5, unitPrice: 1000, final: true }] },
+    prices,
+    items: [],
+  });
+  assert.equal(agreedMore.lines[0].countedEx, 1500);
+  assert.equal(agreedMore.estimated.exVat, 1500);
+  assert.equal(agreedMore.budget.changes.length, 1);
+  assert.equal(agreedMore.budget.changes[0].deltaEx, 500);
+
+  const unit = liveCost({
+    cost: { fikenLines: [{ id: "meter", label: "Drenering (meter)", unit: "meter", planned: 10, done: 12, unitPrice: 100, final: true }] },
+    prices,
+    items: [],
+  });
+  assert.equal(unit.lines[0].countedEx, 1200);
+  assert.equal(unit.estimated.exVat, 1200);
+  assert.equal(unit.differenceExVat, 200);
 });
