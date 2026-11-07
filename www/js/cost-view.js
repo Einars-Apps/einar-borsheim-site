@@ -12,6 +12,11 @@ import {
   paymentStatusLabel,
   paymentTotals,
   budgetStatusText,
+  COST_INFO_NOTE,
+  ESTIMATE_HELP,
+  isRoundSumLine,
+  lineAmountText,
+  ROUND_SUM_HELP,
   scopeChangeText,
   signedKr,
   signedQty,
@@ -454,7 +459,9 @@ export function renderCustomerHistory({
   return el("div", { class: "history" }, [
     el("h3", { class: "h-app" }, "Historikk"),
     el("p", { class: "meta" }, "Tilbudet og det som er utført vises hver for seg. Små rettelser som ble gjort med en gang, er slått sammen."),
-    sent ? el("p", { class: "meta" }, "«Sendt» vises på dagen posten ble opprettet. Godkjenningen har sin egen dato.") : null,
+    sent ? el("p", { class: "meta" }, audience === "kunde"
+      ? "«Sendt» vises på dagen posten ble delt med deg."
+      : "«Sendt» vises på dagen posten ble opprettet. Avtalen har sin egen dato.") : null,
     historySection(
       "Tilbud / avtalt",
       "Avtalt mengde og pris.",
@@ -476,14 +483,16 @@ export function renderCustomerHistory({
   ]);
 }
 
-function agreeQuoteActions(quotes, onAgreeQuote) {
+function agreeQuoteActions(quotes, onAgreeQuote, audience) {
   const nodes = [];
   for (const quote of quotes || []) {
     if (!quote) continue;
     const number = String(quote.number || "").trim();
     const name = number ? `Fiken-tilbud ${number}` : "Fiken-tilbudet";
     if (quote.agreed === true || String(quote.accepted || "").trim()) {
-      const how = String(quote.accepted || "").trim() ? "Akseptert i Fiken" : "Merket som avtalt";
+      const how = audience === "kunde"
+        ? "står som avtalt i Fiken"
+        : (String(quote.accepted || "").trim() ? "Akseptert i Fiken" : "Merket som avtalt");
       nodes.push(el("p", { class: "meta" }, `${name}: ${how}.`));
       continue;
     }
@@ -562,13 +571,18 @@ export function renderCostOverview({
     const facts = story.posts[line.id];
     const shownUnit = unitWord(line.label, line.unit) || "stk";
     const deviation = `${signedQty(line.deviation)} ${shownUnit}`;
+    const roundSum = isRoundSumLine(line);
     const body = [
       el("p", { class: "cost-line-title" }, !editable && facts ? customerPostSummary(line.label, facts) : line.label),
       line.final
         ? el("p", { class: "final-badge" }, "Ferdig")
-        : el("p", { class: "estimate-badge" }, "Estimert"),
+        : roundSum
+          ? el("p", { class: "estimate-badge round-sum-badge", title: ROUND_SUM_HELP }, "Rund sum")
+          : el("p", { class: "estimate-badge", title: ESTIMATE_HELP }, "Estimert"),
+      !line.final && !roundSum ? el("p", { class: "meta estimate-help" }, ESTIMATE_HELP) : null,
+      roundSum ? el("p", { class: "meta round-sum-help" }, ROUND_SUM_HELP) : null,
       line.source ? el("p", { class: "meta" }, line.source) : null,
-      editable && line.fromFiken ? null : el("p", { class: "meta" }, `à ${formatKr(line.unitPrice)} eks. mva`),
+      editable && line.fromFiken ? null : (roundSum && !editable ? null : el("p", { class: "meta" }, `à ${formatKr(line.unitPrice)} eks. mva`)),
     ];
     if (editable && line.fromFiken) {
       const price = el("input", {
@@ -638,9 +652,11 @@ export function renderCostOverview({
       );
     }
     body.push(
-      el("p", { class: "meta" }, line.final
-        ? `${partialFinalText(line) ? `${partialFinalText(line)}. ` : ""}Endelig pris ${formatKr(line.doneSum)} eks. mva. Det er utført mengde ganger enhetspris.`
-        : `Avvik ${deviation}. Estimert ${formatKr(line.plannedSum)}. Påløpt ${formatKr(line.doneSum)}.`),
+      el("p", { class: "meta" }, roundSum
+        ? lineAmountText(line)
+        : line.final
+          ? `${partialFinalText(line) ? `${partialFinalText(line)}. ` : ""}Endelig pris ${formatKr(line.doneSum)} eks. mva. Det er utført mengde ganger enhetspris.`
+          : `Avvik ${deviation}. Estimert ${formatKr(line.plannedSum)}. Påløpt ${formatKr(line.doneSum)}.`),
     );
     for (const tillegg of facts?.tillegg || []) body.push(el("p", { class: "post-tillegg" }, tillegg.text));
     for (const row of placed.linked.get(line.id) || []) {
@@ -692,14 +708,25 @@ export function renderCostOverview({
   const budgetNote = budgetText
     ? el("div", { class: budgetUnder ? "budget-under" : "budget-over", role: "status" }, [
       el("p", {}, budgetText),
-      budgetUnder && requestHref
+      budgetUnder && requestHref && audience !== "kunde"
         ? el("a", { class: "btn btn-primary", href: requestHref }, "Send en forespørsel")
         : null,
     ])
     : null;
 
+  const agreementNote = audience === "kunde"
+    ? (approved.length
+      ? el("div", { class: "stack" }, approved.map((row) => el("p", { class: "meta" }, `Avtalt: ${row.title}${row.name ? ` – ${row.name}` : ""} ${formatKr(row.exVat)} eks. mva`)))
+      : el("p", { class: "meta" }, "Tilbud og endringer som er avtalt, vises her. De er til informasjon."))
+    : (approved.length
+      ? el("div", { class: "stack" }, approved.map((row) => el("p", { class: "meta" }, `Godkjent: ${row.title}${row.name ? ` – ${row.name}` : ""} ${formatKr(row.exVat)} eks. mva`)))
+      : el("p", { class: "meta" }, fromLines
+        ? "Ingen poster i Tilbud og endringer er merket som avtalt ennå. Fiken-linjene er ikke den avtalen. Kunden ser en sendt post som informasjon."
+        : "Ingen avtalte poster i Tilbud og endringer ennå."));
+
   return el("section", { class: "card continue cost-box" }, [
     el("h2", { class: "h-app" }, "Nåværende kostnad"),
+    audience === "kunde" ? el("p", { class: "meta cost-info-note" }, COST_INFO_NOTE) : null,
     scopeNote,
     budgetNote,
     el("p", { class: "meta" }, editable
@@ -710,13 +737,9 @@ export function renderCostOverview({
     ...extras,
     fromLines ? el("p", { class: "meta" }, `Opprinnelig tilbud: ${formatKr(baseline.exVat)} eks. mva. ${baseline.label}. Det er planlagt mengde ganger enhetspris, uten avtalt tillegg.`) : null,
     fromLines ? el("p", { class: "meta" }, "Differansen er totalen mot det opprinnelige tilbudet. Låst sluttmengde og avtalt tillegg flytter totalen opp eller ned.") : null,
-    ...agreeQuoteActions(quotes, editable ? onAgreeQuote : null),
+    ...agreeQuoteActions(quotes, editable ? onAgreeQuote : null, audience),
     agreed,
-    approved.length
-      ? el("div", { class: "stack" }, approved.map((row) => el("p", { class: "meta" }, `Godkjent: ${row.title}${row.name ? ` – ${row.name}` : ""} ${formatKr(row.exVat)} eks. mva`)))
-      : el("p", { class: "meta" }, fromLines
-        ? "Ingen poster i Tilbud og endringer er godkjent av kunden ennå. Fiken-linjene er ikke den godkjenningen. Kunden godkjenner en post først når du har sendt den."
-        : "Ingen godkjente poster i Tilbud og endringer ennå."),
+    agreementNote,
     lockedEx || lockedInc ? moneyLine("Låst sluttpris (ferdige poster)", lockedEx, lockedInc) : null,
     moneyLine("Gjenstår (estimert)", summary.remaining?.exVat || 0, summary.remaining?.incVat || 0),
     moneyLine("Totalt", summary.estimated.exVat, summary.estimated.incVat),
@@ -746,8 +769,8 @@ export function renderCostOverview({
       showPayments: true,
       heading: "h3",
     }) : null,
-    showPreview && summary.previewDeltaExVat
-      ? el("p", { class: "cost-preview" }, `Forhåndsvisning hvis du godkjenner valget: ${formatKr(summary.preview.exVat)} eks. mva, ${formatKr(summary.preview.incVat)} inkl. mva. Det er ${signedKr(summary.previewDeltaExVat)} eks. mva mot nåværende estimat.`)
+    showPreview && audience !== "kunde" && summary.previewDeltaExVat
+      ? el("p", { class: "cost-preview" }, `Forhåndsvisning av valgt løsning: ${formatKr(summary.preview.exVat)} eks. mva, ${formatKr(summary.preview.incVat)} inkl. mva. Det er ${signedKr(summary.previewDeltaExVat)} eks. mva mot nåværende estimat.`)
       : null,
     lines,
     extraBlock.length ? el("section", { class: "extra-box" }, extraBlock) : null,

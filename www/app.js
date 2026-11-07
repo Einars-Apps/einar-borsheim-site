@@ -1433,9 +1433,9 @@ function itemRow(projectId, item) {
   const pills = el("span", { class: "pills" });
   if (item.approved === false) pills.append(pill("Venter", "pill-warn"));
   if (item.step) pills.append(pill(item.step));
-  if (item.approvalRequested && item.approvalStatus === "godkjent") pills.append(pill("Godkjent", "pill-ok"));
-  else if (item.approvalRequested && item.approvalStatus === "avslatt") pills.append(pill("Avslått", "pill-warn"));
-  else if (item.approvalRequested) pills.append(pill("Venter på kunde", "pill-warn"));
+  if (item.approvalRequested && item.approvalStatus === "godkjent") pills.append(pill("Avtalt", "pill-ok"));
+  else if (item.approvalRequested && item.approvalStatus === "avslatt") pills.append(pill("Ikke tatt med", "pill-warn"));
+  else if (item.approvalRequested) pills.append(pill("Vises for kunden", "pill-warn"));
   if (item.reference) pills.append(pill("Referanse", "pill-ok"));
   if (item.queued) pills.append(pill(item.error ? "Ikke sendt" : "På telefonen", "pill-warn"));
   body.append(pills);
@@ -3001,7 +3001,7 @@ function customerBox(project) {
   ));
   return el("section", { class: "card continue customer-box" }, [
     el("h2", { class: "h-app" }, "Kunde"),
-    el("p", { class: "meta" }, "Navn og lenke kunden bruker for å se prosjektet, sende meldinger og godkjenne tilbud. Flere personer kan åpne den samme lenken."),
+    el("p", { class: "meta" }, "Navn og lenke kunden bruker for å se prosjektet, sende meldinger og lese tilbud og endringer. Kunden bestiller eller godkjenner ikke i portalen. Flere personer kan åpne den samme lenken."),
     households.length ? el("p", { class: "meta" }, "Alle husstandene bruker denne ene lenken. Kopier den, eller send den til hver e-post.") : null,
     field("Kundenavn", name),
     field("Lenke til kunden", link),
@@ -3478,14 +3478,10 @@ function mountSection(route) {
   const composer = el("form", { class: "card continue", hidden: true });
   const titleInput = el("input", { type: "text", maxlength: "140", placeholder: "Kort overskrift" });
   const textInput = el("textarea", { rows: "4", maxlength: "4000", placeholder: "Hva skjedde?" });
-  const askApproval = el("input", { type: "checkbox" });
   composer.append(
     kind === "bilde" ? null : field("Overskrift", titleInput),
     field("Tekst", textInput),
     micButton(textInput),
-    kind === "endring" || kind === "tilbud"
-      ? el("label", { class: "checkline" }, [askApproval, el("span", {}, "Be kunden godkjenne dette")])
-      : null,
     button("Lagre notat", { type: "submit", class: "btn btn-primary btn-block" })
   );
   composer.addEventListener("submit", async (event) => {
@@ -3505,8 +3501,8 @@ function mountSection(route) {
         createdBy: user?.uid || "",
         authorName: "Einar",
         coverUrl: "",
-        approvalRequested: (kind === "endring" || kind === "tilbud") && askApproval.checked,
-        approvalStatus: (kind === "endring" || kind === "tilbud") && askApproval.checked ? "venter" : "",
+        approvalRequested: false,
+        approvalStatus: "",
         createdAt: stamp(),
         updatedAt: stamp(),
       });
@@ -3743,10 +3739,23 @@ function mountItem(route) {
           await ref.update({ approvalRequested: false, approvalStatus: "", updatedAt: stamp() });
           toast("Posten er et utkast igjen");
         },
+        onAgree: async (alternativeId) => {
+          const patch = {
+            approvalStatus: "godkjent",
+            approvedAt: stamp(),
+            approvedBy: user?.uid || "",
+            approvedByName: "Einar",
+            updatedAt: stamp(),
+          };
+          const chosen = String(alternativeId || "").trim();
+          if (chosen) patch.selectedAlternativeId = chosen;
+          await ref.update(patch);
+          toast("Merket som avtalt");
+        },
         onFiken: (fikenKind) => sendOfferToFiken(projectById(route.projectId), data, fikenKind),
         onFikenProject: () => sendOfferToFikenProject(projectById(route.projectId), { ...data, id: route.itemId }),
       }));
-      if (data.approvalRequested) head.append(el("p", { class: "meta" }, approvalLine(data) || "Venter på kunden"));
+      if (data.approvalRequested) head.append(el("p", { class: "meta" }, approvalLine(data) || "Vises for kunden som informasjon"));
     }
     if (data.approved !== false) {
       const box = el("input", { type: "checkbox" });

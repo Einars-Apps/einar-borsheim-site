@@ -1,7 +1,8 @@
-import { button, el, field } from "./dom.js";
-import { formatQty } from "./cost.js";
+import { el, field } from "./dom.js";
+import { COST_INFO_NOTE, formatQty } from "./cost.js";
 import {
   REQUEST_UNITS,
+  customerRequestStatusLabel,
   parseRequestNumber,
   requestPriceLines,
   requestStatus,
@@ -25,81 +26,39 @@ function statusPill(request) {
   return el("p", {}, el("span", { class: `pill ${tone}` }, requestStatusLabel(request)));
 }
 
-export function renderCustomerRequests({ requests = [], onCreate, onDecide }) {
-  const text = el("textarea", {
-    rows: "4",
-    maxlength: "2000",
-    placeholder: "Beskriv hva du ønsker, for eksempel ekstra drenering langs garasjen",
-  });
-  const note = el("p", { class: "meta", hidden: true });
-  const form = el("form", { class: "request-form" }, [
-    field("Hva vil du ha pris på?", text),
-    el("button", { type: "submit", class: "btn btn-primary" }, "Send forespørsel"),
-    note,
-  ]);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const value = text.value.trim();
-    if (!value) {
-      note.hidden = false;
-      note.textContent = "Skriv hva du ønsker.";
-      return;
-    }
-    form.querySelector("button").disabled = true;
-    note.hidden = false;
-    note.textContent = "Sender…";
-    try {
-      await onCreate?.(value);
-      text.value = "";
-      note.textContent = "Forespørselen er sendt. Einar svarer med pris. Ingenting legges til før du godkjenner.";
-    } catch (error) {
-      console.error(error);
-      note.textContent = "Ønsket ble ikke sendt. Prøv igjen.";
-    } finally {
-      form.querySelector("button").disabled = false;
-    }
-  });
+export function renderCustomerRequests({ requests = [] } = {}) {
   const list = el("div", { class: "request-list" });
-  if (!requests.length) list.append(el("p", { class: "meta" }, "Du har ingen forespørsler ennå."));
-  for (const request of requests) list.append(customerCard(request, onDecide));
+  if (!requests.length) list.append(el("p", { class: "meta" }, "Ingenting ligger her ennå."));
+  for (const request of requests) list.append(customerCard(request));
   return el("section", { class: "request-box" }, [
-    el("h2", { class: "h-app" }, "Forespør tillegg / be om pris"),
-    el("p", { class: "meta" }, "Beskriv tillegget du vil ha pris på. Einar svarer med forklaring og pris. Du kan godkjenne eller avslå. Ingenting legges til før du godkjenner."),
-    form,
+    el("h2", { class: "h-app" }, "Tillegg"),
+    el("p", { class: "meta" }, COST_INFO_NOTE),
+    el("p", { class: "meta" }, "Det som ligger her, er bare til informasjon. Du bestiller eller godkjenner ikke noe i portalen."),
     list,
   ]);
 }
 
-function customerCard(request, onDecide) {
+function customerCard(request) {
   const status = requestStatus(request);
   const body = [
-    statusPill(request),
+    el("p", {}, el("span", { class: "pill" }, customerRequestStatusLabel(request))),
     request.text ? el("p", { class: "pre" }, request.text) : null,
   ];
   if (status === "ny") {
-    body.push(el("p", { class: "meta" }, "Einar har ikke svart ennå. Ingenting er lagt til prisen."));
+    body.push(el("p", { class: "meta" }, "Einar har fått meldingen. Ingenting er lagt til prisen."));
   } else {
     body.push(el("h3", { class: "request-answer-title" }, "Svar fra Einar"));
     request.answer ? body.push(el("p", { class: "pre" }, request.answer)) : null;
     body.push(priceTable(request));
   }
   if (status === "besvart") {
-    body.push(el("div", { class: "k-actions" }, [
-      button("Godkjenn", {
-        class: "btn btn-primary",
-        onClick: () => onDecide?.(request, "godkjent"),
-      }),
-      button("Avslå", {
-        class: "btn btn-ghost",
-        onClick: () => onDecide?.(request, "avslatt"),
-      }),
-    ]));
+    body.push(el("p", { class: "meta" }, "Svaret er til informasjon. Ta kontakt med Einar hvis du vil gå videre. Ingenting legges til før dere er enige."));
   }
   if (status === "godkjent") {
-    body.push(el("p", { class: "meta" }, "Du godkjente svaret. Det legges inn i kostnaden."));
+    body.push(el("p", { class: "meta" }, "Dette er tatt med i kostnaden."));
   }
   if (status === "avslatt") {
-    body.push(el("p", { class: "meta" }, "Du avslo svaret. Prisen ble ikke endret."));
+    body.push(el("p", { class: "meta" }, "Dette ble ikke tatt med. Prisen ble ikke endret."));
   }
   return el("article", { class: "request-card" }, body);
 }
@@ -115,7 +74,7 @@ export function renderAdminRequests({ requests = [], lines = [], onAnswer }) {
   for (const request of requests) list.append(adminCard(request, lines, onAnswer));
   return el("section", { class: "card request-box", id: "seksjon-foresporsler" }, [
     el("h2", { class: "h-app" }, "Forespørsler om tillegg"),
-    el("p", { class: "meta" }, "Svar med en forklaring og en prislinje. Kunden godkjenner eller avslår. Godkjent antall legges i Avtalt tillegg, eller som en ny post."),
+    el("p", { class: "meta" }, "Svar med en forklaring og en prislinje. Kunden ser svaret som informasjon og kan ikke godkjenne i portalen. Avtalt mengde legger du inn selv under Avtalt tillegg, eller som en ny post."),
     list,
   ]);
 }
@@ -130,7 +89,7 @@ function adminCard(request, lines, onAnswer) {
   else {
     request.answer ? body.push(el("p", { class: "pre" }, request.answer)) : null;
     body.push(priceTable(request));
-    if (status === "besvart") body.push(el("p", { class: "meta" }, "Venter på at kunden skal godkjenne eller avslå."));
+    if (status === "besvart") body.push(el("p", { class: "meta" }, "Svaret ligger hos kunden som informasjon."));
     if (status === "godkjent") {
       body.push(el("p", { class: "meta" }, request.appliedAt
         ? "Godkjent og lagt inn i kostnaden."
@@ -211,7 +170,7 @@ function answerForm(request, lines, onAnswer) {
         quantity: qty,
         unitPrice,
       });
-      note.textContent = "Svaret er sendt. Kunden kan godkjenne eller avslå.";
+      note.textContent = "Svaret er sendt. Kunden ser det som informasjon.";
     } catch (error) {
       console.error(error);
       note.textContent = "Svaret ble ikke sendt.";

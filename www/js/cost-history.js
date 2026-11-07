@@ -399,27 +399,35 @@ function offerEvents(item, audience, now) {
   const who = audience === "kunde" ? "Du" : (String(item.approvedByName || "").trim() || "Kunden");
   const date = shortDay(whenStamp(item.approvedAt), now);
   const verb = status === "godkjent" ? "godkjente" : "avslo";
-  const title = date ? `${who} ${verb} ${word} ${date}.` : `${who} ${verb} ${word}.`;
+  const title = audience === "kunde"
+    ? (status === "godkjent"
+      ? (date ? `Avtalt ${date}.` : "Avtalt.")
+      : (date ? `Ikke tatt med ${date}.` : "Ikke tatt med."))
+    : (date ? `${who} ${verb} ${word} ${date}.` : `${who} ${verb} ${word}.`);
   const lines = [];
   let money = null;
   if (status === "godkjent") {
     const alternative = chosenAlternative(item);
     if (alternative) {
       money = alternativeTotals(alternative).exVat;
-      if (item.kind === "endring") lines.push(`Endring lagt til: ${name}. ${alternative.name || "Valgt løsning"}.`);
-      else lines.push(`Valgt løsning: ${alternative.name || "Valgt løsning"}. ${alternativePriceText(alternative)}.`);
+      if (item.kind === "endring") lines.push(`Endring lagt til: ${name}. ${alternative.name || "Avtalt løsning"}.`);
+      else lines.push(`Avtalt løsning: ${alternative.name || "Avtalt løsning"}. ${alternativePriceText(alternative)}.`);
       lines.push(same(money, 0) ? "kr 0,00, inkludert. Prisen øker ikke." : `(${signedKr(money)} eks. mva)`);
+    } else if (audience === "kunde") {
+      lines.push("Beløpet står ikke på posten, så det legges ikke til en sum.");
     } else {
-      lines.push("Godkjent. Beløpet står ikke på posten, så det legges ikke til en sum.");
+      lines.push("Avtalt. Beløpet står ikke på posten, så det legges ikke til en sum.");
     }
   } else {
     lines.push("Prisen ble ikke endret.");
     money = 0;
   }
+  const notedBy = audience === "kunde" ? (String(item.approvedByName || "").trim() || "Einar") : who;
   events.push({
-    ...eventShell({ time: whenStamp(item.approvedAt) ?? whenStamp(item.createdAt), byName: who }, "tilbud", status === "godkjent" ? "check" : "alert", title, lines),
+    ...eventShell({ time: whenStamp(item.approvedAt) ?? whenStamp(item.createdAt), byName: notedBy }, "tilbud", status === "godkjent" ? "check" : "alert", title, lines),
     actor: "kunde",
-    actorLabel: who,
+    actorLabel: notedBy,
+    audience,
     money,
     kind: status === "godkjent" ? "godkjent" : "avslatt",
   });
@@ -484,7 +492,8 @@ function addRunningSums(events) {
       if (event.money == null) approvedKnown = false;
       else approvedSum = round2(approvedSum + event.money);
       if (approvedKnown) {
-        event.lines.push(`Sum godkjente poster er nå ${formatKr(approvedSum)} eks. mva.`);
+        const word = event.audience === "kunde" ? "avtalte" : "godkjente";
+        event.lines.push(`Sum ${word} poster er nå ${formatKr(approvedSum)} eks. mva.`);
       }
     }
   }

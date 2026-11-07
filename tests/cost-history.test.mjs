@@ -303,10 +303,11 @@ test("kunden ser godkjenning i klarspråk, og utkast skjules", () => {
   const draft = { ...item, id: "draft", title: "Utkast", approvalRequested: false, approvalStatus: "", selectedAlternativeId: "" };
   const history = buildCustomerHistory({ now, items: [item, draft], audience: "kunde" });
   assert.ok(history.tilbud.some((row) => row.title === "Tilbudet ble sendt"));
-  assert.ok(history.tilbud.some((row) => row.title.startsWith("Du godkjente tilbudet 12. okt.")));
+  assert.ok(history.tilbud.some((row) => row.title.startsWith("Avtalt 12. okt.")));
   assert.equal(history.tilbud.some((row) => row.title.includes("Utkast")), false);
+  assert.equal(history.tilbud.some((row) => /godkjente/.test(row.title)), false);
   const approved = history.tilbud.find((row) => row.kind === "godkjent");
-  assert.match(approved.lines.join(" "), /Sum godkjente poster er nå/);
+  assert.match(approved.lines.join(" "), /Sum avtalte poster er nå/);
   const einar = buildCustomerHistory({ now, items: [draft], audience: "einar" });
   assert.ok(einar.tilbud.some((row) => row.lines.some((line) => line.includes("ikke sendt"))));
 });

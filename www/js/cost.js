@@ -52,6 +52,31 @@ export function signedQty(value) {
   return formatQty(0);
 }
 
+export const COST_INFO_NOTE = "Oversikten viser utført og avtalt arbeid. Ønsker du noe ekstra, ta kontakt med Einar – arbeid utover tilbudslinjene faktureres etter avtale.";
+export const ESTIMATE_HELP = "Estimert: posten er ikke ferdig. Summen er mengde ganger enhetspris, og den kan fortsatt endre seg til posten er låst.";
+export const ROUND_SUM_HELP = "Rund sum: beløpet er en fast sum, ikke enhetspris ganger mengde. Mer utført arbeid skal ikke øke den av seg selv. En lavere sum gjelder bare der mindre omfang er avtalt.";
+
+export function isRoundSumLine(line) {
+  const unit = String(line?.unit || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (unit === "rs" || unit === "rund sum" || unit === "rundsum") return true;
+  const label = String(line?.label || "");
+  return /\(\s*rs\s*\)/i.test(label) || /\brund\s+sum\b/i.test(label);
+}
+
+export function lineAmountText(line) {
+  if (!isRoundSumLine(line)) return "";
+  if (line?.final === true) {
+    const partial = partialFinalText(line);
+    const note = String(line?.finalNote || "").replace(/\s+/g, " ").trim();
+    return [
+      partial,
+      `Låst beløp ${formatKr(line.doneSum)} eks. mva.`,
+      note ? `Avtalt omfang: ${note}.` : "",
+    ].filter(Boolean).join(" ");
+  }
+  return `Rund sum ${formatKr(line.plannedSum)} eks. mva. Påløpt ${formatKr(line.doneSum)} eks. mva øker ikke rundsummen.`;
+}
+
 export function emptyCost(prices = DEFAULT_PRICES) {
   const lines = {};
   for (const [id, , , key] of PRICE_LINES) {
@@ -440,7 +465,7 @@ export function budgetStatusText(budget) {
   if (!budget || budget.direction === "even" || !(budget.exVat > 0)) return "";
   const money = `${formatKr(budget.exVat)} eks. mva (${formatKr(budget.incVat)} inkl. mva)`;
   if (budget.direction === "under") {
-    return `Under tilbudet så langt: ${money}. Ved ønske om ekstra arbeid kan du sende en forespørsel.`;
+    return `Under tilbudet så langt: ${money}.`;
   }
   return `Over tilbudet så langt: ${money}. Det kommer av avtalt tillegg og avvik på ferdige poster.`;
 }
@@ -845,10 +870,10 @@ export function costReportText(summary, history = [], payments = []) {
     `Påløpt hittil ${formatKr(summary?.incurred?.exVat || 0)} eks. mva, ${formatKr(summary?.incurred?.incVat || 0)} inkl. mva.`,
     `Differanse mot opprinnelig tilbud: ${signedKr(summary?.differenceExVat || 0)} eks. mva, ${signedKr(summary?.differenceIncVat || 0)} inkl. mva.`,
     "",
-    "Godkjente alternativer",
+    "Avtalte poster",
   ];
   const approved = (summary?.offers?.rows || []).filter((row) => row.status === "godkjent");
-  if (!approved.length) lines.push("Ingen godkjente poster.");
+  if (!approved.length) lines.push("Ingen avtalte poster.");
   for (const row of approved) {
     lines.push(`${row.title}${row.name ? `: ${row.name}` : ""} ${formatKr(row.exVat)} eks. mva.`);
   }
@@ -858,9 +883,11 @@ export function costReportText(summary, history = [], payments = []) {
     const source = line.source ? ` (${line.source})` : "";
     const tillegg = line.addition ? `, avtalt tillegg ${formatQty(line.addition)} ${line.unit}` : "";
     const partial = partialFinalText(line);
-    const priceNote = line.final
-      ? `${partial ? `${partial}. ` : ""}Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva.`
-      : `Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva.`;
+    const priceNote = isRoundSumLine(line)
+      ? `${lineAmountText(line)} ${ROUND_SUM_HELP}`
+      : line.final
+        ? `${partial ? `${partial}. ` : ""}Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva.`
+        : `Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva. ${ESTIMATE_HELP}`;
     lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}${tillegg}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. ${priceNote} Enhetspris ${formatKr(line.unitPrice)}.`);
   }
   lines.push("", "Tilleggsarbeider");

@@ -45,6 +45,13 @@ export function offerStatusLabel(status) {
   return STATUS_LABEL[status] || "Utkast";
 }
 
+export function customerOfferStatusLabel(status) {
+  if (status === "godkjent") return "Avtalt";
+  if (status === "avslatt") return "Ikke tatt med";
+  if (status === "sendt") return "Til informasjon";
+  return offerStatusLabel(status);
+}
+
 export function formatKr(value) {
   const number = Number.isFinite(value) ? value : 0;
   const text = new Intl.NumberFormat("nb-NO", {
@@ -240,7 +247,7 @@ export function quickOfferFields({ description, priceExVat } = {}) {
 
 export function offerShareText(project, url) {
   const who = project?.customerName ? ` ${project.customerName}` : "";
-  return `Hei${who}! Her er tilbudet for «${project?.name || "oppdraget"}». Velg løsning og godkjenn her: ${url}`;
+  return `Hei${who}! Her er tilbudet for «${project?.name || "oppdraget"}». Det er til informasjon, og du finner det her: ${url}`;
 }
 
 export function shareTargets({ phone, email, text, url, subject = "Tilbud" } = {}) {
