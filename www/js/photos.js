@@ -190,6 +190,17 @@ export function publicPhotos(photos) {
   return groupPhotos(visible).map((stack) => stack.best).filter(Boolean);
 }
 
+// Kunden skal se hvert godkjente bilde. publicPhotos viser bare det beste i en gruppe,
+// og bilder på samme post blir én gruppe.
+export function sharedWithCustomer(photos) {
+  return (photos || []).filter((photo) => (
+    photo
+    && !isTrashedPhoto(photo)
+    && photo.approved === true
+    && String(photo.url || "").trim()
+  ));
+}
+
 export function annotatePhotos(items, photosByItem = {}) {
   const flat = [];
   for (const item of items || []) {

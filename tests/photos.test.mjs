@@ -11,6 +11,7 @@ import {
   photoMillis,
   publicPhotos,
   redundantPhotoItem,
+  sharedWithCustomer,
   representativePhotos,
 } from "../www/js/photos.js";
 
@@ -114,6 +115,18 @@ test("manuell gruppe samler valgte bilder og tar ikke med naboen i tid", () => {
   assert.deepEqual(manual.photos.map((photo) => photo.id).sort(), ["a", "b"]);
   assert.equal(stacks.some((stack) => stack.photos.some((photo) => photo.id === "c") && stack.photos.length === 1), true);
   assert.match(newGroupId(t0), /^grp-/);
+});
+
+test("kunden ser hvert godkjente bilde, også flere på samme post", () => {
+  const photos = [
+    shot("a", { itemId: "samme", createdAt: t0 }),
+    shot("b", { itemId: "samme", createdAt: t0 + 1000 }),
+    shot("c", { itemId: "samme", approved: false, createdAt: t0 + 2000 }),
+    shot("d", { itemId: "samme", trashed: true, createdAt: t0 + 3000 }),
+    shot("e", { itemId: "samme", url: "", createdAt: t0 + 4000 }),
+  ];
+  assert.deepEqual(sharedWithCustomer(photos).map((photo) => photo.id), ["a", "b"]);
+  assert.equal(publicPhotos(photos).length, 1);
 });
 
 test("bare beste synlige bilde går ut, ikke papirkurv eller avviste", () => {

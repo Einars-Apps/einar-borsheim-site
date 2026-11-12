@@ -48,7 +48,7 @@ import {
   offerTypeLabel,
 } from "../www/js/offers.js";
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
-import { renderCostOverview, renderCustomerHistory, renderPaymentSummary } from "../www/js/cost-view.js";
+import { renderCostOverview, renderPaymentSummary } from "../www/js/cost-view.js";
 import { householdAllocation, normalizeHouseholds } from "../www/js/households.js";
 import { renderHouseholdAllocation } from "../www/js/household-view.js";
 import { fdvDownloadOpen } from "../www/js/fdv.js";
@@ -57,7 +57,7 @@ import { portalSectionVisible } from "../www/js/portal-visibility.js";
 import { fillPortalNav, renderPortalNav } from "../www/js/portal-visibility-view.js";
 import { renderCustomerRequests } from "../www/js/requests-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
-import { isTrashedPhoto, photoKey, publicPhotos, redundantPhotoItem, sortPhotos } from "../www/js/photos.js";
+import { isTrashedPhoto, photoKey, redundantPhotoItem, sharedWithCustomer, sortPhotos } from "../www/js/photos.js";
 import { gpsLabel, photoWhen, showGpsInReport } from "../www/js/place.js";
 import { mapAnchor, openPhotoViewer } from "../www/js/photo-view.js";
 import { renderCustomerHms } from "../www/js/hms-view.js";
@@ -431,10 +431,6 @@ function render() {
       for (const item of offerPosts) box.append(offerCard(item));
     }
     if (customerSeesCost(project)) box.append(el("div", { id: "cost-slot" }));
-    else {
-      const story = renderCustomerHistory({ items: offerPosts, audience: "kunde" });
-      if (story) box.append(story);
-    }
     viewProject.append(box);
   }
 
@@ -452,8 +448,8 @@ function render() {
   for (const [kind, title, sectionId, flag] of groups) {
     if (!portalSectionVisible(project, flag)) continue;
     const rows = items.filter((item) => item.kind === kind && item.approved === true && !isOfferItem(item));
+    if (!rows.length) continue;
     const section = el("section", { class: "k-card k-stack", id: sectionId }, [el("h2", {}, title)]);
-    if (!rows.length) section.append(el("p", { class: "muted" }, "Ingenting er lagt ut her ennå."));
     for (const item of rows) section.append(itemCard(item));
     viewProject.append(section);
   }
@@ -585,7 +581,7 @@ function portalFigures(photos) {
 
 function reportGalleryPhotos() {
   const flat = portalFlat().filter((photo) => photo.approved !== false && !isTrashedPhoto(photo));
-  return sortPhotos(publicPhotos(flat), "oldest");
+  return sortPhotos(sharedWithCustomer(flat), "oldest");
 }
 
 function paintPortalPhotos() {
@@ -600,7 +596,7 @@ function paintPortalPhotos() {
     const figures = portalFigures(gallery);
     if (figures) host.append(figures);
   }
-  const shown = new Set(publicPhotos(flat).map(photoKey));
+  const shown = new Set(sharedWithCustomer(flat).map(photoKey));
   for (const [itemId, photos] of portalPhotos) {
     const media = document.getElementById(`media-${itemId}`);
     const card = document.getElementById(`item-${itemId}`);

@@ -5,6 +5,9 @@ import { renderHouseholdAllocation } from "./household-view.js";
 import {
   formatQty,
   nextInstallmentNumber,
+  customerOfferDifference,
+  originalOfferLineText,
+  originalOfferRows,
   partialFinalText,
   paymentBalance,
   paymentInstallments,
@@ -813,9 +816,49 @@ export function renderCostOverview({
         ? "Ingen poster i Tilbud og endringer er merket som avtalt ennå. Fiken-linjene er ikke den avtalen. Kunden ser en sendt post som informasjon."
         : "Ingen avtalte poster i Tilbud og endringer ennå."));
 
+  if (audience === "kunde") {
+    const offerRows = originalOfferRows(summary.lines);
+    const compared = customerOfferDifference(summary);
+    const originalTotal = compared.originalTotal;
+    const original = offerRows.length || originalTotal > 0
+      ? el("section", { class: "original-offer" }, [
+        el("h3", { class: "h-app" }, "Opprinnelig tilbud"),
+        ...offerRows.flatMap((row) => [
+          el("p", {}, originalOfferLineText(row)),
+          row.source ? el("p", { class: "meta" }, row.source) : null,
+        ]),
+        originalTotal > 0 ? el("p", { class: "cost-money" }, `Opprinnelig total: ${formatKr(originalTotal)} eks. mva`) : null,
+        baseline.kind === "manuell" && baseline.label ? el("p", { class: "meta" }, baseline.label) : null,
+      ])
+      : null;
+    const agreedRows = approved.length
+      ? el("div", { class: "stack" }, approved.map((row) => el("p", { class: "meta" }, `Avtalt: ${row.title}${row.name ? ` – ${row.name}` : ""} ${formatKr(row.exVat)} eks. mva`)))
+      : null;
+    const changeParts = [
+      scopeNote,
+      extraBlock.length ? el("section", { class: "extra-box" }, extraBlock) : null,
+      agreedRows,
+      budgetNote,
+    ].filter(Boolean);
+    return el("section", { class: "card continue cost-box" }, [
+      el("h2", { class: "h-app" }, "Nåværende kostnad"),
+      el("p", { class: "meta cost-info-note" }, COST_INFO_NOTE),
+      el("p", { class: "meta" }, "Einar oppdaterer mengdene. Du kan ikke endre mengder eller priser."),
+      original,
+      changeParts.length ? el("h3", { class: "h-app" }, "Endringer og tillegg") : null,
+      ...changeParts,
+      el("h3", { class: "h-app" }, "Nåværende situasjon"),
+      lines,
+      lockedEx || lockedInc ? moneyLine("Ferdigstilt pris (ferdige poster)", lockedEx, lockedInc) : null,
+      moneyLine("Gjenstår (estimert)", summary.remaining?.exVat || 0, summary.remaining?.incVat || 0),
+      moneyLine("Totalt", summary.estimated.exVat, summary.estimated.incVat),
+      moneyLine("Påløpt hittil", summary.incurred.exVat, summary.incurred.incVat),
+      el("p", { class: "meta" }, `Differanse mot opprinnelig tilbud: ${signedKr(compared.exVat)} eks. mva, ${signedKr(compared.incVat)} inkl. mva`),
+    ]);
+  }
+
   return el("section", { class: "card continue cost-box" }, [
     el("h2", { class: "h-app" }, "Nåværende kostnad"),
-    audience === "kunde" ? el("p", { class: "meta cost-info-note" }, COST_INFO_NOTE) : null,
     scopeNote,
     budgetNote,
     el("p", { class: "meta" }, editable

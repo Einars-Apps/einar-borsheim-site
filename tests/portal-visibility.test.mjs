@@ -78,6 +78,59 @@ test("utkast i Tilbud og endringer forklares for Einar", () => {
   assert.match(offerSendNote([{ kind: "tilbud", fikenBase: true, approvalRequested: false }]), /Ingen poster/);
 });
 
+test("tilbud, tilbud og endringer, og endringer og avvik er ulike nøkler", () => {
+  const ids = PORTAL_SECTIONS.map((section) => section.id);
+  assert.deepEqual(ids.filter((id) => /tilbud|endring|kostnad|bilder/i.test(id)), [
+    "tilbud",
+    "tilbudEndringer",
+    "kostnad",
+    "bilder",
+    "endringer",
+  ]);
+  const labels = Object.fromEntries(PORTAL_SECTIONS.map((section) => [section.id, section.label]));
+  assert.equal(labels.tilbud, "Tilbud");
+  assert.equal(labels.tilbudEndringer, "Tilbud og endringer");
+  assert.equal(labels.endringer, "Endringer og avvik");
+  assert.equal(labels.kostnad, "Nåværende kostnad");
+  const project = {
+    portalSections: {
+      tilbud: true,
+      tilbudEndringer: true,
+      endringer: true,
+      bilder: true,
+      kostnad: false,
+    },
+    showCostToCustomer: true,
+  };
+  assert.equal(portalSectionVisible(project, "tilbud"), true);
+  assert.equal(portalSectionVisible(project, "tilbudEndringer"), true);
+  assert.equal(portalSectionVisible(project, "endringer"), true);
+  assert.equal(portalSectionVisible(project, "bilder"), true);
+  assert.equal(portalSectionVisible(project, "kostnad"), true);
+  assert.equal(portalSectionVisible({
+    portalSections: { kostnad: true, tilbud: false },
+    showCostToCustomer: false,
+  }, "kostnad"), false);
+  assert.equal(portalSectionVisible({
+    portalSections: { kostnad: true, tilbud: false },
+    showCostToCustomer: false,
+  }, "tilbud"), false);
+  const portal = readFileSync("kunde/kunde.js", "utf8");
+  const view = readFileSync("www/js/cost-view.js", "utf8");
+  assert.equal(portal.includes("Ingenting er lagt ut her ennå."), false);
+  assert.equal(portal.includes("renderCustomerHistory"), false);
+  assert.match(portal, /sharedWithCustomer/);
+  assert.match(portal, /if \(!rows\.length\) continue/);
+  assert.match(portal, /portalSectionVisible\(project, "tilbud"\)|flag\] of groups/);
+  const kundeBranch = view.indexOf('if (audience === "kunde")');
+  const historyCall = view.lastIndexOf("renderCustomerHistory({");
+  assert.ok(kundeBranch > 0 && historyCall > kundeBranch);
+  assert.match(view, /Opprinnelig tilbud/);
+  assert.match(view, /Endringer og tillegg/);
+  assert.match(view, /Nåværende situasjon/);
+  assert.equal(view.slice(kundeBranch, historyCall).includes("Historikk"), false);
+});
+
 test("portalen og feltappen bruker de samme seksjonene", () => {
   const portal = readFileSync("kunde/kunde.js", "utf8");
   const view = readFileSync("www/js/portal-visibility-view.js", "utf8");
