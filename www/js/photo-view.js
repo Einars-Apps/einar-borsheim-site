@@ -7,6 +7,8 @@ import {
   isTrashedPhoto,
   moreLabel,
   photoKey,
+  photoTag,
+  viewerIndex,
 } from "./photos.js";
 
 function iconButton(name, label, className, onClick) {
@@ -353,18 +355,21 @@ export function openPhotoViewer(photos, startIndex = 0) {
     count.textContent = list.length > 1 ? `${index + 1} / ${list.length}` : "";
     const bits = [];
     if (photoWhen(photo)) bits.push(el("span", {}, photoWhen(photo)));
-    if (photo.caption) bits.push(el("span", {}, photo.caption));
+    const tag = photoTag(photo);
+    if (tag) bits.push(el("span", {}, tag));
     const place = gpsLabel(photo);
     if (place) bits.push(mapAnchor(place));
     facts.replaceChildren(...bits);
     facts.hidden = bits.length === 0;
+    prev.disabled = viewerIndex(index, -1, list.length) === index;
+    next.disabled = viewerIndex(index, 1, list.length) === index;
     overlay.dataset.index = String(index);
     resetZoom();
   }
   function step(delta) {
-    const next = index + delta;
-    if (next < 0 || next >= list.length) return;
-    index = next;
+    const nextIndex = viewerIndex(index, delta, list.length);
+    if (nextIndex === index) return;
+    index = nextIndex;
     show();
   }
   function zoomBy(factor) {
@@ -463,11 +468,13 @@ export function openPhotoViewer(photos, startIndex = 0) {
       },
     }),
   ]);
+  const prev = button("Forrige", { class: "btn btn-ghost", onClick: () => step(-1) });
+  const next = button("Neste", { class: "btn btn-ghost", onClick: () => step(1) });
   const nav = el("div", { class: "viewer-nav" }, [
-    button("Forrige", { class: "btn btn-ghost", onClick: () => step(-1) }),
+    prev,
     button("Større", { class: "btn btn-ghost", onClick: () => zoomBy(1.2) }),
     button("Mindre", { class: "btn btn-ghost", onClick: () => zoomBy(1 / 1.2) }),
-    button("Neste", { class: "btn btn-ghost", onClick: () => step(1) }),
+    next,
   ]);
   overlay.append(bar, stage, facts, nav);
   const previous = history.state && typeof history.state === "object" ? history.state : {};

@@ -190,15 +190,133 @@ export function publicPhotos(photos) {
   return groupPhotos(visible).map((stack) => stack.best).filter(Boolean);
 }
 
-// Kunden skal se hvert godkjente bilde. publicPhotos viser bare det beste i en gruppe,
-// og bilder på samme post blir én gruppe.
+export function photoUrl(photo) {
+  return String(photo?.url || photo?.thumbUrl || "").trim();
+}
+
+// Admin deler et bilde ved å sette approved: true (opplasting gjør det med en gang).
+// shared og visibleToCustomer teller også, om de er brukt. Papirkurv og bilder uten lenke gjør ikke.
+export function photoIsShared(photo, { parentShared = false } = {}) {
+  if (!photo || isTrashedPhoto(photo)) return false;
+  if (!photoUrl(photo)) return false;
+  if (photo.approved === true || photo.shared === true || photo.visibleToCustomer === true) return true;
+  if (photo.approved === false || photo.shared === false || photo.visibleToCustomer === false) return false;
+  return parentShared === true;
+}
+
 export function sharedWithCustomer(photos) {
-  return (photos || []).filter((photo) => (
-    photo
-    && !isTrashedPhoto(photo)
-    && photo.approved === true
-    && String(photo.url || "").trim()
-  ));
+  return (photos || []).filter((photo) => photoIsShared(photo));
+}
+
+export function photoTag(photo) {
+  const step = String(photo?.step || "").trim();
+  const caption = String(photo?.caption || photo?.comment || "").trim();
+  if (step && caption && step.toLowerCase() !== caption.toLowerCase()) return `${step} · ${caption}`;
+  return step || caption;
+}
+
+function parentIsShared(item) {
+  return item?.approved === true || item?.shared === true || item?.visibleToCustomer === true;
+}
+
+function withItemContext(photo, item) {
+  if (!item) return photo;
+  return {
+    ...photo,
+    itemId: photo.itemId || item.id || "",
+    step: photo.step || item.step || "",
+    comment: photo.comment || photo.caption || item.text || "",
+    itemText: item.text || "",
+    itemTitle: item.title || "",
+  };
+}
+
+// Alle bilder kunden skal se: underposter på notater (også kind bilde), bilder lagret
+// på selve posten, forsidebilde, og eldre bilder rett under prosjektet.
+export function collectSharedPhotos({ items = [], photosByItem = {}, legacy = [] } = {}) {
+  const flat = [];
+  const seenKeys = new Set();
+  const seenUrls = new Set();
+  function add(photo, item, fromParent) {
+    const tagged = withItemContext(photo, item);
+    if (!photoIsShared(tagged, { parentShared: fromParent && parentIsShared(item) })) return;
+    const key = photoKey(tagged);
+    const url = photoUrl(tagged);
+    if ((key && seenKeys.has(key)) || (url && seenUrls.has(url))) return;
+    if (key) seenKeys.add(key);
+    if (url) seenUrls.add(url);
+    flat.push(tagged);
+  }
+  for (const item of items || []) {
+    if (!item?.id) continue;
+    for (const photo of photosByItem[item.id] || []) add(photo, item, true);
+    for (const photo of Array.isArray(item.photos) ? item.photos : []) add(photo, item, true);
+    const cover = String(item.coverUrl || "").trim();
+    if (!cover) continue;
+    add({
+      id: `cover-${item.id}`,
+      url: cover,
+      thumbUrl: cover,
+      caption: item.text || "",
+      step: item.step || "",
+      createdAt: item.createdAt || null,
+      uploadedAt: item.createdAt || null,
+    }, item, true);
+  }
+  for (const photo of legacy || []) add(photo, null, false);
+  return flat;
+}
+
+export const GALLERY_PAGE_NARROW = 6;
+export const GALLERY_PAGE_WIDE = 9;
+export const GALLERY_WIDE_MIN = 720;
+
+export function galleryPageSize(width) {
+  return Number(width) >= GALLERY_WIDE_MIN ? GALLERY_PAGE_WIDE : GALLERY_PAGE_NARROW;
+}
+
+export function galleryPageCount(total, pageSize) {
+  const size = Math.max(1, Number(pageSize) || 1);
+  const count = Math.max(0, Number(total) || 0);
+  if (!count) return 1;
+  return Math.ceil(count / size);
+}
+
+export function galleryShowsPager(total, pageSize) {
+  return (Number(total) || 0) > Math.max(1, Number(pageSize) || 1);
+}
+
+export function galleryPage(photos, page, pageSize) {
+  const list = photos || [];
+  const size = Math.max(1, Number(pageSize) || 1);
+  const pages = galleryPageCount(list.length, size);
+  const index = Math.min(Math.max(1, Number(page) || 1), pages);
+  const start = (index - 1) * size;
+  return { page: index, pages, start, photos: list.slice(start, start + size) };
+}
+
+export function galleryPageLabels(pages, current) {
+  const total = Math.max(1, Number(pages) || 1);
+  const page = Math.min(Math.max(1, Number(current) || 1), total);
+  if (total <= 7) return Array.from({ length: total }, (_, index) => String(index + 1));
+  const wanted = new Set([1, total, page - 1, page, page + 1].filter((n) => n >= 1 && n <= total));
+  const labels = [];
+  let previous = 0;
+  for (const n of [...wanted].sort((a, b) => a - b)) {
+    if (previous && n - previous > 1) labels.push("…");
+    labels.push(String(n));
+    previous = n;
+  }
+  return labels;
+}
+
+export function viewerIndex(index, delta, length) {
+  const count = Math.max(0, Number(length) || 0);
+  if (!count) return 0;
+  const current = Math.min(Math.max(0, Number(index) || 0), count - 1);
+  const next = current + (Number(delta) || 0);
+  if (next < 0 || next >= count) return current;
+  return next;
 }
 
 export function annotatePhotos(items, photosByItem = {}) {

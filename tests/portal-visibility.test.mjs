@@ -119,7 +119,7 @@ test("tilbud, tilbud og endringer, og endringer og avvik er ulike nøkler", () =
   const view = readFileSync("www/js/cost-view.js", "utf8");
   assert.equal(portal.includes("Ingenting er lagt ut her ennå."), false);
   assert.equal(portal.includes("renderCustomerHistory"), false);
-  assert.match(portal, /sharedWithCustomer/);
+  assert.match(portal, /collectSharedPhotos/);
   assert.match(portal, /if \(!rows\.length\) continue/);
   assert.match(portal, /portalSectionVisible\(project, "tilbud"\)|flag\] of groups/);
   const kundeBranch = view.indexOf('if (audience === "kunde")');

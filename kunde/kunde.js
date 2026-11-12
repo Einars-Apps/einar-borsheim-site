@@ -57,7 +57,18 @@ import { portalSectionVisible } from "../www/js/portal-visibility.js";
 import { fillPortalNav, renderPortalNav } from "../www/js/portal-visibility-view.js";
 import { renderCustomerRequests } from "../www/js/requests-view.js";
 import { canSpeak, dictate } from "../www/js/speech.js";
-import { isTrashedPhoto, photoKey, redundantPhotoItem, sharedWithCustomer, sortPhotos } from "../www/js/photos.js";
+import {
+  collectSharedPhotos,
+  galleryPage,
+  galleryPageLabels,
+  galleryPageSize,
+  galleryShowsPager,
+  isTrashedPhoto,
+  photoKey,
+  photoTag,
+  redundantPhotoItem,
+  sortPhotos,
+} from "../www/js/photos.js";
 import { gpsLabel, photoWhen, showGpsInReport } from "../www/js/place.js";
 import { mapAnchor, openPhotoViewer } from "../www/js/photo-view.js";
 import { renderCustomerHms } from "../www/js/hms-view.js";
@@ -554,19 +565,28 @@ function withPortalPlace(photo) {
   return place ? { ...photo, ...place } : photo;
 }
 
-function portalFigures(photos) {
-  const usable = photos
-    .map((photo) => withPortalPlace({ ...photo, url: displayUrl(photo.url) }))
-    .filter((photo) => photo.url);
+function presentPhoto(photo) {
+  const full = displayUrl(photo.url || photo.thumbUrl);
+  const thumb = displayUrl(photo.thumbUrl || photo.url);
+  return withPortalPlace({ ...photo, url: full, thumbUrl: thumb || full });
+}
+
+function portalFigures(photos, all) {
+  const usable = photos.map(presentPhoto).filter((photo) => photo.url);
+  const series = (all || photos).map(presentPhoto).filter((photo) => photo.url);
   if (!usable.length) return null;
-  const grid = el("div", { class: usable.length > 1 ? "k-grid" : "k-stack" });
-  usable.forEach((photo, index) => {
-    const image = el("img", { class: "k-photo", src: photo.url, alt: photo.caption || "Bilde", loading: "lazy" });
-    image.addEventListener("click", () => openPhotoViewer(usable, index));
-    const when = photoWhen(photo);
-    const caption = photo.caption || photo.comment || "";
+  const grid = el("div", { class: "k-gallery" });
+  usable.forEach((photo) => {
+    const index = series.findIndex((entry) => photoKey(entry) === photoKey(photo));
+    const image = el("img", {
+      class: "k-thumb",
+      src: photo.thumbUrl || photo.url,
+      alt: photoTag(photo) || "Bilde",
+      loading: "lazy",
+    });
+    image.addEventListener("click", () => openPhotoViewer(index >= 0 ? series : usable, index >= 0 ? index : usable.indexOf(photo)));
+    const text = [photoWhen(photo), photoTag(photo)].filter(Boolean).join(" · ");
     const place = showGpsInReport(project) ? gpsLabel(photo) : null;
-    const text = [when, caption].filter(Boolean).join(" · ");
     grid.append(el("figure", {}, [
       image,
       text || place ? el("figcaption", { class: "muted photo-meta" }, [
@@ -580,23 +600,75 @@ function portalFigures(photos) {
 }
 
 function reportGalleryPhotos() {
-  const flat = portalFlat().filter((photo) => photo.approved !== false && !isTrashedPhoto(photo));
-  return sortPhotos(sharedWithCustomer(flat), "oldest");
+  const photosByItem = Object.fromEntries(portalPhotos);
+  return sortPhotos(collectSharedPhotos({
+    items: mergedItems(),
+    photosByItem,
+    legacy: legacyAnnotated(),
+  }), "oldest").map(presentPhoto).filter((photo) => photo.url);
+}
+
+let galleryPageNumber = 1;
+
+function galleryPager(view) {
+  const bar = el("nav", { class: "k-pages", "aria-label": "Bildesider" });
+  const prev = el("button", {
+    type: "button",
+    class: "btn btn-ghost",
+    disabled: view.page <= 1 ? true : null,
+  }, "Forrige");
+  prev.addEventListener("click", () => {
+    galleryPageNumber = view.page - 1;
+    paintPortalPhotos();
+  });
+  const next = el("button", {
+    type: "button",
+    class: "btn btn-ghost",
+    disabled: view.page >= view.pages ? true : null,
+  }, "Neste");
+  next.addEventListener("click", () => {
+    galleryPageNumber = view.page + 1;
+    paintPortalPhotos();
+  });
+  bar.append(prev);
+  for (const label of galleryPageLabels(view.pages, view.page)) {
+    if (label === "…") {
+      bar.append(el("span", { class: "k-page-gap", "aria-hidden": "true" }, "…"));
+      continue;
+    }
+    const page = Number(label);
+    const button = el("button", {
+      type: "button",
+      class: "btn btn-ghost",
+      "aria-current": page === view.page ? "page" : null,
+    }, label);
+    button.addEventListener("click", () => {
+      galleryPageNumber = page;
+      paintPortalPhotos();
+    });
+    bar.append(button);
+  }
+  bar.append(next);
+  return bar;
 }
 
 function paintPortalPhotos() {
   const flat = portalFlat();
   const photosOn = portalSectionVisible(project, "bilder");
   const gallery = photosOn ? reportGalleryPhotos() : [];
+  const pageSize = galleryPageSize(window.innerWidth || 0);
+  const view = galleryPage(gallery, galleryPageNumber, pageSize);
+  galleryPageNumber = view.page;
   const galleryKeys = new Set(gallery.map(photoKey));
   const host = document.getElementById("seksjon-bilder");
   if (host) {
     host.hidden = !photosOn || gallery.length === 0;
     host.replaceChildren(el("h2", {}, "Bilder"));
-    const figures = portalFigures(gallery);
+    const figures = portalFigures(view.photos, gallery);
     if (figures) host.append(figures);
+    if (galleryShowsPager(gallery.length, pageSize)) host.append(galleryPager(view));
   }
-  const shown = new Set(sharedWithCustomer(flat).map(photoKey));
+  const shown = new Set(gallery.map(photoKey));
   for (const [itemId, photos] of portalPhotos) {
     const media = document.getElementById(`media-${itemId}`);
     const card = document.getElementById(`item-${itemId}`);
@@ -608,7 +680,7 @@ function paintPortalPhotos() {
         !galleryKeys.has(photoKey(photo))
         && (shown.has(photoKey(photo)) || customerOwnPending(photo, uid))
       ));
-      const figures = portalFigures(keep);
+      const figures = portalFigures(keep, gallery);
       if (figures) media.append(figures);
     }
     if (card && item) card.hidden = redundantPhotoItem(item, flat);
@@ -618,17 +690,19 @@ function paintPortalPhotos() {
 
 async function hydrate(item) {
   const generation = portalGeneration;
+  if (!item?.id) return;
   const media = document.getElementById(`media-${item.id}`);
   const comments = document.getElementById(`comments-${item.id}`);
-  if (!media || media.dataset.loaded) return;
-  media.dataset.loaded = "1";
+  if (media) media.dataset.loaded = "1";
   try {
     const photos = await loadVisible(collection(db, "projects", projectId, "items", item.id, "photos"));
     if (generation !== portalGeneration) return;
     portalPhotos.set(item.id, photos.filter((photo) => !isTrashedPhoto(photo)).map((photo) => annotatePortalPhoto(photo, item)));
     paintPortalPhotos();
+    if (!comments || comments.dataset.loaded) return;
+    comments.dataset.loaded = "1";
     const thread = await loadVisible(collection(db, "projects", projectId, "items", item.id, "comments"));
-    if (generation !== portalGeneration || !comments) return;
+    if (generation !== portalGeneration) return;
     for (const comment of thread.filter((entry) => customerVisibleContent(entry, uid))) {
       comments.append(el("div", { class: "comment" }, [
         el("small", {}, `${comment.source === "kunde" ? "Deg" : "Einar"} · ${formatWhen(comment.createdAt)}${comment.approved === false ? " · Einar ser på den" : ""}`),
@@ -1093,5 +1167,9 @@ async function init() {
   }
   startPortal();
 }
+
+window.addEventListener("resize", () => {
+  if (document.getElementById("seksjon-bilder")) paintPortalPhotos();
+});
 
 init();
