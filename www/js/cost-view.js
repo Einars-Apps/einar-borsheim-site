@@ -419,7 +419,10 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
     confirmUnlock(name, () => onExtra?.(row.id, "final", false));
   });
   const card = el("article", { class: row.final === true ? "qty-line qty-line-final" : "qty-line" }, [
-    row.final === true ? el("p", { class: "final-badge" }, "Ferdig") : null,
+    row.final === true
+      ? el("p", { class: "final-badge" }, "Ferdig")
+      : el("p", { class: "estimate-badge", title: ESTIMATE_HELP }, "Estimert"),
+    row.final === true ? null : el("p", { class: "meta estimate-help" }, ESTIMATE_HELP),
     field("Beskrivelse", description),
     el("div", { class: "extra-pair" }, [
       field("Enhetspris, kr eks. mva", unitPrice),
@@ -449,8 +452,12 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
 function extraSentence(row) {
   const text = extraCustomerText(row);
   if (!text) return null;
+  const finished = row.final === true;
   return el("div", { class: "post-tillegg" }, [
-    row.final === true ? el("p", { class: "final-badge" }, "Ferdig") : null,
+    finished
+      ? el("p", { class: "final-badge" }, "Ferdig")
+      : el("p", { class: "estimate-badge", title: ESTIMATE_HELP }, "Estimert"),
+    finished ? null : el("p", { class: "meta estimate-help" }, ESTIMATE_HELP),
     el("p", {}, text),
   ]);
 }

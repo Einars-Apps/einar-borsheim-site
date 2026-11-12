@@ -193,6 +193,14 @@ test("feltappen har ett samlet tillegg, ikke tre opprett-knapper", () => {
   assert.match(view, /Merke «\$\{name\}» som ferdig med endelig pris\?/);
   assert.match(view, /Ferdig – endelig pris/);
   assert.match(view, /class: "final-badge" \}, "Ferdig"/);
+  const editor = view.slice(view.indexOf("function extraEditor"), view.indexOf("function extraSentence"));
+  const portal = view.slice(view.indexOf("function extraSentence"), view.indexOf("function splitExtras"));
+  for (const source of [editor, portal]) {
+    assert.match(source, /class: "estimate-badge", title: ESTIMATE_HELP \}, "Estimert"/);
+    assert.match(source, /class: "meta estimate-help" \}, ESTIMATE_HELP/);
+    assert.match(source, /class: "final-badge" \}, "Ferdig"/);
+    assert.match(source, /row\.final === true/);
+  }
   const app = readFileSync("www/app.js", "utf8");
   const save = app.slice(app.indexOf("const savePatch"), app.indexOf("const applyApproved"));
   assert.match(save, /costDoc = previous/);
