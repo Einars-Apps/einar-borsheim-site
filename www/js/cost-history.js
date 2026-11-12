@@ -446,16 +446,24 @@ function agreedEvents(entries) {
 }
 
 export function extraTilleggText(extra, entries = [], now = new Date()) {
-  const name = String(extra?.description || "").trim() || "Tillegg";
+  const name = String(extra?.description || "").trim();
   const qty = round2(extra?.quantity) ?? 0;
   const price = round2(extra?.unitPrice) ?? 0;
-  const sum = round2(extra?.sum != null ? extra.sum : qty * price) ?? 0;
+  const sum = round2(extra?.sum != null ? extra.sum : (extra?.kind === "vare" ? price : qty * price)) ?? 0;
+  if (extra?.kind === "timer") {
+    const who = name ? `, ${name}` : "";
+    return `Timer: ${formatQty(qty)} t à ${formatKr(price)}${who}${moneyText(sum)}`;
+  }
+  if (extra?.kind === "vare") {
+    return name ? `Varekostnad: ${name}, ${formatKr(sum)} eks. mva.` : `Varekostnad: ${formatKr(sum)} eks. mva.`;
+  }
+  const label = name || "Tillegg";
   const nets = netsOf(entries.filter((entry) => entry.lineId === extra?.id && entry.field === "quantity"));
   const last = nets.length ? nets[nets.length - 1] : null;
   const dated = last && same(last.to, qty) ? shortDay(last.time, now) : "";
   const qtyBit = last && dated && same(last.from, 0) ? `+${formatQty(qty)} stk` : `${formatQty(qty)} stk`;
   const when = dated ? ` avtalt ${dated}` : "";
-  return `Tillegg: ${name}, ${qtyBit}${when}${moneyText(sum)}`;
+  return `Tillegg: ${label}, ${qtyBit}${when}${moneyText(sum)}`;
 }
 
 function detailLine(entry) {

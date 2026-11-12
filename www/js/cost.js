@@ -152,6 +152,30 @@ export function normalizeFikenLines(raw) {
   return lines;
 }
 
+export function extraKind(line) {
+  return line?.kind === "timer" || line?.kind === "vare" ? line.kind : "";
+}
+
+export function extraLineSum(line) {
+  if (extraKind(line) === "vare") return round2(line?.unitPrice);
+  return round2((round2(line?.quantity) || 0) * (round2(line?.unitPrice) || 0));
+}
+
+export function extraReportLine(line) {
+  const name = String(line?.description || "").replace(/\s+/g, " ").trim();
+  const sum = round2(line?.sum != null ? line.sum : extraLineSum(line));
+  if (extraKind(line) === "timer") {
+    const who = name ? `, ${name}` : "";
+    return `Timer: ${formatQty(line?.quantity)} t à ${formatKr(line?.unitPrice)}${who}. Linjesum ${formatKr(sum)} eks. mva.`;
+  }
+  if (extraKind(line) === "vare") {
+    return name
+      ? `Varekostnad: ${name}, ${formatKr(sum)} eks. mva.`
+      : `Varekostnad: ${formatKr(sum)} eks. mva.`;
+  }
+  return `${name || "Tillegg"}: ${formatQty(line?.quantity)} à ${formatKr(line?.unitPrice)} eks. mva. Linjesum ${formatKr(sum)} eks. mva.`;
+}
+
 export function normalizeExtras(raw) {
   const list = Array.isArray(raw?.extras) ? raw.extras : [];
   const seen = new Set();
@@ -167,6 +191,8 @@ export function normalizeExtras(raw) {
       unitPrice: clampQty(line?.unitPrice),
       quantity: clampQty(line?.quantity),
     };
+    const kind = extraKind(line);
+    if (kind) extra.kind = kind;
     if (postId) extra.postId = postId;
     extras.push(extra);
   }
@@ -407,7 +433,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
     };
   });
   const extras = state.extras.map((line) => {
-    const sum = round2(line.quantity * line.unitPrice);
+    const sum = extraLineSum(line);
     doneEx += sum;
     return { ...line, sum };
   });
@@ -617,7 +643,10 @@ export function patchCost(raw, prices, patch = {}) {
   if (patch.addExtra) {
     const id = String(patch.extraId || newExtraId()).slice(0, 39);
     if (id.startsWith("ta") && !next.extras.some((line) => line.id === id)) {
-      next.extras.push({ id, description: "", unitPrice: 0, quantity: 0 });
+      const extra = { id, description: "", unitPrice: 0, quantity: 0 };
+      const kind = extraKind({ kind: patch.extraKind });
+      if (kind) extra.kind = kind;
+      next.extras.push(extra);
     }
   }
   if (patch.deleteExtraId) {
@@ -695,12 +724,15 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
   for (const id of new Set([...beforeExtra.keys(), ...afterExtra.keys()])) {
     const left = beforeExtra.get(id) || { description: "", quantity: 0, unitPrice: 0 };
     const right = afterExtra.get(id) || { description: left.description, quantity: 0, unitPrice: 0 };
-    const label = String(right.description || left.description || "Tillegg").slice(0, 79);
+    const kind = extraKind(right) || extraKind(left);
+    const fallback = kind === "timer" ? "Timer" : kind === "vare" ? "Varekostnad" : "Tillegg";
+    const label = String(right.description || left.description || fallback).slice(0, 79);
+    const qtyUnit = kind === "timer" ? "t" : "stk";
     if (left.quantity !== right.quantity) {
-      changes.push({ lineId: id, label, field: "quantity", from: left.quantity, to: right.quantity, unit: "stk" });
+      changes.push({ lineId: id, label, field: "quantity", from: left.quantity, to: right.quantity, unit: qtyUnit, kind });
     }
     if (left.unitPrice !== right.unitPrice) {
-      changes.push({ lineId: id, label, field: "unitPrice", from: left.unitPrice, to: right.unitPrice, unit: "kr" });
+      changes.push({ lineId: id, label, field: "unitPrice", from: left.unitPrice, to: right.unitPrice, unit: "kr", kind });
     }
   }
   return changes;
@@ -731,7 +763,13 @@ export function changeText(change) {
     if (Number(change.to) === 1) return `Posten er ferdig, endelig pris ${formatKr(change.amount)} eks. mva`;
     return "Posten er åpnet igjen. Den var merket ferdig med endelig pris og kan være fakturert. Prisen er estimert.";
   }
-  const what = FIELD_LABEL[change?.field] || "endring";
+  const what = change?.kind === "timer" && change.field === "quantity"
+    ? "timer"
+    : change?.kind === "timer" && change.field === "unitPrice"
+      ? "timepris"
+      : change?.kind === "vare" && change.field === "unitPrice"
+        ? "beløp"
+        : (FIELD_LABEL[change?.field] || "endring");
   const unit = change?.unit ? ` ${change.unit}` : "";
   const label = change?.field === "agreedExVat" ? "Avtalt pris" : (change?.label || "Linje");
   return `${label}, ${what}: ${formatQty(change?.from)} → ${formatQty(change?.to)}${unit}`;
@@ -951,9 +989,7 @@ export function costReportText(summary, history = [], payments = []) {
   lines.push("", "Tilleggsarbeider");
   const extras = (summary?.extras || []).filter((line) => line.description || line.quantity || line.unitPrice);
   if (!extras.length) lines.push("Ingen tilleggsarbeider.");
-  for (const line of extras) {
-    lines.push(`${line.description || "Tillegg"}: ${formatQty(line.quantity)} à ${formatKr(line.unitPrice)} eks. mva. Linjesum ${formatKr(line.sum)} eks. mva.`);
-  }
+  for (const line of extras) lines.push(extraReportLine(line));
   if (extras.length) lines.push(`Sum tilleggsarbeider ${formatKr(summary?.extrasExVat || 0)} eks. mva.`);
   lines.push("", ...paymentReportText(payments, summary).split("\n"));
   lines.push("", "Historikk");

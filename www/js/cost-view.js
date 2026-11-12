@@ -339,6 +339,7 @@ function commitField(input, onCommit) {
 }
 
 function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
+  const kind = row.kind === "timer" || row.kind === "vare" ? row.kind : "";
   const sum = el("p", { class: "meta" }, `Linjesum ${formatKr(row.sum)} eks. mva`);
   const description = commitField(el("input", {
     type: "text",
@@ -346,17 +347,18 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
     value: row.description || "",
     "aria-label": "Beskrivelse",
   }), (value) => onExtra?.(row.id, "description", value));
+  const priceLabel = kind === "timer" ? "Timepris, kr eks. mva" : kind === "vare" ? "Beløp, kr eks. mva" : "Enhetspris, kr eks. mva";
   const price = commitField(el("input", {
     type: "text",
     inputmode: "decimal",
     value: formatQty(row.unitPrice),
-    "aria-label": "Enhetspris eks. mva",
+    "aria-label": priceLabel,
   }), (value) => onExtra?.(row.id, "unitPrice", value));
-  const quantity = commitField(el("input", {
+  const quantity = kind === "vare" ? null : commitField(el("input", {
     type: "text",
     inputmode: "decimal",
     value: formatQty(row.quantity),
-    "aria-label": "Antall",
+    "aria-label": kind === "timer" ? "Timer" : "Antall",
   }), (value) => onExtra?.(row.id, "quantity", value));
   const post = el("select", { "aria-label": "Knytt til post" });
   post.append(el("option", { value: "" }, "Andre tillegg"));
@@ -366,10 +368,13 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
     post.append(option);
   }
   post.addEventListener("change", () => onExtra?.(row.id, "postId", post.value));
+  const title = kind === "timer" ? "Timer" : kind === "vare" ? "Varekostnad" : "";
   return el("article", { class: "qty-line" }, [
+    title ? el("p", { class: "qty-label" }, title) : null,
     field("Beskrivelse", description),
-    field("Enhetspris, kr eks. mva", price),
-    field("Antall", quantity),
+    kind === "timer" ? field("Timer", quantity) : null,
+    field(priceLabel, price),
+    kind === "timer" || kind === "vare" ? null : field("Antall", quantity),
     field("Knytt til post", post),
     sum,
     button("Slett tillegg", {
@@ -679,7 +684,7 @@ export function renderCostOverview({
   if (editable || otherExtras.length) {
     extraBlock.push(el("h3", { class: "h-app" }, "Andre tillegg"));
     extraBlock.push(el("p", { class: "meta" }, editable
-      ? "Tillegg som ikke hører til en bestemt post. Enhetspris er eks. mva. Du kan knytte et tillegg til en post."
+      ? "Tillegg som ikke hører til en bestemt post. Timer er antall ganger timepris. Varekostnad er et beløp. Pris er eks. mva. Du kan knytte et tillegg til en post."
       : "Tillegg som ikke hører til en bestemt post."));
     for (const row of otherExtras) {
       if (editable) extraBlock.push(extraEditor(row, ordered, { onDeleteExtra, onExtra }));
@@ -687,10 +692,20 @@ export function renderCostOverview({
     }
     const filled = (summary.extras || []).length > 0 && (summary.extras || []).every((row) => String(row.description || "").trim());
     if (editable && ((summary.extras || []).length === 0 || filled)) {
-      extraBlock.push(button("Legg til nytt tillegg", {
-        class: "btn btn-ghost btn-block",
-        onClick: () => onAddExtra?.(),
-      }));
+      extraBlock.push(el("div", { class: "action-row" }, [
+        button("Legg til nytt tillegg", {
+          class: "btn btn-ghost",
+          onClick: () => onAddExtra?.(""),
+        }),
+        button("Legg til timer", {
+          class: "btn btn-ghost",
+          onClick: () => onAddExtra?.("timer"),
+        }),
+        button("Legg til varekostnad", {
+          class: "btn btn-ghost",
+          onClick: () => onAddExtra?.("vare"),
+        }),
+      ]));
     }
     if (pricedExtras) extraBlock.push(extraSum);
   } else if (pricedExtras) {

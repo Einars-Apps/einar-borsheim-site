@@ -1754,7 +1754,11 @@ function mountOffers(route) {
           value,
           finalizedAt: field === "final" && value === true ? new Date() : null,
         }),
-        onAddExtra: () => savePatch({ addExtra: true, extraId: newExtraId() }),
+        onAddExtra: (kind) => savePatch({
+          addExtra: true,
+          extraId: newExtraId(),
+          extraKind: kind === "timer" || kind === "vare" ? kind : "",
+        }),
         onDeleteExtra: (extraId) => savePatch({ deleteExtraId: extraId }),
         onExtra: (extraId, field, value) => savePatch({ extraId, field, value }),
         payments,
