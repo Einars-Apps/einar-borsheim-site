@@ -1596,7 +1596,7 @@ function mountOffers(route) {
       const previous = costDoc;
       const next = patchCost(previous, priceTable, patch);
       const changes = costChanges(previous, next, priceTable);
-      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description" || patch.field === "postId" || patch.field === "finalNote";
+      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description" || patch.field === "postId" || patch.field === "finalNote" || patch.field === "hours" || patch.field === "timePrice" || patch.field === "goods";
       if (!changes.length && !structural) return;
       const stored = persistableCost(next);
       costDoc = { ...previous, ...stored };
@@ -1754,11 +1754,7 @@ function mountOffers(route) {
           value,
           finalizedAt: field === "final" && value === true ? new Date() : null,
         }),
-        onAddExtra: (kind) => savePatch({
-          addExtra: true,
-          extraId: newExtraId(),
-          extraKind: kind === "timer" || kind === "vare" ? kind : "",
-        }),
+        onAddExtra: () => savePatch({ addExtra: true, extraId: newExtraId() }),
         onDeleteExtra: (extraId) => savePatch({ deleteExtraId: extraId }),
         onExtra: (extraId, field, value) => savePatch({ extraId, field, value }),
         payments,

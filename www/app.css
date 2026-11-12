@@ -430,6 +430,11 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .scope-list { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 8px; }
 .scope-list p { margin: 0; }
 .extra-box { display: flex; flex-direction: column; gap: 10px; }
+.extra-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.extra-good { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; }
+@media (max-width: 560px) {
+  .extra-pair, .extra-good { grid-template-columns: 1fr; }
+}
 .extra-box h3 { margin: 8px 0 0; }
 .quote-box, .quote-intro { overflow-wrap: anywhere; max-width: 100%; }
 .quote-box { display: flex; flex-direction: column; gap: 10px; }

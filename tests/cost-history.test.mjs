@@ -329,7 +329,7 @@ test("tillegg uten post samles, og kobling endrer ikke prisen", () => {
   const cleared = persistableCost(patchCost(cost, prices, { extraId: "ta-en", field: "postId", value: "" }));
   assert.equal(cleared.extras[0].postId, undefined);
   const text = extraTilleggText(after.extras[0], [], now);
-  assert.match(text, /^Tillegg: Ekstra kumlokk, 2 stk/);
+  assert.match(text, /^Ekstra kumlokk: 2 à kr/);
   assert.match(text, /eks\. mva/);
 });
 
