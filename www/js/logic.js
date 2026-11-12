@@ -217,6 +217,7 @@ export function customerVisibleDocument(record) {
 export function applyPortalPreviewLock(root) {
   if (!root || typeof root.querySelectorAll !== "function") return;
   root.querySelectorAll("button, textarea, select").forEach((node) => {
+    if (typeof node.closest === "function" && node.closest(".k-pages, .k-gallery")) return;
     node.disabled = true;
   });
   root.querySelectorAll("input").forEach((node) => {

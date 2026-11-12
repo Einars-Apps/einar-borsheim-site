@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -9,10 +10,18 @@ import {
   newGroupId,
   photoKey,
   photoMillis,
+  collectSharedPhotos,
+  galleryPage,
+  galleryPageLabels,
+  galleryPageSize,
+  galleryShowsPager,
+  photoIsShared,
+  photoTag,
   publicPhotos,
   redundantPhotoItem,
-  sharedWithCustomer,
   representativePhotos,
+  sharedWithCustomer,
+  viewerIndex,
 } from "../www/js/photos.js";
 
 const t0 = Date.parse("2026-05-01T10:00:00.000Z");
@@ -127,6 +136,81 @@ test("kunden ser hvert godkjente bilde, også flere på samme post", () => {
   ];
   assert.deepEqual(sharedWithCustomer(photos).map((photo) => photo.id), ["a", "b"]);
   assert.equal(publicPhotos(photos).length, 1);
+});
+
+test("deling kan ligge på approved, shared eller visibleToCustomer", () => {
+  assert.equal(photoIsShared(shot("a")), true);
+  assert.equal(photoIsShared(shot("b", { approved: false, shared: true })), true);
+  assert.equal(photoIsShared(shot("c", { approved: false, visibleToCustomer: true })), true);
+  assert.equal(photoIsShared(shot("d", { approved: false })), false);
+  assert.equal(photoIsShared(shot("e", { url: "", thumbUrl: "https://cdn.example/e.jpg" })), true);
+  assert.equal(photoIsShared(shot("f", { url: "", thumbUrl: "" })), false);
+  assert.equal(photoIsShared(shot("g", { trashed: true })), false);
+  assert.equal(photoTag({ step: "Grøft", caption: "Grøft" }), "Grøft");
+  assert.equal(photoTag({ step: "Grøft", caption: "Hjørnet" }), "Grøft · Hjørnet");
+});
+
+test("bilder på bilde-poster og forsidebilde når kunden, ikke bare ett utvalgt", () => {
+  const items = [
+    { id: "groft", kind: "bilde", approved: true, step: "Grøft", coverUrl: "https://cdn.example/a.jpg", text: "" },
+    { id: "for", kind: "bilde", approved: true, step: "Før", coverUrl: "https://cdn.example/cover.jpg", text: "" },
+    { id: "skjult", kind: "bilde", approved: false, step: "Ferdig", coverUrl: "https://cdn.example/hemmelig.jpg" },
+  ];
+  const photosByItem = {
+    groft: [
+      shot("a", { itemId: "groft", url: "https://cdn.example/a.jpg", step: "Grøft" }),
+      shot("b", { itemId: "groft", url: "https://cdn.example/b.jpg", step: "Grøft" }),
+      shot("nei", { itemId: "groft", approved: false, url: "https://cdn.example/nei.jpg" }),
+    ],
+  };
+  const shared = collectSharedPhotos({
+    items,
+    photosByItem,
+    legacy: [shot("gammel", { itemId: "legacy-gammel", url: "https://cdn.example/gammel.jpg", caption: "Gammel" })],
+  });
+  assert.deepEqual(shared.map((photo) => photo.id), ["a", "b", "cover-for", "gammel"]);
+  assert.equal(shared.some((photo) => photo.id === "nei" || String(photo.url).includes("hemmelig")), false);
+  const embedded = collectSharedPhotos({
+    items: [{
+      id: "notat",
+      approved: true,
+      step: "Rør/duk",
+      photos: [{ id: "inne", url: "https://cdn.example/inne.jpg" }],
+    }],
+  });
+  assert.deepEqual(embedded.map((photo) => photo.id), ["inne"]);
+  assert.equal(embedded[0].step, "Rør/duk");
+});
+
+test("portalen henter bilder også når posten ikke har et kort", () => {
+  const portal = readFileSync(new URL("../kunde/kunde.js", import.meta.url), "utf8");
+  const hydrate = portal.slice(portal.indexOf("async function hydrate"), portal.indexOf("async function loadVisible"));
+  assert.equal(hydrate.includes("if (!media || media.dataset.loaded) return"), false);
+  assert.match(hydrate, /loadVisible/);
+  assert.match(portal, /openPhotoViewer\(index >= 0 \? series : usable/);
+  assert.match(portal, /galleryShowsPager/);
+  assert.match(readFileSync(new URL("../kunde/kunde.css", import.meta.url), "utf8"), /grid-template-columns: 1fr 1fr 1fr/);
+});
+
+test("galleriet deles i sider, og lysbordet stopper i enden", () => {
+  const photos = Array.from({ length: 10 }, (_, index) => shot(String(index + 1)));
+  assert.equal(galleryPageSize(390), 6);
+  assert.equal(galleryPageSize(900), 9);
+  assert.equal(galleryShowsPager(6, 6), false);
+  assert.equal(galleryShowsPager(7, 6), true);
+  const narrow = galleryPage(photos, 2, 6);
+  assert.equal(narrow.page, 2);
+  assert.equal(narrow.pages, 2);
+  assert.deepEqual(narrow.photos.map((photo) => photo.id), ["7", "8", "9", "10"]);
+  const wide = galleryPage(photos, 1, 9);
+  assert.equal(wide.photos.length, 9);
+  assert.equal(galleryPage(photos, 9, 9).page, 2);
+  assert.deepEqual(galleryPageLabels(2, 1), ["1", "2"]);
+  assert.deepEqual(galleryPageLabels(12, 6), ["1", "…", "5", "6", "7", "…", "12"]);
+  assert.equal(viewerIndex(0, -1, 4), 0);
+  assert.equal(viewerIndex(3, 1, 4), 3);
+  assert.equal(viewerIndex(1, 1, 4), 2);
+  assert.equal(viewerIndex(0, 1, 1), 0);
 });
 
 test("bare beste synlige bilde går ut, ikke papirkurv eller avviste", () => {
