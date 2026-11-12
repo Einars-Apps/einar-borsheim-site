@@ -567,7 +567,51 @@ function scopeKr(value) {
 }
 
 export function scopeChangeText(change) {
-  return `${change.label}: planlagt ${formatQty(change.planned)}, utført ${formatQty(change.done)} – ${scopeKr(change.deltaEx)} eks. mva`;
+  return `${change.label}: planlagt ${formatQty(change.planned)}, utført ${formatQty(change.done)} – ${scopeKr(change.deltaEx)} eks. mva. Endring i omfang.`;
+}
+
+export function originalOfferRows(lines) {
+  const rows = [];
+  for (const line of lines || []) {
+    const planned = round2(line?.planned) || 0;
+    if (!(planned > 0)) continue;
+    const unitPrice = round2(line?.unitPrice) || 0;
+    rows.push({
+      id: String(line?.id || ""),
+      label: String(line?.label || "Linje"),
+      unit: String(line?.unit || "").trim(),
+      planned,
+      unitPrice,
+      exVat: round2(planned * unitPrice),
+      source: String(line?.source || "").trim(),
+    });
+  }
+  return rows;
+}
+
+export function originalOfferTotal(rows) {
+  return round2((rows || []).reduce((sum, row) => sum + (round2(row?.exVat) || 0), 0));
+}
+
+export function originalOfferLineText(row) {
+  const unit = String(row?.unit || "").trim();
+  const amount = unit ? `${formatQty(row.planned)} ${unit}` : formatQty(row.planned);
+  return `${row.label}: ${amount} à ${formatKr(row.unitPrice)} = ${formatKr(row.exVat)} eks. mva`;
+}
+
+export function customerOfferDifference(summary) {
+  const offerSum = originalOfferTotal(originalOfferRows(summary?.lines));
+  const baseline = summary?.baseline || {};
+  const originalTotal = baseline.kind === "manuell" && baseline.exVat > 0 ? baseline.exVat : offerSum;
+  const useLines = baseline.kind === "godkjent" && originalTotal > 0;
+  const exVat = useLines
+    ? round2((summary?.estimated?.exVat || 0) - originalTotal)
+    : round2(summary?.differenceExVat || 0);
+  return {
+    originalTotal,
+    exVat,
+    incVat: useLines ? round2(exVat * (1 + VAT_RATE)) : round2(summary?.differenceIncVat || 0),
+  };
 }
 
 function budgetRoom({ lines, extrasExVat, approvedOfferEx, requestEx }) {

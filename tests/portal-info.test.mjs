@@ -8,6 +8,10 @@ import {
   isRoundSumLine,
   lineAmountText,
   liveCost,
+  customerOfferDifference,
+  originalOfferLineText,
+  originalOfferRows,
+  originalOfferTotal,
   scopeChangeText,
 } from "../www/js/cost.js";
 import { householdAllocation } from "../www/js/households.js";
@@ -136,6 +140,7 @@ test("rund sum: hel, halv ferdig, uferdig, og ikke stille økning", () => {
   assert.equal(half.budget.changes.length, 1);
   assert.match(scopeChangeText(half.budget.changes[0]), /planlagt 1, utført 0,5/);
   assert.match(scopeChangeText(half.budget.changes[0]), /−/);
+  assert.match(scopeChangeText(half.budget.changes[0]), /Endring i omfang/);
   assert.equal(/rabatt|discount/i.test(scopeChangeText(half.budget.changes[0])), false);
   const homes = householdAllocation({
     households: [
@@ -193,4 +198,36 @@ test("rund sum: hel, halv ferdig, uferdig, og ikke stille økning", () => {
   assert.equal(unit.lines[0].countedEx, 1200);
   assert.equal(unit.estimated.exVat, 1200);
   assert.equal(unit.differenceExVat, 200);
+});
+
+test("opprinnelig tilbud er fiken-linjene, også når en endring er merket avtalt", () => {
+  const summary = liveCost({
+    cost: {
+      fikenLines: [
+        { id: "dren", label: "Drenering", unit: "meter", planned: 10, done: 4, unitPrice: 100, source: "Fiken-tilbud nr 42" },
+      ],
+    },
+    prices: {},
+    items: [{
+      id: "post",
+      kind: "endring",
+      approved: true,
+      approvalRequested: true,
+      approvalStatus: "godkjent",
+      title: "Tillegg",
+    }],
+  });
+  assert.equal(summary.baseline.kind, "godkjent");
+  assert.equal(summary.baseline.exVat, 0);
+  const rows = originalOfferRows(summary.lines);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].source, "Fiken-tilbud nr 42");
+  assert.equal(originalOfferTotal(rows), 1000);
+  assert.match(originalOfferLineText(rows[0]), /Drenering: 10 meter à/);
+  assert.match(originalOfferLineText(rows[0]), /1[\s\u00a0\u202f]*000,00 eks\. mva/);
+  assert.equal(originalOfferRows([{ id: "tom", label: "Tom", planned: 0, unitPrice: 100 }]).length, 0);
+  assert.equal(summary.differenceExVat, summary.estimated.exVat);
+  const compared = customerOfferDifference(summary);
+  assert.equal(compared.originalTotal, 1000);
+  assert.equal(compared.exVat, 0);
 });
