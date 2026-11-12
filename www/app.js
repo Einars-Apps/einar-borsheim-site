@@ -1756,7 +1756,12 @@ function mountOffers(route) {
         }),
         onAddExtra: () => savePatch({ addExtra: true, extraId: newExtraId() }),
         onDeleteExtra: (extraId) => savePatch({ deleteExtraId: extraId }),
-        onExtra: (extraId, field, value) => savePatch({ extraId, field, value }),
+        onExtra: (extraId, field, value) => savePatch({
+          extraId,
+          field,
+          value,
+          finalizedAt: field === "final" && value === true ? new Date() : null,
+        }),
         payments,
         households: normalizeHouseholds(project.households),
         onAddPayment: async (payment) => {

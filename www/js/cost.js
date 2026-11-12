@@ -234,9 +234,10 @@ export function extraCustomerText(line) {
     const list = goods.map((item) => `${item.description || "Vare"} ${formatKr(item.amount)}`).join(", ");
     bits.push(`varer: ${list}`);
   }
-  if (!bits.length) return "";
   const name = parts.description || "Tillegg";
-  return `${name}: ${bits.join(" + ")} = ${formatKr(extraLineSum(line))} eks. mva`;
+  if (!bits.length) return isFinal(line) ? `${name}: Ferdig.` : "";
+  const sentence = `${name}: ${bits.join(" + ")} = ${formatKr(extraLineSum(line))} eks. mva`;
+  return isFinal(line) ? `${sentence} Ferdig.` : sentence;
 }
 
 export function extraReportLine(line) {
@@ -263,6 +264,11 @@ export function normalizeExtras(raw) {
     if (line?.hours != null) extra.hours = clampQty(line.hours);
     if (line?.timePrice != null) extra.timePrice = clampQty(line.timePrice);
     if (Array.isArray(line?.goods)) extra.goods = normalizeGoods(line.goods);
+    if (isFinal(line)) {
+      extra.final = true;
+      const when = storedTimestamp(line.finalizedAt);
+      if (when != null) extra.finalizedAt = when;
+    }
     if (postId) extra.postId = postId;
     extras.push(extra);
   }
@@ -502,14 +508,19 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       fromFiken: true,
     };
   });
+  let extrasOpen = 0;
+  let extrasFinal = 0;
   const extras = state.extras.map((line) => {
     const sum = extraLineSum(line);
     doneEx += sum;
+    if (line.final === true) extrasFinal += sum;
+    else extrasOpen += sum;
     return { ...line, sum };
   });
-  const extrasExVat = round2(extras.reduce((sum, line) => sum + line.sum, 0));
+  const extrasExVat = round2(extrasOpen + extrasFinal);
   const requestEx = unappliedApprovedEx(requests, cost, state);
-  openEx += extrasExVat;
+  openEx += round2(extrasOpen);
+  finalEx += round2(extrasFinal);
   openEx += requestEx;
   const lines = [...catalog, ...fiken];
   const finalBase = round2(finalEx);
@@ -728,39 +739,40 @@ export function patchCost(raw, prices, patch = {}) {
     next.extras = next.extras.filter((line) => line.id !== patch.deleteExtraId);
   }
   const extra = next.extras.find((line) => line.id === patch.extraId);
-  if (extra && field === "description") {
+  const locked = extra?.final === true && field !== "final";
+  if (extra && !locked && field === "description") {
     extra.description = String(value || "").replace(/\s+/g, " ").trim().slice(0, 200);
   }
-  if (extra && field === "postId") {
+  if (extra && !locked && field === "postId") {
     const postId = String(value || "").trim().slice(0, 39);
     if (postId) extra.postId = postId;
     else delete extra.postId;
   }
-  if (extra && field === "hours") {
+  if (extra && !locked && field === "hours") {
     if (legacyTimerExtra(extra)) extra.quantity = clampQty(value);
     else {
       if (legacyVareExtra(extra)) promoteVareExtra(extra);
       extra.hours = clampQty(value);
     }
   }
-  if (extra && field === "timePrice") {
+  if (extra && !locked && field === "timePrice") {
     if (legacyTimerExtra(extra)) extra.unitPrice = clampQty(value);
     else {
       if (legacyVareExtra(extra)) promoteVareExtra(extra);
       extra.timePrice = clampQty(value);
     }
   }
-  if (extra && field === "quantity") {
+  if (extra && !locked && field === "quantity") {
     if (legacyTimerExtra(extra)) promoteTimerExtra(extra);
     if (legacyVareExtra(extra)) promoteVareExtra(extra);
     extra.quantity = clampQty(value);
   }
-  if (extra && field === "unitPrice") {
+  if (extra && !locked && field === "unitPrice") {
     if (legacyTimerExtra(extra)) promoteTimerExtra(extra);
     if (legacyVareExtra(extra)) promoteVareExtra(extra);
     extra.unitPrice = clampQty(value);
   }
-  if (extra && field === "goods") {
+  if (extra && !locked && field === "goods") {
     if (legacyTimerExtra(extra)) promoteTimerExtra(extra);
     if (legacyVareExtra(extra)) {
       extra.quantity = 0;
@@ -768,6 +780,16 @@ export function patchCost(raw, prices, patch = {}) {
       delete extra.kind;
     }
     extra.goods = normalizeGoods(value);
+  }
+  if (extra && field === "final") {
+    const on = value === true || value === "true" || value === 1 || value === "1";
+    if (on) {
+      extra.final = true;
+      extra.finalizedAt = storedTimestamp(patch.finalizedAt) || storedTimestamp(new Date());
+    } else {
+      delete extra.final;
+      delete extra.finalizedAt;
+    }
   }
   return next;
 }
@@ -856,6 +878,18 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
     }
     if (leftParts.unitPrice !== rightParts.unitPrice) {
       changes.push({ lineId: id, label, field: "unitPrice", from: leftParts.unitPrice, to: rightParts.unitPrice, unit: "kr" });
+    }
+    if ((left.final === true) !== (right.final === true)) {
+      const priced = right.final === true ? right : left;
+      changes.push({
+        lineId: id,
+        label,
+        field: "final",
+        from: left.final === true ? 1 : 0,
+        to: right.final === true ? 1 : 0,
+        unit: "kr",
+        amount: extraLineSum(priced),
+      });
     }
   }
   return changes;
