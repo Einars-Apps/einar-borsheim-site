@@ -392,7 +392,34 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
       }),
     ]));
   }
-  return el("article", { class: "qty-line" }, [
+  const addGood = button("+ Legg til vare", {
+    class: "btn btn-ghost",
+    onClick: () => onExtra?.(row.id, "goods", [
+      ...parts.goods,
+      { id: `v${Math.random().toString(36).slice(2, 8)}`, description: "", amount: 0 },
+    ]),
+  });
+  const remove = button("Slett tillegg", {
+    class: "btn btn-danger",
+    onClick: () => onDeleteExtra?.(row.id),
+  });
+  const finalBox = el("input", { type: "checkbox", "aria-label": `Ferdig – endelig pris ${row.description || "tillegget"}` });
+  finalBox.checked = row.final === true;
+  finalBox.addEventListener("change", () => {
+    const name = String(row.description || "").trim() || "Tillegget";
+    if (finalBox.checked) {
+      if (!window.confirm(`Merke «${name}» som ferdig med endelig pris?`)) {
+        finalBox.checked = false;
+        return;
+      }
+      onExtra?.(row.id, "final", true);
+      return;
+    }
+    finalBox.checked = true;
+    confirmUnlock(name, () => onExtra?.(row.id, "final", false));
+  });
+  const card = el("article", { class: row.final === true ? "qty-line qty-line-final" : "qty-line" }, [
+    row.final === true ? el("p", { class: "final-badge" }, "Ferdig") : null,
     field("Beskrivelse", description),
     el("div", { class: "extra-pair" }, [
       field("Enhetspris, kr eks. mva", unitPrice),
@@ -404,26 +431,28 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
     ]),
     el("p", { class: "qty-label" }, "Varekostnad"),
     goods,
-    button("+ Legg til vare", {
-      class: "btn btn-ghost",
-      onClick: () => onExtra?.(row.id, "goods", [
-        ...parts.goods,
-        { id: `v${Math.random().toString(36).slice(2, 8)}`, description: "", amount: 0 },
-      ]),
-    }),
+    addGood,
     field("Knytt til post", post),
     sum,
-    button("Slett tillegg", {
-      class: "btn btn-danger",
-      onClick: () => onDeleteExtra?.(row.id),
-    }),
+    remove,
+    el("label", { class: "checkline" }, [finalBox, el("span", {}, "Ferdig – endelig pris")]),
   ]);
+  if (row.final === true) {
+    card.querySelectorAll("input, select, textarea, button").forEach((item) => {
+      if (item === finalBox) return;
+      item.disabled = true;
+    });
+  }
+  return card;
 }
 
 function extraSentence(row) {
   const text = extraCustomerText(row);
   if (!text) return null;
-  return el("p", { class: "post-tillegg" }, text);
+  return el("div", { class: "post-tillegg" }, [
+    row.final === true ? el("p", { class: "final-badge" }, "Ferdig") : null,
+    el("p", {}, text),
+  ]);
 }
 
 function splitExtras(extras, lines) {

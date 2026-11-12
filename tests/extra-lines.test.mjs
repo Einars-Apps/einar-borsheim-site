@@ -134,6 +134,54 @@ test("endring av antall på en gammel timerlinje beholder timeprisen", () => {
   assert.equal(extraLineSum(withPrice.extras[0]), 4 * 850 + 2 * 100);
 });
 
+test("ferdig tillegg teller i ferdigstilt pris og senker gjenstår", () => {
+  const open = liveCost({
+    cost: { extras: [{ id: "ta-en", description: "Puss", unitPrice: 100, quantity: 2 }] },
+    prices,
+    items: [],
+  });
+  assert.equal(open.estimated.exVat, 200);
+  assert.equal(open.finalized.exVat, 0);
+  assert.equal(open.remaining.exVat, 200);
+  assert.equal(open.extras[0].final, undefined);
+  const sentinel = { _methodName: "serverTimestamp" };
+  const marked = patchCost(open, prices, {
+    extraId: "ta-en",
+    field: "final",
+    value: true,
+    finalizedAt: sentinel,
+  });
+  assert.equal(marked.extras[0].final, true);
+  assert.equal(marked.extras[0].finalizedAt._methodName, undefined);
+  assert.equal(typeof marked.extras[0].finalizedAt.seconds, "number");
+  const stored = persistableCost(marked);
+  assert.equal(stored.extras[0].finalizedAt._methodName, undefined);
+  const done = liveCost({ cost: stored, prices, items: [] });
+  assert.equal(done.estimated.exVat, 200);
+  assert.equal(done.finalized.exVat, 200);
+  assert.equal(done.remaining.exVat, 0);
+  assert.match(extraCustomerText(done.extras[0]), /Ferdig\.$/);
+  const homes = householdAllocation({
+    households: [
+      { id: "a", name: "Første", share: 50 },
+      { id: "b", name: "Andre", share: 50 },
+    ],
+    totalEx: done.estimated.exVat,
+    totalInc: done.estimated.incVat,
+    payments: [],
+  });
+  assert.equal(homes.totalEx, 200);
+  const changed = patchCost(stored, prices, { extraId: "ta-en", field: "quantity", value: "9" });
+  assert.equal(changed.extras[0].quantity, 2);
+  const opened = patchCost(stored, prices, { extraId: "ta-en", field: "final", value: false });
+  assert.equal(opened.extras[0].final, undefined);
+  assert.equal(opened.extras[0].finalizedAt, undefined);
+  const again = liveCost({ cost: opened, prices, items: [] });
+  assert.equal(again.finalized.exVat, 0);
+  assert.equal(again.remaining.exVat, 200);
+  assert.equal(costChanges(stored, opened, prices).some((change) => change.field === "final"), true);
+});
+
 test("feltappen har ett samlet tillegg, ikke tre opprett-knapper", () => {
   const view = readFileSync("www/js/cost-view.js", "utf8");
   assert.match(view, /Legg til nytt tillegg/);
@@ -142,6 +190,14 @@ test("feltappen har ett samlet tillegg, ikke tre opprett-knapper", () => {
   assert.match(view, /\+ Legg til vare/);
   assert.match(view, /Timepris, kr eks\. mva/);
   assert.match(view, /Enhetspris, kr eks\. mva/);
+  assert.match(view, /Merke «\$\{name\}» som ferdig med endelig pris\?/);
+  assert.match(view, /Ferdig – endelig pris/);
+  assert.match(view, /class: "final-badge" \}, "Ferdig"/);
+  const app = readFileSync("www/app.js", "utf8");
+  const save = app.slice(app.indexOf("const savePatch"), app.indexOf("const applyApproved"));
+  assert.match(save, /costDoc = previous/);
+  assert.match(save, /firestoreWriteMessage\(error, "Kunne ikke lagre mengden"\)/);
+  assert.match(app, /finalizedAt: field === "final" && value === true \? new Date\(\)/);
   const rules = readFileSync("firestore.rules", "utf8");
   const quantities = rules.slice(rules.indexOf("match /quantities/"), rules.indexOf("match /costLog/"));
   assert.match(quantities, /allow create, update, delete: if isAdmin\(\)/);
