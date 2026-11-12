@@ -8,7 +8,6 @@ import {
   setDoc,
   collection,
   addDoc,
-  updateDoc,
   query,
   where,
   orderBy,
@@ -43,11 +42,9 @@ import {
   alternativeHeading,
   alternativePriceText,
   chosenAlternative,
-  customerDecisionError,
-  customerDecisionPatch,
+  customerOfferStatusLabel,
   isOfferItem,
   offerStatus,
-  offerStatusLabel,
   offerTypeLabel,
 } from "../www/js/offers.js";
 import { changeText, customerSeesCost, liveCost } from "../www/js/cost.js";
@@ -133,8 +130,6 @@ function watchCost() {
     }, (error) => console.error(error));
   }
 }
-let previewChoices = {};
-
 function show(view) {
   for (const node of [viewLoading, viewError, viewProject]) node.classList.add("hidden");
   view.classList.remove("hidden");
@@ -233,14 +228,10 @@ function paintCost() {
   const slot = document.getElementById("cost-slot");
   if (!slot) return;
   const items = mergedItems();
-  for (const item of items) {
-    if (offerStatus(item) !== "sendt") delete previewChoices[item.id];
-  }
   const summary = liveCost({
     cost: costState,
     prices: {},
     items,
-    previewChoices,
     requests,
   });
   slot.replaceChildren(renderCostOverview({
@@ -260,10 +251,9 @@ function paintCost() {
     items,
     audience: "kunde",
     editable: false,
-    showPreview: true,
+    showPreview: false,
     showPayments: false,
     payments,
-    requestHref: portalSectionVisible(project, "foresporsler") ? "#seksjon-foresporsler" : "",
   }));
 }
 
@@ -271,7 +261,7 @@ function paintPayments() {
   const slot = document.getElementById("payment-slot");
   if (!slot) return;
   const summary = customerSeesCost(project)
-    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), previewChoices, requests })
+    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), requests })
     : null;
   slot.replaceChildren(renderPaymentSummary({
     id: "seksjon-betalinger",
@@ -327,7 +317,7 @@ function paintAllocation() {
   const showTotal = portalSectionVisible(project, "kostnad");
   const showPayments = portalSectionVisible(project, "betalinger");
   const summary = showTotal
-    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), previewChoices, requests })
+    ? liveCost({ cost: costState, prices: {}, items: mergedItems(), requests })
     : null;
   const allocation = householdAllocation({
     households: project.households,
@@ -346,26 +336,7 @@ function paintAllocation() {
 function paintRequests() {
   const slot = document.getElementById("request-slot");
   if (!slot) return;
-  const node = renderCustomerRequests({
-    requests,
-    onCreate: async (text) => {
-      if (previewMode) return;
-      await addDoc(collection(db, "projects", projectId, "requests"), {
-        status: "ny",
-        text: String(text || "").trim().slice(0, 1999),
-        createdBy: uid,
-        createdAt: serverTimestamp(),
-      });
-    },
-    onDecide: async (request, status) => {
-      if (previewMode || !request?.id) return;
-      await updateDoc(doc(db, "projects", projectId, "requests", request.id), {
-        status,
-        decidedAt: serverTimestamp(),
-        decidedBy: uid,
-      });
-    },
-  });
+  const node = renderCustomerRequests({ requests });
   node.id = "seksjon-foresporsler";
   slot.replaceChildren(node);
   if (previewMode) applyPortalPreviewLock(slot);
@@ -456,7 +427,7 @@ function render() {
       offerPosts.length ? el("h2", {}, "Tilbud og endringer") : null,
     ]);
     if (offerPosts.length) {
-      box.append(el("p", { class: "muted" }, "Velg ett alternativ og trykk Godkjenn valgt løsning. Tidspunkt og navn lagres. Pris kr 0,00 er inkludert."));
+      box.append(el("p", { class: "muted" }, "Her kan du lese tilbud og endringer. De er til informasjon, og du trenger ikke velge eller godkjenne noe. Pris kr 0,00 er inkludert."));
       for (const item of offerPosts) box.append(offerCard(item));
     }
     if (customerSeesCost(project)) box.append(el("div", { id: "cost-slot" }));
@@ -536,7 +507,7 @@ function render() {
 function itemCard(item, showStatus = false) {
   const card = el("article", { class: "k-card", id: `item-${item.id}` }, [
     el("h3", {}, item.title || (item.kind === "vurdering" ? `${item.stars || "–"} av 5` : "Notat")),
-    showStatus ? el("p", {}, item.approved ? el("span", { class: "pill pill-ok" }, "Godkjent") : el("span", { class: "pill" }, "Venter på godkjenning")) : null,
+    showStatus ? el("p", {}, item.approved ? el("span", { class: "pill pill-ok" }, "Lagt inn") : el("span", { class: "pill" }, "Einar ser på det")) : null,
     item.kind === "vurdering" && item.title ? el("p", {}, `${item.stars || "–"} av 5`) : null,
     item.text ? el("p", { class: "pre" }, item.text) : null,
     el("p", { class: "muted" }, formatWhen(item.createdAt)),
@@ -664,7 +635,7 @@ async function hydrate(item) {
     if (generation !== portalGeneration || !comments) return;
     for (const comment of thread.filter((entry) => customerVisibleContent(entry, uid))) {
       comments.append(el("div", { class: "comment" }, [
-        el("small", {}, `${comment.source === "kunde" ? "Deg" : "Einar"} · ${formatWhen(comment.createdAt)}${comment.approved === false ? " · venter" : ""}`),
+        el("small", {}, `${comment.source === "kunde" ? "Deg" : "Einar"} · ${formatWhen(comment.createdAt)}${comment.approved === false ? " · Einar ser på den" : ""}`),
         el("p", { class: "pre" }, comment.text || ""),
       ]));
     }
@@ -733,7 +704,7 @@ function submissionForm() {
         await uploadPhoto(refItem.id, chosen[index], index);
       }
       form.reset();
-      notice = "Takk. Det vises her med en gang, og i rapporten når Einar har godkjent det.";
+      notice = "Takk. Det vises her med en gang, og i rapporten når Einar har lagt det inn.";
       document.activeElement?.blur?.();
       render();
     } catch (error) {
@@ -798,7 +769,7 @@ function ratingForm() {
       form.reset();
       stars = 0;
       [...starRow.children].forEach((node) => node.setAttribute("aria-pressed", "false"));
-      notice = "Takk. Vurderingen vises offentlig først når Einar har godkjent den.";
+      notice = "Takk. Vurderingen vises offentlig først når Einar har lagt den ut.";
       document.activeElement?.blur?.();
       render();
     } catch (error) {
@@ -854,105 +825,34 @@ function approvalNote(item) {
   return el("p", { class: "notice" }, approvalLine(item));
 }
 
-function decisionButtons(item) {
-  return el("div", { class: "k-actions" }, [
-    el("button", {
-      type: "button",
-      class: "btn btn-primary",
-      onclick: () => decide(item, "godkjent"),
-    }, item.kind === "tilbud" ? "Godkjenn tilbudet" : "Godkjenn endringen"),
-    el("button", {
-      type: "button",
-      class: "btn btn-ghost",
-      onclick: () => decide(item, "avslatt"),
-    }, "Avslå"),
-  ]);
-}
-
 function offerCard(item) {
   const status = offerStatus(item);
   const alternatives = item.alternatives || [];
   const chosen = chosenAlternative(item);
-  let selected = "";
   const body = [
     el("h3", {}, item.title || offerTypeLabel(item.kind)),
-    el("p", { class: "muted" }, `${offerTypeLabel(item.kind)} · ${offerStatusLabel(status)}`),
+    el("p", { class: "muted" }, `${offerTypeLabel(item.kind)} · ${customerOfferStatusLabel(status)}`),
     item.text ? el("p", { class: "pre" }, item.text) : null,
   ];
-  if (status === "sendt" && alternatives.length) {
+  if (alternatives.length) {
     const choices = el("div", { class: "choices" });
-    selected = previewChoices[item.id] || "";
     for (const alternative of alternatives) {
-      const input = el("input", { type: "radio", name: `alt-${item.id}`, value: alternative.id });
-      if (selected === alternative.id) input.checked = true;
-      input.addEventListener("change", () => {
-        selected = alternative.id;
-        previewChoices[item.id] = alternative.id;
-        paintCost();
-      });
-      choices.append(el("label", { class: "choice" }, [
-        input,
+      const agreed = status === "godkjent" && chosen?.id === alternative.id;
+      choices.append(el("div", { class: "choice" }, [
         el("span", {}, [
           el("strong", {}, alternativeHeading(alternative)),
+          agreed ? el("span", { class: "pill pill-ok" }, "Avtalt") : null,
           alternative.description ? el("span", { class: "muted" }, alternative.description) : null,
           el("span", {}, alternativePriceText(alternative)),
         ]),
       ]));
     }
-    body.push(choices, el("div", { class: "k-actions" }, [
-      el("button", {
-        type: "button",
-        class: "btn btn-primary",
-        onclick: () => {
-          const error = customerDecisionError(item, "godkjent", selected);
-          if (error) {
-            alert(error);
-            return;
-          }
-          decide(item, "godkjent", selected);
-        },
-      }, "Godkjenn valgt løsning"),
-      el("button", {
-        type: "button",
-        class: "btn btn-ghost",
-        onclick: () => decide(item, "avslatt"),
-      }, "Avslå"),
-    ]));
-  } else if (status === "sendt") {
-    body.push(decisionButtons(item));
-  } else if (chosen) {
-    body.push(el("p", {}, `Valgt løsning: ${alternativeHeading(chosen)}. ${alternativePriceText(chosen)}`));
-    body.push(approvalNote(item));
-  } else {
-    body.push(approvalNote(item));
+    body.push(choices);
   }
+  body.push(approvalNote(item));
   const card = el("article", { class: "k-card", id: `item-${item.id}` }, body);
   card.append(el("div", { class: "k-stack", id: `media-${item.id}` }), el("div", { id: `comments-${item.id}` }));
   return card;
-}
-
-async function decide(item, status, alternativeId = "") {
-  if (previewMode) return;
-  const name = String(project?.customerName || "Kunde").trim().slice(0, 79) || "Kunde";
-  const error = customerDecisionError(item, status, alternativeId);
-  if (error) {
-    alert(error);
-    return;
-  }
-  try {
-    await updateDoc(doc(db, "projects", projectId, "items", item.id), {
-      ...customerDecisionPatch(item, status, alternativeId),
-      approvedAt: serverTimestamp(),
-      approvedBy: uid,
-      approvedByName: name,
-    });
-    notice = status === "godkjent" ? "Takk. Godkjenningen er lagret." : "Svaret er lagret.";
-    document.activeElement?.blur?.();
-    render();
-  } catch (error) {
-    console.error(error);
-    alert("Kunne ikke lagre svaret. Prøv igjen.");
-  }
 }
 
 function mergedDocs() {
@@ -1036,7 +936,7 @@ function documentSection() {
       el("p", { class: "muted" }, [
         item.source === "customer" ? "Deg" : "Einar A Børsheim",
         formatWhen(item.createdAt),
-        item.approved === false ? "Venter på godkjenning" : "",
+        item.approved === false ? "Einar ser på det" : "",
       ].filter(Boolean).join(" · ")),
     ]));
   }
@@ -1074,7 +974,7 @@ function documentSection() {
         });
       }
       file.value = "";
-      status.textContent = "Sendt. Einar godkjenner før det vises som klart.";
+      status.textContent = "Sendt. Einar ser på det før det vises som klart.";
     } catch (error) {
       console.error(error);
       status.textContent = "Dokumentet ble ikke sendt.";

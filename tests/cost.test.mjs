@@ -205,7 +205,7 @@ test("ferdig post har endelig pris utført ganger enhetspris, og gamle poster er
   assert.equal(opened.fikenLines[0].finalizedAt, null);
   assert.match(changeText(costChanges(closed, opened, prices).find((change) => change.field === "final")), /Posten er åpnet igjen/);
   const report = costReportText(summary, []);
-  assert.match(report, /Låst sluttpris \(ferdige poster\)/);
+  assert.match(report, /Ferdigstilt pris \(ferdige poster\)/);
   assert.equal(summary.remaining.exVat, summary.estimated.exVat - summary.finalized.exVat);
   assert.match(report, /Gjenstår \(estimert\)/);
   assert.match(report, /Ferdig – endelig pris/);
@@ -454,7 +454,7 @@ test("låst sluttmengde flytter totalen, og åpne poster bruker endret mengde", 
   assert.equal(changed.remaining.exVat, 1200);
   assert.equal(changed.baseline.exVat, 1000);
   assert.equal(changed.differenceExVat, 200);
-  assert.equal(costReportText(changed, []).includes("Låst sluttpris"), false);
+  assert.equal(costReportText(changed, []).includes("Ferdigstilt pris"), false);
 
   const withRequests = liveCost({
     cost: openCost,
@@ -527,7 +527,7 @@ test("Fiken-tilbud 10102: to låste poster flytter totalen, gjenstår er total m
   assert.equal(summary.remaining.exVat, summary.estimated.exVat - summary.finalized.exVat);
   assert.equal(summary.differenceExVat, -76250);
   assert.equal(summary.incurred.exVat, 206250);
-  assert.match(costReportText(summary, []), /Låst sluttpris \(ferdige poster\)/);
+  assert.match(costReportText(summary, []), /Ferdigstilt pris \(ferdige poster\)/);
 });
 
 test("budsjettrom kommer bare fra låste poster, minus godkjent tillegg", () => {
@@ -549,7 +549,8 @@ test("budsjettrom kommer bare fra låste poster, minus godkjent tillegg", () => 
   assert.notEqual(under.remaining.exVat, 372500);
   assert.equal(under.budget.changes.length, 1);
   assert.match(scopeChangeText(under.budget.changes[0]), /Masseutskifte grøft under nybygg \(RS\): planlagt 1, utført 0,5 – kr −71[\s\u00a0\u202f]*000,00 eks\. mva/);
-  assert.match(budgetStatusText(under.budget), /Under tilbudet så langt: kr 71[\s\u00a0\u202f]*000,00 eks\. mva \(kr 88[\s\u00a0\u202f]*750,00 inkl\. mva\)\. Ved ønske om ekstra arbeid kan du sende en forespørsel\./);
+  assert.match(budgetStatusText(under.budget), /^Under tilbudet så langt: kr 71[\s\u00a0\u202f]*000,00 eks\. mva \(kr 88[\s\u00a0\u202f]*750,00 inkl\. mva\)\.$/);
+  assert.equal(/forespørsel/.test(budgetStatusText(under.budget)), false);
   const noted = patchCost({ fikenLines: lines }, prices, { lineId: "masse", field: "finalNote", value: "Halve jobben var ikke mulig å utføre" });
   const withNote = liveCost({ cost: noted, prices, items: [] });
   assert.equal(withNote.budget.changes[0].note, "Halve jobben var ikke mulig å utføre");
@@ -588,7 +589,8 @@ test("budsjettrom kommer bare fra låste poster, minus godkjent tillegg", () => 
   const view = readFileSync("www/js/cost-view.js", "utf8");
   assert.match(view, /class: "final-badge" \}, "Ferdig"/);
   assert.match(view, /budgetStatusText\(summary\.budget\)/);
+  assert.match(view, /audience !== "kunde"/);
   assert.match(view, /Send en forespørsel/);
-  assert.match(readFileSync("kunde/kunde.js", "utf8"), /requestHref:/);
+  assert.equal(readFileSync("kunde/kunde.js", "utf8").includes("requestHref:"), false);
   assert.match(readFileSync("www/app.js", "utf8"), /requestHref: "#seksjon-foresporsler"/);
 });

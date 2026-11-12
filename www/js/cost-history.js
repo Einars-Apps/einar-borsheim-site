@@ -399,27 +399,35 @@ function offerEvents(item, audience, now) {
   const who = audience === "kunde" ? "Du" : (String(item.approvedByName || "").trim() || "Kunden");
   const date = shortDay(whenStamp(item.approvedAt), now);
   const verb = status === "godkjent" ? "godkjente" : "avslo";
-  const title = date ? `${who} ${verb} ${word} ${date}.` : `${who} ${verb} ${word}.`;
+  const title = audience === "kunde"
+    ? (status === "godkjent"
+      ? (date ? `Avtalt ${date}.` : "Avtalt.")
+      : (date ? `Ikke tatt med ${date}.` : "Ikke tatt med."))
+    : (date ? `${who} ${verb} ${word} ${date}.` : `${who} ${verb} ${word}.`);
   const lines = [];
   let money = null;
   if (status === "godkjent") {
     const alternative = chosenAlternative(item);
     if (alternative) {
       money = alternativeTotals(alternative).exVat;
-      if (item.kind === "endring") lines.push(`Endring lagt til: ${name}. ${alternative.name || "Valgt løsning"}.`);
-      else lines.push(`Valgt løsning: ${alternative.name || "Valgt løsning"}. ${alternativePriceText(alternative)}.`);
+      if (item.kind === "endring") lines.push(`Endring lagt til: ${name}. ${alternative.name || "Avtalt løsning"}.`);
+      else lines.push(`Avtalt løsning: ${alternative.name || "Avtalt løsning"}. ${alternativePriceText(alternative)}.`);
       lines.push(same(money, 0) ? "kr 0,00, inkludert. Prisen øker ikke." : `(${signedKr(money)} eks. mva)`);
+    } else if (audience === "kunde") {
+      lines.push("Beløpet står ikke på posten, så det legges ikke til en sum.");
     } else {
-      lines.push("Godkjent. Beløpet står ikke på posten, så det legges ikke til en sum.");
+      lines.push("Avtalt. Beløpet står ikke på posten, så det legges ikke til en sum.");
     }
   } else {
     lines.push("Prisen ble ikke endret.");
     money = 0;
   }
+  const notedBy = audience === "kunde" ? (String(item.approvedByName || "").trim() || "Einar") : who;
   events.push({
-    ...eventShell({ time: whenStamp(item.approvedAt) ?? whenStamp(item.createdAt), byName: who }, "tilbud", status === "godkjent" ? "check" : "alert", title, lines),
+    ...eventShell({ time: whenStamp(item.approvedAt) ?? whenStamp(item.createdAt), byName: notedBy }, "tilbud", status === "godkjent" ? "check" : "alert", title, lines),
     actor: "kunde",
-    actorLabel: who,
+    actorLabel: notedBy,
+    audience,
     money,
     kind: status === "godkjent" ? "godkjent" : "avslatt",
   });
@@ -438,16 +446,24 @@ function agreedEvents(entries) {
 }
 
 export function extraTilleggText(extra, entries = [], now = new Date()) {
-  const name = String(extra?.description || "").trim() || "Tillegg";
+  const name = String(extra?.description || "").trim();
   const qty = round2(extra?.quantity) ?? 0;
   const price = round2(extra?.unitPrice) ?? 0;
-  const sum = round2(extra?.sum != null ? extra.sum : qty * price) ?? 0;
+  const sum = round2(extra?.sum != null ? extra.sum : (extra?.kind === "vare" ? price : qty * price)) ?? 0;
+  if (extra?.kind === "timer") {
+    const who = name ? `, ${name}` : "";
+    return `Timer: ${formatQty(qty)} t à ${formatKr(price)}${who}${moneyText(sum)}`;
+  }
+  if (extra?.kind === "vare") {
+    return name ? `Varekostnad: ${name}, ${formatKr(sum)} eks. mva.` : `Varekostnad: ${formatKr(sum)} eks. mva.`;
+  }
+  const label = name || "Tillegg";
   const nets = netsOf(entries.filter((entry) => entry.lineId === extra?.id && entry.field === "quantity"));
   const last = nets.length ? nets[nets.length - 1] : null;
   const dated = last && same(last.to, qty) ? shortDay(last.time, now) : "";
   const qtyBit = last && dated && same(last.from, 0) ? `+${formatQty(qty)} stk` : `${formatQty(qty)} stk`;
   const when = dated ? ` avtalt ${dated}` : "";
-  return `Tillegg: ${name}, ${qtyBit}${when}${moneyText(sum)}`;
+  return `Tillegg: ${label}, ${qtyBit}${when}${moneyText(sum)}`;
 }
 
 function detailLine(entry) {
@@ -484,7 +500,8 @@ function addRunningSums(events) {
       if (event.money == null) approvedKnown = false;
       else approvedSum = round2(approvedSum + event.money);
       if (approvedKnown) {
-        event.lines.push(`Sum godkjente poster er nå ${formatKr(approvedSum)} eks. mva.`);
+        const word = event.audience === "kunde" ? "avtalte" : "godkjente";
+        event.lines.push(`Sum ${word} poster er nå ${formatKr(approvedSum)} eks. mva.`);
       }
     }
   }

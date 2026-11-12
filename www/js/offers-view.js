@@ -43,7 +43,7 @@ export function renderOfferList({ items, project, onOpen, onNew, cost = null }) 
   const sum = approvedChoiceSum(posts);
   const list = el("div", { class: "stack" });
   if (!posts.length) {
-    list.append(el("p", { class: "empty" }, "Ingen poster ennå. En post kan være tilbud, endring eller tillegg, med alternativer kunden velger mellom."));
+    list.append(el("p", { class: "empty" }, "Ingen poster ennå. En post kan være tilbud, endring eller tillegg. Kunden ser dem som informasjon."));
   }
   for (const item of posts) {
     const status = offerStatus(item);
@@ -66,7 +66,7 @@ export function renderOfferList({ items, project, onOpen, onNew, cost = null }) 
   return el("div", { class: "stack offers-screen" }, [
     el("section", { class: "card continue" }, [
       el("h2", { class: "h-app" }, "Tilbud og endringer"),
-      el("p", { class: "meta" }, "Samme godkjenning som før. Kunden velger ett alternativ. Pris kr 0,00 betyr inkludert."),
+      el("p", { class: "meta" }, "Kunden ser posten som informasjon og velger ikke en løsning i portalen. Pris kr 0,00 betyr inkludert."),
       el("p", { class: "pre" }, formatOfferSum(sum)),
       button("Ny post", { class: "btn btn-primary", onClick: onNew }),
     ]),
@@ -75,7 +75,7 @@ export function renderOfferList({ items, project, onOpen, onNew, cost = null }) 
   ]);
 }
 
-export function renderOfferEditor({ item, project, onSave, onSend, onWithdraw, onFiken, onFikenProject }) {
+export function renderOfferEditor({ item, project, onSave, onSend, onWithdraw, onAgree, onFiken, onFikenProject }) {
   const status = offerStatus(item);
   const stored = item.alternatives?.length ? item.alternatives : blankOfferFields().alternatives;
   const alternatives = stored.map((alternative) => ({ ...alternative }));
@@ -101,15 +101,15 @@ export function renderOfferEditor({ item, project, onSave, onSend, onWithdraw, o
       return;
     }
     if (status === "godkjent" && chosen) {
-      note.textContent = `Kunden valgte ${alternativeHeading(chosen)}. ${alternativePriceText(chosen)}.`;
+      note.textContent = `Avtalt løsning: ${alternativeHeading(chosen)}. ${alternativePriceText(chosen)}.`;
       return;
     }
     if (status === "avslatt") {
-      note.textContent = "Kunden har avslått. Lag en ny post hvis tilbudet skal endres.";
+      note.textContent = "Posten er ikke tatt med. Lag en ny post hvis tilbudet skal endres.";
       return;
     }
     if (status === "sendt") {
-      note.textContent = "Sendt til kunden. Venter på valg og godkjenning.";
+      note.textContent = "Sendt til kunden som informasjon. Kunden bestiller eller godkjenner ikke i portalen.";
       return;
     }
     note.textContent = "Utkast. Lagre alternativene, og send posten når den er klar.";
@@ -186,6 +186,26 @@ export function renderOfferEditor({ item, project, onSave, onSend, onWithdraw, o
       onClick: () => onWithdraw?.(),
     }));
   }
+  const agreePick = status === "sendt" && alternatives.length
+    ? el("select", { "aria-label": "Løsning som er avtalt" })
+    : null;
+  if (agreePick) {
+    for (const alternative of alternatives) {
+      agreePick.append(el("option", { value: alternative.id }, alternative.name || "Alternativ"));
+    }
+    actions.push(button("Merk som avtalt", {
+      class: "btn btn-ghost",
+      onClick: async () => {
+        try {
+          await persist();
+          await onAgree?.(agreePick.value);
+          note.textContent = "Merket som avtalt. Kunden ser det som informasjon.";
+        } catch (error) {
+          note.textContent = error.message || "Kunne ikke merke posten.";
+        }
+      },
+    }));
+  }
 
   const fiken = el("div", { class: "stack" });
   if (status === "godkjent" && chosenAlternative(item)) {
@@ -237,16 +257,17 @@ export function renderOfferEditor({ item, project, onSave, onSend, onWithdraw, o
       fallback.value = fikenProjectFallback(item, project);
     }
   } else {
-    fiken.append(el("p", { class: "meta" }, "Fiken bruker den godkjente løsningen. Knappene kommer når kunden har valgt."));
+    fiken.append(el("p", { class: "meta" }, "Fiken bruker en avtalt løsning. Knappene kommer når posten er merket som avtalt."));
   }
 
   paintNote();
   drawRows();
   return el("section", { class: "card continue offer-editor" }, [
     el("h2", { class: "h-app" }, "Alternativer"),
-    el("p", { class: "meta" }, `${offerTypeLabel(item.kind)} · ${offerStatusLabel(status)}. Kunden kan bare velge, ikke endre prisen.`),
+    el("p", { class: "meta" }, `${offerTypeLabel(item.kind)} · ${offerStatusLabel(status)}. Kunden ser alternativene som informasjon og kan ikke endre prisen.`),
     note,
     field("Type", kind),
+    agreePick ? field("Avtalt løsning", agreePick) : null,
     rows,
     button("Legg til alternativ", {
       class: "btn btn-ghost",

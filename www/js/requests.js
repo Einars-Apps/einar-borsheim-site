@@ -55,6 +55,14 @@ export function requestStatusLabel(request) {
   return STATUS_LABEL[requestStatus(request)];
 }
 
+export function customerRequestStatusLabel(request) {
+  const status = requestStatus(request);
+  if (status === "godkjent") return "Tatt med";
+  if (status === "avslatt") return "Ikke tatt med";
+  if (status === "besvart") return "Svar fra Einar";
+  return "Sendt til Einar";
+}
+
 export function requestTotal(quantity, unitPrice) {
   const qty = parseRequestNumber(quantity);
   const price = parseRequestNumber(unitPrice);

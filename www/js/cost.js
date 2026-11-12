@@ -52,6 +52,58 @@ export function signedQty(value) {
   return formatQty(0);
 }
 
+export const COST_INFO_NOTE = "Oversikten viser utført og avtalt arbeid. Ønsker du noe ekstra, ta kontakt med Einar – arbeid utover tilbudslinjene faktureres etter avtale.";
+export const ESTIMATE_HELP = "Estimert: posten er ikke ferdig. Summen er mengde ganger enhetspris, og den kan fortsatt endre seg til posten er ferdig.";
+export const ROUND_SUM_HELP = "Rund sum: 1 er hele det opprinnelige omfanget, og 0,5 er halvparten. Merk Ferdig når det ikke skal gjøres mer på posten. Sluttprisen blir den andelen som er ført inn, og den går ikke over den avtalte summen av seg selv.";
+
+export function isRoundSumLine(line) {
+  const unit = String(line?.unit || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (unit === "rs" || unit === "rund sum" || unit === "rundsum") return true;
+  const label = String(line?.label || "");
+  return /\(\s*rs\s*\)/i.test(label) || /\brund\s+sum\b/i.test(label);
+}
+
+export function roundSumPrice(line) {
+  const planned = round2(line?.planned) || 0;
+  const addition = round2(line?.addition) || 0;
+  const agreedQty = round2(planned + addition);
+  const done = round2(line?.done) || 0;
+  const price = round2(line?.unitPrice) || 0;
+  const final = line?.final === true;
+  const countedQty = final ? round2(Math.min(done, agreedQty)) : agreedQty;
+  return {
+    planned,
+    addition,
+    agreedQty,
+    done,
+    price,
+    agreedEx: round2(agreedQty * price),
+    countedQty,
+    countedEx: round2(countedQty * price),
+    final,
+    capped: done > agreedQty,
+  };
+}
+
+export function lineAmountText(line) {
+  if (!isRoundSumLine(line)) return "";
+  const rs = roundSumPrice(line);
+  if (line?.final === true) {
+    const partial = partialFinalText(line);
+    const note = String(line?.finalNote || "").replace(/\s+/g, " ").trim();
+    const cap = rs.capped ? ` Utført ${formatQty(rs.done)} er over avtalt omfang og øker ikke summen.` : "";
+    return [
+      partial,
+      `Ferdig beløp ${formatKr(rs.countedEx)} eks. mva.${cap}`,
+      note ? `Avtalt omfang: ${note}.` : "",
+    ].filter(Boolean).join(" ");
+  }
+  if (rs.capped) {
+    return `Rund sum ${formatKr(rs.agreedEx)} eks. mva. Utført ${formatQty(rs.done)} er over avtalt omfang og øker ikke summen.`;
+  }
+  return `Rund sum ${formatKr(rs.agreedEx)} eks. mva. Utført ${formatQty(rs.done)} endrer ikke rundsummen før posten er merket Ferdig.`;
+}
+
 export function emptyCost(prices = DEFAULT_PRICES) {
   const lines = {};
   for (const [id, , , key] of PRICE_LINES) {
@@ -100,6 +152,30 @@ export function normalizeFikenLines(raw) {
   return lines;
 }
 
+export function extraKind(line) {
+  return line?.kind === "timer" || line?.kind === "vare" ? line.kind : "";
+}
+
+export function extraLineSum(line) {
+  if (extraKind(line) === "vare") return round2(line?.unitPrice);
+  return round2((round2(line?.quantity) || 0) * (round2(line?.unitPrice) || 0));
+}
+
+export function extraReportLine(line) {
+  const name = String(line?.description || "").replace(/\s+/g, " ").trim();
+  const sum = round2(line?.sum != null ? line.sum : extraLineSum(line));
+  if (extraKind(line) === "timer") {
+    const who = name ? `, ${name}` : "";
+    return `Timer: ${formatQty(line?.quantity)} t à ${formatKr(line?.unitPrice)}${who}. Linjesum ${formatKr(sum)} eks. mva.`;
+  }
+  if (extraKind(line) === "vare") {
+    return name
+      ? `Varekostnad: ${name}, ${formatKr(sum)} eks. mva.`
+      : `Varekostnad: ${formatKr(sum)} eks. mva.`;
+  }
+  return `${name || "Tillegg"}: ${formatQty(line?.quantity)} à ${formatKr(line?.unitPrice)} eks. mva. Linjesum ${formatKr(sum)} eks. mva.`;
+}
+
 export function normalizeExtras(raw) {
   const list = Array.isArray(raw?.extras) ? raw.extras : [];
   const seen = new Set();
@@ -115,6 +191,8 @@ export function normalizeExtras(raw) {
       unitPrice: clampQty(line?.unitPrice),
       quantity: clampQty(line?.quantity),
     };
+    const kind = extraKind(line);
+    if (kind) extra.kind = kind;
     if (postId) extra.postId = postId;
     extras.push(extra);
   }
@@ -298,16 +376,24 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   let doneEx = 0;
   let finalEx = 0;
   let openEx = 0;
-  const takeLine = (line, money) => {
+  const takeLine = (line, money, described) => {
+    if (isRoundSumLine(described)) {
+      const rs = roundSumPrice(described);
+      doneEx += round2(Math.min(rs.done, rs.agreedQty) * rs.price);
+      if (described.final === true) finalEx += rs.countedEx;
+      else openEx += rs.agreedEx;
+      return rs.countedEx;
+    }
     doneEx += money.doneSum;
-    // Låst post: sluttmengde × pris. Åpen post: Endret til (planlagt + avtalt tillegg) ellers planlagt.
+    // Ferdig post: utført mengde × pris. Åpen post: planlagt + avtalt tillegg.
     if (line.final === true) finalEx += money.doneSum;
     else openEx += money.plannedSum;
+    return line.final === true ? money.doneSum : money.plannedSum;
   };
   const catalog = PRICE_LINES.map(([id, label, unit]) => {
     const line = state.lines[id];
     const money = lineMoney(line);
-    takeLine(line, money);
+    const countedEx = takeLine(line, money, { ...line, label, unit });
     return {
       id,
       label,
@@ -321,7 +407,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       doneSum: money.doneSum,
       final: line.final === true,
       finalizedAt: line.final === true ? (line.finalizedAt ?? null) : null,
-      countedEx: line.final === true ? money.doneSum : money.plannedSum,
+      countedEx,
       basis: line.final === true ? "låst" : (money.addition ? "endret" : "planlagt"),
       finalNote: line.finalNote || "",
       fromFiken: false,
@@ -331,7 +417,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   }).filter((line) => line.planned > 0 || line.addition > 0 || line.done > 0 || line.final);
   const fiken = state.fikenLines.map((line) => {
     const money = lineMoney(line);
-    takeLine(line, money);
+    const countedEx = takeLine(line, money, line);
     return {
       ...line,
       addition: money.addition,
@@ -340,14 +426,14 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       doneSum: money.doneSum,
       final: line.final === true,
       finalizedAt: line.final === true ? (line.finalizedAt ?? null) : null,
-      countedEx: line.final === true ? money.doneSum : money.plannedSum,
+      countedEx,
       basis: line.final === true ? "låst" : (money.addition ? "endret" : "planlagt"),
       finalNote: line.finalNote || "",
       fromFiken: true,
     };
   });
   const extras = state.extras.map((line) => {
-    const sum = round2(line.quantity * line.unitPrice);
+    const sum = extraLineSum(line);
     doneEx += sum;
     return { ...line, sum };
   });
@@ -412,6 +498,26 @@ function budgetRoom({ lines, extrasExVat, approvedOfferEx, requestEx }) {
     const done = round2(line?.done) || 0;
     const price = round2(line?.unitPrice) || 0;
     const addition = round2(line?.addition) || 0;
+    if (isRoundSumLine(line)) {
+      const rs = roundSumPrice(line);
+      if (line?.final !== true) {
+        tillegg += round2(rs.addition * rs.price);
+        continue;
+      }
+      const deltaEx = round2((rs.countedQty - rs.planned) * rs.price);
+      lockedGap += round2((rs.planned - rs.countedQty) * rs.price);
+      if (Math.abs(deltaEx) >= 0.001) {
+        changes.push({
+          id: line.id,
+          label: line.label,
+          planned: rs.planned,
+          done: rs.countedQty,
+          deltaEx,
+          note: String(line.finalNote || "").trim(),
+        });
+      }
+      continue;
+    }
     tillegg += round2(addition * price);
     if (line?.final !== true || planned === done) continue;
     const deltaEx = round2((done - planned) * price);
@@ -440,7 +546,7 @@ export function budgetStatusText(budget) {
   if (!budget || budget.direction === "even" || !(budget.exVat > 0)) return "";
   const money = `${formatKr(budget.exVat)} eks. mva (${formatKr(budget.incVat)} inkl. mva)`;
   if (budget.direction === "under") {
-    return `Under tilbudet så langt: ${money}. Ved ønske om ekstra arbeid kan du sende en forespørsel.`;
+    return `Under tilbudet så langt: ${money}.`;
   }
   return `Over tilbudet så langt: ${money}. Det kommer av avtalt tillegg og avvik på ferdige poster.`;
 }
@@ -537,7 +643,10 @@ export function patchCost(raw, prices, patch = {}) {
   if (patch.addExtra) {
     const id = String(patch.extraId || newExtraId()).slice(0, 39);
     if (id.startsWith("ta") && !next.extras.some((line) => line.id === id)) {
-      next.extras.push({ id, description: "", unitPrice: 0, quantity: 0 });
+      const extra = { id, description: "", unitPrice: 0, quantity: 0 };
+      const kind = extraKind({ kind: patch.extraKind });
+      if (kind) extra.kind = kind;
+      next.extras.push(extra);
     }
   }
   if (patch.deleteExtraId) {
@@ -615,12 +724,15 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
   for (const id of new Set([...beforeExtra.keys(), ...afterExtra.keys()])) {
     const left = beforeExtra.get(id) || { description: "", quantity: 0, unitPrice: 0 };
     const right = afterExtra.get(id) || { description: left.description, quantity: 0, unitPrice: 0 };
-    const label = String(right.description || left.description || "Tillegg").slice(0, 79);
+    const kind = extraKind(right) || extraKind(left);
+    const fallback = kind === "timer" ? "Timer" : kind === "vare" ? "Varekostnad" : "Tillegg";
+    const label = String(right.description || left.description || fallback).slice(0, 79);
+    const qtyUnit = kind === "timer" ? "t" : "stk";
     if (left.quantity !== right.quantity) {
-      changes.push({ lineId: id, label, field: "quantity", from: left.quantity, to: right.quantity, unit: "stk" });
+      changes.push({ lineId: id, label, field: "quantity", from: left.quantity, to: right.quantity, unit: qtyUnit, kind });
     }
     if (left.unitPrice !== right.unitPrice) {
-      changes.push({ lineId: id, label, field: "unitPrice", from: left.unitPrice, to: right.unitPrice, unit: "kr" });
+      changes.push({ lineId: id, label, field: "unitPrice", from: left.unitPrice, to: right.unitPrice, unit: "kr", kind });
     }
   }
   return changes;
@@ -631,7 +743,10 @@ function pushFinalChange(changes, id, label, left, right) {
   const now = right?.final === true;
   if (was === now) return;
   const basis = now ? right : left;
-  const amount = round2((round2(basis?.done) ?? 0) * (round2(basis?.unitPrice) ?? 0));
+  const described = { ...basis, label };
+  const amount = isRoundSumLine(described)
+    ? roundSumPrice(described).countedEx
+    : round2((round2(basis?.done) ?? 0) * (round2(basis?.unitPrice) ?? 0));
   changes.push({
     lineId: id,
     label,
@@ -648,7 +763,13 @@ export function changeText(change) {
     if (Number(change.to) === 1) return `Posten er ferdig, endelig pris ${formatKr(change.amount)} eks. mva`;
     return "Posten er åpnet igjen. Den var merket ferdig med endelig pris og kan være fakturert. Prisen er estimert.";
   }
-  const what = FIELD_LABEL[change?.field] || "endring";
+  const what = change?.kind === "timer" && change.field === "quantity"
+    ? "timer"
+    : change?.kind === "timer" && change.field === "unitPrice"
+      ? "timepris"
+      : change?.kind === "vare" && change.field === "unitPrice"
+        ? "beløp"
+        : (FIELD_LABEL[change?.field] || "endring");
   const unit = change?.unit ? ` ${change.unit}` : "";
   const label = change?.field === "agreedExVat" ? "Avtalt pris" : (change?.label || "Linje");
   return `${label}, ${what}: ${formatQty(change?.from)} → ${formatQty(change?.to)}${unit}`;
@@ -837,7 +958,7 @@ export function costReportText(summary, history = [], payments = []) {
       ? `Opprinnelig tilbud ${formatKr(summary.baseline.exVat)} eks. mva. ${summary.baseline.label}.`
       : "",
     (summary?.finalized?.exVat || summary?.finalized?.incVat)
-      ? `Låst sluttpris (ferdige poster) ${formatKr(summary?.finalized?.exVat || 0)} eks. mva, ${formatKr(summary?.finalized?.incVat || 0)} inkl. mva.`
+      ? `Ferdigstilt pris (ferdige poster) ${formatKr(summary?.finalized?.exVat || 0)} eks. mva, ${formatKr(summary?.finalized?.incVat || 0)} inkl. mva.`
       : "",
     `Gjenstår (estimert) ${formatKr(summary?.remaining?.exVat || 0)} eks. mva, ${formatKr(summary?.remaining?.incVat || 0)} inkl. mva.`,
     `Totalt ${formatKr(summary?.estimated?.exVat || 0)} eks. mva, ${formatKr(summary?.estimated?.incVat || 0)} inkl. mva.`,
@@ -845,10 +966,10 @@ export function costReportText(summary, history = [], payments = []) {
     `Påløpt hittil ${formatKr(summary?.incurred?.exVat || 0)} eks. mva, ${formatKr(summary?.incurred?.incVat || 0)} inkl. mva.`,
     `Differanse mot opprinnelig tilbud: ${signedKr(summary?.differenceExVat || 0)} eks. mva, ${signedKr(summary?.differenceIncVat || 0)} inkl. mva.`,
     "",
-    "Godkjente alternativer",
+    "Avtalte poster",
   ];
   const approved = (summary?.offers?.rows || []).filter((row) => row.status === "godkjent");
-  if (!approved.length) lines.push("Ingen godkjente poster.");
+  if (!approved.length) lines.push("Ingen avtalte poster.");
   for (const row of approved) {
     lines.push(`${row.title}${row.name ? `: ${row.name}` : ""} ${formatKr(row.exVat)} eks. mva.`);
   }
@@ -858,17 +979,17 @@ export function costReportText(summary, history = [], payments = []) {
     const source = line.source ? ` (${line.source})` : "";
     const tillegg = line.addition ? `, avtalt tillegg ${formatQty(line.addition)} ${line.unit}` : "";
     const partial = partialFinalText(line);
-    const priceNote = line.final
-      ? `${partial ? `${partial}. ` : ""}Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva.`
-      : `Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva.`;
+    const priceNote = isRoundSumLine(line)
+      ? `${lineAmountText(line)} ${ROUND_SUM_HELP}`
+      : line.final
+        ? `${partial ? `${partial}. ` : ""}Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva.`
+        : `Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva. ${ESTIMATE_HELP}`;
     lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}${tillegg}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. ${priceNote} Enhetspris ${formatKr(line.unitPrice)}.`);
   }
   lines.push("", "Tilleggsarbeider");
   const extras = (summary?.extras || []).filter((line) => line.description || line.quantity || line.unitPrice);
   if (!extras.length) lines.push("Ingen tilleggsarbeider.");
-  for (const line of extras) {
-    lines.push(`${line.description || "Tillegg"}: ${formatQty(line.quantity)} à ${formatKr(line.unitPrice)} eks. mva. Linjesum ${formatKr(line.sum)} eks. mva.`);
-  }
+  for (const line of extras) lines.push(extraReportLine(line));
   if (extras.length) lines.push(`Sum tilleggsarbeider ${formatKr(summary?.extrasExVat || 0)} eks. mva.`);
   lines.push("", ...paymentReportText(payments, summary).split("\n"));
   lines.push("", "Historikk");

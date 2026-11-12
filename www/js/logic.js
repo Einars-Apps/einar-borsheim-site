@@ -288,10 +288,10 @@ export function approvalLine(item) {
   if (!item || (!item.approvalRequested && !item.approvalStatus)) return "";
   const status = item.approvalStatus || "venter";
   const label = status === "godkjent"
-    ? "Godkjent av kunde"
+    ? "Avtalt"
     : status === "avslatt"
-      ? "Avslått av kunde"
-      : "Venter på kundens godkjenning";
+      ? "Ikke tatt med"
+      : "Til informasjon";
   const who = item.approvedByName ? ` (${item.approvedByName})` : "";
   const when = formatWhen(item.approvedAt);
   return [label + who, when].filter(Boolean).join(" · ");

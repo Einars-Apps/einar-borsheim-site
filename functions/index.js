@@ -133,7 +133,7 @@ exports.onCustomerDecision = onDocumentUpdated({
   if (before.approvalStatus === after.approvalStatus) return;
   if (after.approvalStatus !== "godkjent" && after.approvalStatus !== "avslatt") return;
   const choice = (after.alternatives || []).find((alternative) => alternative.id === after.selectedAlternativeId);
-  const title = after.approvalStatus === "godkjent" ? "Godkjent av kunde" : "Avslått av kunde";
+  const title = after.approvalStatus === "godkjent" ? "Posten er merket som avtalt" : "Posten er ikke tatt med";
   const body = `${after.title || "Post"}${choice?.name ? `: ${choice.name}` : ""}`;
   await notifyAdmin(title, body, event.params.projectId);
   if (!billable.decisionBecameApproved(before, after)) return;

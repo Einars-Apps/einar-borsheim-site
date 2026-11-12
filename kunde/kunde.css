@@ -297,6 +297,7 @@ textarea { min-height: 96px; }
 }
 .final-badge { background: #0c5344; color: #fff; }
 .estimate-badge { background: #f3e2c8; color: #6d4712; }
+.estimate-help, .round-sum-help, .cost-info-note { margin: 0; line-height: 1.45; }
 .budget-under, .budget-over {
   display: flex;
   flex-direction: column;

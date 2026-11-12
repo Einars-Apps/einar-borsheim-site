@@ -1,6 +1,7 @@
 "use strict";
 
-// Samme utregning som www/js/requests.js. Kunden godkjenner, og dette legger
+// Samme utregning som www/js/requests.js. Portalen ber ikke kunden godkjenne.
+// Funksjonen brukes hvis en forespørsel allerede er merket godkjent, og legger
 // beløpet inn i kostnaden uten å finne på en annen pris.
 
 function round2(value) {

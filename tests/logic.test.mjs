@@ -231,7 +231,8 @@ test("bildemal og godkjenning", () => {
     approvedByName: "Kari",
     approvedAt: "2026-03-02T10:00:00Z",
   });
-  assert.match(line, /Godkjent av kunde \(Kari\)/);
+  assert.match(line, /Avtalt \(Kari\)/);
+  assert.equal(/godkjenning/.test(line), false);
   assert.match(buildLocalDraft({ name: "Drenering" }, [{
     id: "1",
     kind: "tilbud",
