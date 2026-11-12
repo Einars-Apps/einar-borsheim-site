@@ -156,24 +156,91 @@ export function extraKind(line) {
   return line?.kind === "timer" || line?.kind === "vare" ? line.kind : "";
 }
 
+export function legacyTimerExtra(line) {
+  return extraKind(line) === "timer" && line?.hours == null && line?.timePrice == null;
+}
+
+export function legacyVareExtra(line) {
+  return extraKind(line) === "vare" && !Array.isArray(line?.goods);
+}
+
+export function normalizeGoods(list) {
+  const seen = new Set();
+  const goods = [];
+  for (const item of list || []) {
+    let id = String(item?.id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 20);
+    if (!id || seen.has(id)) id = `v${goods.length + 1}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    goods.push({
+      id,
+      description: String(item?.description || "").replace(/\s+/g, " ").trim().slice(0, 120),
+      amount: clampQty(item?.amount),
+    });
+    if (goods.length >= 30) break;
+  }
+  return goods;
+}
+
+export function extraParts(line) {
+  const description = String(line?.description || "").replace(/\s+/g, " ").trim();
+  if (legacyTimerExtra(line)) {
+    return {
+      description,
+      quantity: 0,
+      unitPrice: 0,
+      hours: round2(line?.quantity) || 0,
+      timePrice: round2(line?.unitPrice) || 0,
+      goods: [],
+    };
+  }
+  if (legacyVareExtra(line)) {
+    return {
+      description,
+      quantity: 0,
+      unitPrice: 0,
+      hours: line?.hours == null ? 0 : (round2(line.hours) || 0),
+      timePrice: line?.timePrice == null ? 0 : (round2(line.timePrice) || 0),
+      goods: [{ id: "legacy", description, amount: round2(line?.unitPrice) || 0 }],
+    };
+  }
+  return {
+    description,
+    quantity: round2(line?.quantity) || 0,
+    unitPrice: round2(line?.unitPrice) || 0,
+    hours: line?.hours == null ? 0 : (round2(line.hours) || 0),
+    timePrice: line?.timePrice == null ? 0 : (round2(line.timePrice) || 0),
+    goods: Array.isArray(line?.goods) ? normalizeGoods(line.goods) : [],
+  };
+}
+
 export function extraLineSum(line) {
-  if (extraKind(line) === "vare") return round2(line?.unitPrice);
-  return round2((round2(line?.quantity) || 0) * (round2(line?.unitPrice) || 0));
+  const parts = extraParts(line);
+  const goods = parts.goods.reduce((sum, item) => sum + (round2(item.amount) || 0), 0);
+  return round2(parts.quantity * parts.unitPrice + parts.hours * parts.timePrice + goods);
+}
+
+export function extraCustomerText(line) {
+  const parts = extraParts(line);
+  const bits = [];
+  if (parts.quantity > 0 && parts.unitPrice > 0) {
+    bits.push(`${formatQty(parts.quantity)} à ${formatKr(parts.unitPrice)}`);
+  }
+  if (parts.hours > 0 && parts.timePrice > 0) {
+    bits.push(`${formatQty(parts.hours)} t à ${formatKr(parts.timePrice)}`);
+  }
+  const goods = parts.goods.filter((item) => (round2(item.amount) || 0) > 0);
+  if (goods.length) {
+    const list = goods.map((item) => `${item.description || "Vare"} ${formatKr(item.amount)}`).join(", ");
+    bits.push(`varer: ${list}`);
+  }
+  if (!bits.length) return "";
+  const name = parts.description || "Tillegg";
+  return `${name}: ${bits.join(" + ")} = ${formatKr(extraLineSum(line))} eks. mva`;
 }
 
 export function extraReportLine(line) {
-  const name = String(line?.description || "").replace(/\s+/g, " ").trim();
-  const sum = round2(line?.sum != null ? line.sum : extraLineSum(line));
-  if (extraKind(line) === "timer") {
-    const who = name ? `, ${name}` : "";
-    return `Timer: ${formatQty(line?.quantity)} t à ${formatKr(line?.unitPrice)}${who}. Linjesum ${formatKr(sum)} eks. mva.`;
-  }
-  if (extraKind(line) === "vare") {
-    return name
-      ? `Varekostnad: ${name}, ${formatKr(sum)} eks. mva.`
-      : `Varekostnad: ${formatKr(sum)} eks. mva.`;
-  }
-  return `${name || "Tillegg"}: ${formatQty(line?.quantity)} à ${formatKr(line?.unitPrice)} eks. mva. Linjesum ${formatKr(sum)} eks. mva.`;
+  return extraCustomerText(line);
 }
 
 export function normalizeExtras(raw) {
@@ -193,6 +260,9 @@ export function normalizeExtras(raw) {
     };
     const kind = extraKind(line);
     if (kind) extra.kind = kind;
+    if (line?.hours != null) extra.hours = clampQty(line.hours);
+    if (line?.timePrice != null) extra.timePrice = clampQty(line.timePrice);
+    if (Array.isArray(line?.goods)) extra.goods = normalizeGoods(line.goods);
     if (postId) extra.postId = postId;
     extras.push(extra);
   }
@@ -643,9 +713,14 @@ export function patchCost(raw, prices, patch = {}) {
   if (patch.addExtra) {
     const id = String(patch.extraId || newExtraId()).slice(0, 39);
     if (id.startsWith("ta") && !next.extras.some((line) => line.id === id)) {
-      const extra = { id, description: "", unitPrice: 0, quantity: 0 };
+      const extra = { id, description: "", unitPrice: 0, quantity: 0, hours: 0, timePrice: 0, goods: [] };
       const kind = extraKind({ kind: patch.extraKind });
-      if (kind) extra.kind = kind;
+      if (kind) {
+        extra.kind = kind;
+        delete extra.hours;
+        delete extra.timePrice;
+        delete extra.goods;
+      }
       next.extras.push(extra);
     }
   }
@@ -661,10 +736,59 @@ export function patchCost(raw, prices, patch = {}) {
     if (postId) extra.postId = postId;
     else delete extra.postId;
   }
-  if (extra && (field === "quantity" || field === "unitPrice")) {
-    extra[field] = clampQty(value);
+  if (extra && field === "hours") {
+    if (legacyTimerExtra(extra)) extra.quantity = clampQty(value);
+    else {
+      if (legacyVareExtra(extra)) promoteVareExtra(extra);
+      extra.hours = clampQty(value);
+    }
+  }
+  if (extra && field === "timePrice") {
+    if (legacyTimerExtra(extra)) extra.unitPrice = clampQty(value);
+    else {
+      if (legacyVareExtra(extra)) promoteVareExtra(extra);
+      extra.timePrice = clampQty(value);
+    }
+  }
+  if (extra && field === "quantity") {
+    if (legacyTimerExtra(extra)) promoteTimerExtra(extra);
+    if (legacyVareExtra(extra)) promoteVareExtra(extra);
+    extra.quantity = clampQty(value);
+  }
+  if (extra && field === "unitPrice") {
+    if (legacyTimerExtra(extra)) promoteTimerExtra(extra);
+    if (legacyVareExtra(extra)) promoteVareExtra(extra);
+    extra.unitPrice = clampQty(value);
+  }
+  if (extra && field === "goods") {
+    if (legacyTimerExtra(extra)) promoteTimerExtra(extra);
+    if (legacyVareExtra(extra)) {
+      extra.quantity = 0;
+      extra.unitPrice = 0;
+      delete extra.kind;
+    }
+    extra.goods = normalizeGoods(value);
   }
   return next;
+}
+
+function promoteTimerExtra(extra) {
+  extra.hours = clampQty(extra.quantity);
+  extra.timePrice = clampQty(extra.unitPrice);
+  extra.quantity = 0;
+  extra.unitPrice = 0;
+  delete extra.kind;
+}
+
+function promoteVareExtra(extra) {
+  extra.goods = normalizeGoods([{
+    id: "legacy",
+    description: extra.description || "",
+    amount: extra.unitPrice,
+  }]);
+  extra.quantity = 0;
+  extra.unitPrice = 0;
+  delete extra.kind;
 }
 
 export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
@@ -724,15 +848,14 @@ export function costChanges(beforeRaw, afterRaw, prices = DEFAULT_PRICES) {
   for (const id of new Set([...beforeExtra.keys(), ...afterExtra.keys()])) {
     const left = beforeExtra.get(id) || { description: "", quantity: 0, unitPrice: 0 };
     const right = afterExtra.get(id) || { description: left.description, quantity: 0, unitPrice: 0 };
-    const kind = extraKind(right) || extraKind(left);
-    const fallback = kind === "timer" ? "Timer" : kind === "vare" ? "Varekostnad" : "Tillegg";
-    const label = String(right.description || left.description || fallback).slice(0, 79);
-    const qtyUnit = kind === "timer" ? "t" : "stk";
-    if (left.quantity !== right.quantity) {
-      changes.push({ lineId: id, label, field: "quantity", from: left.quantity, to: right.quantity, unit: qtyUnit, kind });
+    const leftParts = extraParts(left);
+    const rightParts = extraParts(right);
+    const label = String(rightParts.description || leftParts.description || "Tillegg").slice(0, 79);
+    if (leftParts.quantity !== rightParts.quantity) {
+      changes.push({ lineId: id, label, field: "quantity", from: leftParts.quantity, to: rightParts.quantity, unit: "stk" });
     }
-    if (left.unitPrice !== right.unitPrice) {
-      changes.push({ lineId: id, label, field: "unitPrice", from: left.unitPrice, to: right.unitPrice, unit: "kr", kind });
+    if (leftParts.unitPrice !== rightParts.unitPrice) {
+      changes.push({ lineId: id, label, field: "unitPrice", from: leftParts.unitPrice, to: rightParts.unitPrice, unit: "kr" });
     }
   }
   return changes;
@@ -987,9 +1110,9 @@ export function costReportText(summary, history = [], payments = []) {
     lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}${tillegg}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. ${priceNote} Enhetspris ${formatKr(line.unitPrice)}.`);
   }
   lines.push("", "Tilleggsarbeider");
-  const extras = (summary?.extras || []).filter((line) => line.description || line.quantity || line.unitPrice);
+  const extras = (summary?.extras || []).map((line) => extraCustomerText(line)).filter(Boolean);
   if (!extras.length) lines.push("Ingen tilleggsarbeider.");
-  for (const line of extras) lines.push(extraReportLine(line));
+  for (const line of extras) lines.push(line);
   if (extras.length) lines.push(`Sum tilleggsarbeider ${formatKr(summary?.extrasExVat || 0)} eks. mva.`);
   lines.push("", ...paymentReportText(payments, summary).split("\n"));
   lines.push("", "Historikk");

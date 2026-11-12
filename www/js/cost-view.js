@@ -14,6 +14,8 @@ import {
   budgetStatusText,
   COST_INFO_NOTE,
   ESTIMATE_HELP,
+  extraCustomerText,
+  extraParts,
   isRoundSumLine,
   lineAmountText,
   ROUND_SUM_HELP,
@@ -21,7 +23,7 @@ import {
   signedKr,
   signedQty,
 } from "./cost.js";
-import { buildCustomerHistory, customerPostSummary, extraTilleggText, unitWord } from "./cost-history.js";
+import { buildCustomerHistory, customerPostSummary, unitWord } from "./cost-history.js";
 import { formatDay } from "./logic.js";
 
 function moneyLine(label, exVat, incVat) {
@@ -338,8 +340,17 @@ function commitField(input, onCommit) {
   return input;
 }
 
+function numberField(value, label, onCommit) {
+  return commitField(el("input", {
+    type: "text",
+    inputmode: "decimal",
+    value: formatQty(value),
+    "aria-label": label,
+  }), onCommit);
+}
+
 function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
-  const kind = row.kind === "timer" || row.kind === "vare" ? row.kind : "";
+  const parts = extraParts(row);
   const sum = el("p", { class: "meta" }, `Linjesum ${formatKr(row.sum)} eks. mva`);
   const description = commitField(el("input", {
     type: "text",
@@ -347,19 +358,10 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
     value: row.description || "",
     "aria-label": "Beskrivelse",
   }), (value) => onExtra?.(row.id, "description", value));
-  const priceLabel = kind === "timer" ? "Timepris, kr eks. mva" : kind === "vare" ? "Beløp, kr eks. mva" : "Enhetspris, kr eks. mva";
-  const price = commitField(el("input", {
-    type: "text",
-    inputmode: "decimal",
-    value: formatQty(row.unitPrice),
-    "aria-label": priceLabel,
-  }), (value) => onExtra?.(row.id, "unitPrice", value));
-  const quantity = kind === "vare" ? null : commitField(el("input", {
-    type: "text",
-    inputmode: "decimal",
-    value: formatQty(row.quantity),
-    "aria-label": kind === "timer" ? "Timer" : "Antall",
-  }), (value) => onExtra?.(row.id, "quantity", value));
+  const unitPrice = numberField(parts.unitPrice, "Enhetspris, kr eks. mva", (value) => onExtra?.(row.id, "unitPrice", value));
+  const quantity = numberField(parts.quantity, "Antall", (value) => onExtra?.(row.id, "quantity", value));
+  const hours = numberField(parts.hours, "Timer", (value) => onExtra?.(row.id, "hours", value));
+  const timePrice = numberField(parts.timePrice, "Timepris, kr eks. mva", (value) => onExtra?.(row.id, "timePrice", value));
   const post = el("select", { "aria-label": "Knytt til post" });
   post.append(el("option", { value: "" }, "Andre tillegg"));
   for (const line of lines) {
@@ -368,13 +370,47 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
     post.append(option);
   }
   post.addEventListener("change", () => onExtra?.(row.id, "postId", post.value));
-  const title = kind === "timer" ? "Timer" : kind === "vare" ? "Varekostnad" : "";
+  const goods = el("div", { class: "stack" });
+  for (const item of parts.goods) {
+    const name = commitField(el("input", {
+      type: "text",
+      maxlength: "120",
+      value: item.description || "",
+      "aria-label": "Vare, beskrivelse",
+    }), (value) => onExtra?.(row.id, "goods", parts.goods.map((entry) => (
+      entry.id === item.id ? { ...entry, description: value } : entry
+    ))));
+    const amount = numberField(item.amount, "Vare, beløp kr eks. mva", (value) => onExtra?.(row.id, "goods", parts.goods.map((entry) => (
+      entry.id === item.id ? { ...entry, amount: value } : entry
+    ))));
+    goods.append(el("div", { class: "extra-good" }, [
+      field("Beskrivelse", name),
+      field("Beløp, kr eks. mva", amount),
+      button("Fjern", {
+        class: "btn btn-ghost",
+        onClick: () => onExtra?.(row.id, "goods", parts.goods.filter((entry) => entry.id !== item.id)),
+      }),
+    ]));
+  }
   return el("article", { class: "qty-line" }, [
-    title ? el("p", { class: "qty-label" }, title) : null,
     field("Beskrivelse", description),
-    kind === "timer" ? field("Timer", quantity) : null,
-    field(priceLabel, price),
-    kind === "timer" || kind === "vare" ? null : field("Antall", quantity),
+    el("div", { class: "extra-pair" }, [
+      field("Enhetspris, kr eks. mva", unitPrice),
+      field("Antall", quantity),
+    ]),
+    el("div", { class: "extra-pair" }, [
+      field("Timer", hours),
+      field("Timepris, kr eks. mva", timePrice),
+    ]),
+    el("p", { class: "qty-label" }, "Varekostnad"),
+    goods,
+    button("+ Legg til vare", {
+      class: "btn btn-ghost",
+      onClick: () => onExtra?.(row.id, "goods", [
+        ...parts.goods,
+        { id: `v${Math.random().toString(36).slice(2, 8)}`, description: "", amount: 0 },
+      ]),
+    }),
     field("Knytt til post", post),
     sum,
     button("Slett tillegg", {
@@ -384,8 +420,10 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
   ]);
 }
 
-function extraSentence(row, history) {
-  return el("p", { class: "post-tillegg" }, extraTilleggText(row, history, new Date()));
+function extraSentence(row) {
+  const text = extraCustomerText(row);
+  if (!text) return null;
+  return el("p", { class: "post-tillegg" }, text);
 }
 
 function splitExtras(extras, lines) {
@@ -670,42 +708,38 @@ export function renderCostOverview({
     for (const tillegg of facts?.tillegg || []) body.push(el("p", { class: "post-tillegg" }, tillegg.text));
     for (const row of placed.linked.get(line.id) || []) {
       if (editable) body.push(extraEditor(row, ordered, { onDeleteExtra, onExtra }));
-      else if (row.description || row.quantity || row.unitPrice) body.push(extraSentence(row, history));
+      else {
+        const sentence = extraSentence(row);
+        if (sentence) body.push(sentence);
+      }
     }
     lines.append(el("article", { class: line.final ? "qty-line qty-line-final" : "qty-line" }, body));
   }
 
   const otherExtras = editable
     ? placed.other
-    : placed.other.filter((row) => row.description || row.quantity || row.unitPrice);
-  const pricedExtras = (summary.extras || []).some((row) => row.description || row.quantity || row.unitPrice);
+    : placed.other.filter((row) => extraCustomerText(row));
+  const pricedExtras = (summary.extras || []).some((row) => extraCustomerText(row));
   const extraSum = el("p", { class: "cost-money" }, `Sum tilleggsarbeider: ${formatKr(summary.extrasExVat || 0)} eks. mva`);
   const extraBlock = [];
   if (editable || otherExtras.length) {
     extraBlock.push(el("h3", { class: "h-app" }, "Andre tillegg"));
     extraBlock.push(el("p", { class: "meta" }, editable
-      ? "Tillegg som ikke hører til en bestemt post. Timer er antall ganger timepris. Varekostnad er et beløp. Pris er eks. mva. Du kan knytte et tillegg til en post."
+      ? "Ett tillegg kan ha enhetspris, timer og varer. Timepris settes her, og kan variere. Tomme felt teller ikke. Pris er eks. mva."
       : "Tillegg som ikke hører til en bestemt post."));
     for (const row of otherExtras) {
       if (editable) extraBlock.push(extraEditor(row, ordered, { onDeleteExtra, onExtra }));
-      else extraBlock.push(el("article", { class: "qty-line" }, [extraSentence(row, history)]));
+      else {
+        const sentence = extraSentence(row);
+        if (sentence) extraBlock.push(el("article", { class: "qty-line" }, [sentence]));
+      }
     }
     const filled = (summary.extras || []).length > 0 && (summary.extras || []).every((row) => String(row.description || "").trim());
     if (editable && ((summary.extras || []).length === 0 || filled)) {
-      extraBlock.push(el("div", { class: "action-row" }, [
-        button("Legg til nytt tillegg", {
-          class: "btn btn-ghost",
-          onClick: () => onAddExtra?.(""),
-        }),
-        button("Legg til timer", {
-          class: "btn btn-ghost",
-          onClick: () => onAddExtra?.("timer"),
-        }),
-        button("Legg til varekostnad", {
-          class: "btn btn-ghost",
-          onClick: () => onAddExtra?.("vare"),
-        }),
-      ]));
+      extraBlock.push(button("Legg til nytt tillegg", {
+        class: "btn btn-ghost btn-block",
+        onClick: () => onAddExtra?.(),
+      }));
     }
     if (pricedExtras) extraBlock.push(extraSum);
   } else if (pricedExtras) {
