@@ -1596,7 +1596,7 @@ function mountOffers(route) {
       const previous = costDoc;
       const next = patchCost(previous, priceTable, patch);
       const changes = costChanges(previous, next, priceTable);
-      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description" || patch.field === "postId" || patch.field === "finalNote" || patch.field === "hours" || patch.field === "timePrice" || patch.field === "goods";
+      const structural = patch.addExtra || patch.deleteExtraId || patch.field === "description" || patch.field === "postId" || patch.field === "finalNote" || patch.field === "hours" || patch.field === "timePrice" || patch.field === "goods" || patch.field === "donePercent";
       if (!changes.length && !structural) return;
       const stored = persistableCost(next);
       costDoc = { ...previous, ...stored };

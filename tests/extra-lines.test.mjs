@@ -5,6 +5,8 @@ import {
   costChanges,
   costReportText,
   extraCustomerText,
+  extraDoneLabel,
+  extraDonePercent,
   extraLineSum,
   extraParts,
   liveCost,
@@ -182,6 +184,133 @@ test("ferdig tillegg teller i ferdigstilt pris og senker gjenstår", () => {
   assert.equal(costChanges(stored, opened, prices).some((change) => change.field === "final"), true);
 });
 
+test("estimert tillegg ligger helt i gjenstår og påløpt, ferdig ligger i ferdigstilt", () => {
+  const open = liveCost({
+    cost: { extras: [{ id: "ta-aapen", description: "Ekstra", quantity: 1, unitPrice: 1000 }] },
+    prices,
+    items: [],
+  });
+  assert.equal(open.extras[0].sum, 1000);
+  assert.equal(open.estimated.exVat, 1000);
+  assert.equal(open.remaining.exVat, 1000);
+  assert.equal(open.incurred.exVat, 1000);
+  assert.equal(open.finalized.exVat, 0);
+  const done = liveCost({
+    cost: { extras: [{ id: "ta-ferdig", description: "Ekstra", quantity: 1, unitPrice: 1000, final: true }] },
+    prices,
+    items: [],
+  });
+  assert.equal(done.estimated.exVat, 1000);
+  assert.equal(done.remaining.exVat, 0);
+  assert.equal(done.incurred.exVat, 1000);
+  assert.equal(done.finalized.exVat, 1000);
+});
+
+test("hittil utført deler påløpt og gjenstår, og ferdig ignorerer prosenten", () => {
+  const half = liveCost({
+    cost: {
+      extras: [{
+        id: "ta-halv",
+        description: "Graving og rør",
+        quantity: 2,
+        unitPrice: 100,
+        hours: 2,
+        timePrice: 50,
+        goods: [{ id: "v1", description: "Rør", amount: 300 }],
+        donePercent: 50,
+      }],
+    },
+    prices,
+    items: [],
+  });
+  assert.equal(half.extras[0].sum, 600);
+  assert.equal(half.estimated.exVat, 600);
+  assert.equal(half.incurred.exVat, 300);
+  assert.equal(half.remaining.exVat, 300);
+  assert.equal(half.finalized.exVat, 0);
+  assert.equal(half.incurred.incVat, 375);
+  assert.equal(extraDoneLabel(half.extras[0]), "Hittil utført 50 %");
+
+  const empty = liveCost({
+    cost: { extras: [{ id: "ta-tom", description: "Ekstra", quantity: 1, unitPrice: 1000 }] },
+    prices,
+    items: [],
+  });
+  assert.equal(empty.incurred.exVat, 1000);
+  assert.equal(empty.remaining.exVat, 1000);
+  assert.equal(extraDoneLabel(empty.extras[0]), "");
+
+  const zero = liveCost({
+    cost: { extras: [{ id: "ta-null", description: "Ekstra", quantity: 1, unitPrice: 1000, donePercent: 0 }] },
+    prices,
+    items: [],
+  });
+  assert.equal(zero.estimated.exVat, 1000);
+  assert.equal(zero.incurred.exVat, 0);
+  assert.equal(zero.remaining.exVat, 1000);
+  assert.equal(zero.finalized.exVat, 0);
+
+  const finished = liveCost({
+    cost: { extras: [{ id: "ta-ferdig", description: "Ekstra", quantity: 1, unitPrice: 1000, donePercent: 50, final: true }] },
+    prices,
+    items: [],
+  });
+  assert.equal(finished.estimated.exVat, 1000);
+  assert.equal(finished.incurred.exVat, 1000);
+  assert.equal(finished.remaining.exVat, 0);
+  assert.equal(finished.finalized.exVat, 1000);
+  assert.equal(extraDoneLabel(finished.extras[0]), "");
+
+  let stored = patchCost({}, prices, { addExtra: true, extraId: "ta-lagre" });
+  stored = patchCost(stored, prices, { extraId: "ta-lagre", field: "unitPrice", value: 1000 });
+  stored = patchCost(stored, prices, { extraId: "ta-lagre", field: "quantity", value: 1 });
+  stored = patchCost(stored, prices, { extraId: "ta-lagre", field: "donePercent", value: "150" });
+  assert.equal(stored.extras[0].donePercent, 100);
+  assert.equal(costChanges({ extras: [{ id: "ta-lagre", unitPrice: 1000, quantity: 1 }] }, stored, prices).some((change) => change.field === "donePercent"), false);
+  stored = patchCost(stored, prices, { extraId: "ta-lagre", field: "donePercent", value: "" });
+  assert.equal(stored.extras[0].donePercent, undefined);
+  stored = patchCost(stored, prices, { extraId: "ta-lagre", field: "donePercent", value: "50,5" });
+  assert.equal(extraDonePercent(persistableCost(stored).extras[0]), 50.5);
+  assert.equal(stored.extras[0].finalizedAt, undefined);
+  const kept = persistableCost(stored);
+  assert.equal(kept.extras[0].donePercent, 50.5);
+  assert.equal(JSON.stringify(kept).includes("serverTimestamp"), false);
+});
+
+test("prosenten endrer ikke hovedposter eller rund sum", () => {
+  const lines = {
+    fikenLines: [
+      { id: "meter", label: "Drenering (meter)", unit: "meter", planned: 10, done: 4, unitPrice: 100 },
+      { id: "rs", label: "Masse (RS)", unit: "stk", planned: 1, done: 0.5, unitPrice: 1000 },
+    ],
+  };
+  const plain = liveCost({
+    cost: { ...lines, extras: [{ id: "ta-x", description: "Ekstra", quantity: 1, unitPrice: 1000 }] },
+    prices,
+    items: [],
+  });
+  const withPercent = liveCost({
+    cost: { ...lines, extras: [{ id: "ta-x", description: "Ekstra", quantity: 1, unitPrice: 1000, donePercent: 50 }] },
+    prices,
+    items: [],
+  });
+  const meter = (summary) => summary.lines.find((line) => line.id === "meter");
+  const rs = (summary) => summary.lines.find((line) => line.id === "rs");
+  assert.equal(meter(plain).countedEx, 1000);
+  assert.equal(rs(plain).countedEx, 1000);
+  assert.equal(meter(withPercent).countedEx, meter(plain).countedEx);
+  assert.equal(rs(withPercent).countedEx, rs(plain).countedEx);
+  assert.equal(meter(withPercent).doneSum, meter(plain).doneSum);
+  assert.equal(withPercent.estimated.exVat, plain.estimated.exVat);
+  assert.equal(withPercent.finalized.exVat, plain.finalized.exVat);
+  assert.equal(withPercent.incurred.exVat, plain.incurred.exVat - 500);
+  assert.equal(withPercent.remaining.exVat, plain.remaining.exVat - 500);
+  const untouched = patchCost(lines, prices, { lineId: "rs", field: "donePercent", value: 50 });
+  assert.equal(untouched.fikenLines.find((line) => line.id === "rs").donePercent, undefined);
+  assert.equal(untouched.fikenLines.find((line) => line.id === "meter").done, 4);
+  assert.equal(untouched.fikenLines.find((line) => line.id === "rs").done, 0.5);
+});
+
 test("feltappen har ett samlet tillegg, ikke tre opprett-knapper", () => {
   const view = readFileSync("www/js/cost-view.js", "utf8");
   assert.match(view, /Legg til nytt tillegg/);
@@ -200,8 +329,11 @@ test("feltappen har ett samlet tillegg, ikke tre opprett-knapper", () => {
     assert.match(source, /class: "meta estimate-help" \}, ESTIMATE_HELP/);
     assert.match(source, /class: "final-badge" \}, "Ferdig"/);
     assert.match(source, /row\.final === true/);
+    assert.match(source, /extraDoneLabel\(row\)/);
   }
+  assert.match(editor, /Hittil utført, %/);
   const app = readFileSync("www/app.js", "utf8");
+  assert.match(app, /patch\.field === "donePercent"/);
   const save = app.slice(app.indexOf("const savePatch"), app.indexOf("const applyApproved"));
   assert.match(save, /costDoc = previous/);
   assert.match(save, /firestoreWriteMessage\(error, "Kunne ikke lagre mengden"\)/);
