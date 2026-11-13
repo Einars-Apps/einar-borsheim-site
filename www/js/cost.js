@@ -220,6 +220,28 @@ export function extraLineSum(line) {
   return round2(parts.quantity * parts.unitPrice + parts.hours * parts.timePrice + goods);
 }
 
+// Tomt felt betyr dagens oppførsel. 0 er satt, og er ikke det samme som tomt.
+export function extraDonePercent(line) {
+  if (!line || line.donePercent == null || line.donePercent === "") return null;
+  const number = parseNumber(line.donePercent);
+  if (number == null) return null;
+  return Math.min(100, Math.max(0, round2(number)));
+}
+
+export function extraDoneLabel(line) {
+  const percent = extraDonePercent(line);
+  if (percent == null || line?.final === true) return "";
+  return `Hittil utført ${formatQty(percent)} %`;
+}
+
+export function extraIncurredEx(line) {
+  const sum = extraLineSum(line);
+  if (line?.final === true) return sum;
+  const percent = extraDonePercent(line);
+  if (percent == null) return sum;
+  return round2(sum * percent / 100);
+}
+
 export function extraCustomerText(line) {
   const parts = extraParts(line);
   const bits = [];
@@ -270,6 +292,8 @@ export function normalizeExtras(raw) {
       if (when != null) extra.finalizedAt = when;
     }
     if (postId) extra.postId = postId;
+    const donePercent = extraDonePercent(line);
+    if (donePercent != null) extra.donePercent = donePercent;
     extras.push(extra);
   }
   return extras;
@@ -510,11 +534,16 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   });
   let extrasOpen = 0;
   let extrasFinal = 0;
+  let extraProgressEx = 0;
   const extras = state.extras.map((line) => {
     const sum = extraLineSum(line);
-    doneEx += sum;
+    const incurredPart = extraIncurredEx(line);
+    doneEx += incurredPart;
     if (line.final === true) extrasFinal += sum;
-    else extrasOpen += sum;
+    else {
+      extrasOpen += sum;
+      if (extraDonePercent(line) != null) extraProgressEx += incurredPart;
+    }
     return { ...line, sum };
   });
   const extrasExVat = round2(extrasOpen + extrasFinal);
@@ -528,7 +557,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   const totalEx = round2(finalBase + openBase);
   const estimated = withVat(totalEx);
   const finalized = withVat(finalBase);
-  const remaining = withVat(round2(totalEx - finalBase));
+  const remaining = withVat(round2(totalEx - finalBase - extraProgressEx));
   const incurred = withVat(state.agreedExVat + offers.approvedExVat + doneEx);
   const preview = withVat(finalBase + state.agreedExVat + offers.previewExVat + openEx);
   const baseline = originalOffer({
@@ -824,6 +853,11 @@ export function patchCost(raw, prices, patch = {}) {
       delete extra.kind;
     }
     extra.goods = normalizeGoods(value);
+  }
+  if (extra && !locked && field === "donePercent") {
+    const percent = extraDonePercent({ donePercent: value });
+    if (percent == null) delete extra.donePercent;
+    else extra.donePercent = percent;
   }
   if (extra && field === "final") {
     const on = value === true || value === "true" || value === 1 || value === "1";

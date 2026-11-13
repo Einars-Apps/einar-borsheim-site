@@ -18,6 +18,8 @@ import {
   COST_INFO_NOTE,
   ESTIMATE_HELP,
   extraCustomerText,
+  extraDoneLabel,
+  extraDonePercent,
   extraParts,
   isRoundSumLine,
   lineAmountText,
@@ -402,6 +404,16 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
       { id: `v${Math.random().toString(36).slice(2, 8)}`, description: "", amount: 0 },
     ]),
   });
+  const donePercent = extraDonePercent(row);
+  const progress = row.final === true
+    ? null
+    : field("Hittil utført, %", commitField(el("input", {
+      type: "text",
+      inputmode: "decimal",
+      value: donePercent == null ? "" : formatQty(donePercent),
+      placeholder: "Tomt beholder dagens summer",
+      "aria-label": "Hittil utført, prosent",
+    }), (value) => onExtra?.(row.id, "donePercent", value)));
   const remove = button("Slett tillegg", {
     class: "btn btn-danger",
     onClick: () => onDeleteExtra?.(row.id),
@@ -426,6 +438,7 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
       ? el("p", { class: "final-badge" }, "Ferdig")
       : el("p", { class: "estimate-badge", title: ESTIMATE_HELP }, "Estimert"),
     row.final === true ? null : el("p", { class: "meta estimate-help" }, ESTIMATE_HELP),
+    extraDoneLabel(row) ? el("p", { class: "meta extra-done" }, extraDoneLabel(row)) : null,
     field("Beskrivelse", description),
     el("div", { class: "extra-pair" }, [
       field("Enhetspris, kr eks. mva", unitPrice),
@@ -439,6 +452,7 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
     goods,
     addGood,
     field("Knytt til post", post),
+    progress,
     sum,
     remove,
     el("label", { class: "checkline" }, [finalBox, el("span", {}, "Ferdig – endelig pris")]),
@@ -461,6 +475,7 @@ function extraSentence(row) {
       ? el("p", { class: "final-badge" }, "Ferdig")
       : el("p", { class: "estimate-badge", title: ESTIMATE_HELP }, "Estimert"),
     finished ? null : el("p", { class: "meta estimate-help" }, ESTIMATE_HELP),
+    extraDoneLabel(row) ? el("p", { class: "meta extra-done" }, extraDoneLabel(row)) : null,
     el("p", {}, text),
   ]);
 }
