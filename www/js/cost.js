@@ -220,7 +220,7 @@ export function extraLineSum(line) {
   return round2(parts.quantity * parts.unitPrice + parts.hours * parts.timePrice + goods);
 }
 
-// Tomt felt betyr dagens oppførsel. 0 er satt, og er ikke det samme som tomt.
+// Tomt felt er 0 % i Påløpt. 0 som er skrevet inn vises som «Hittil utført 0 %».
 export function extraDonePercent(line) {
   if (!line || line.donePercent == null || line.donePercent === "") return null;
   const number = parseNumber(line.donePercent);
@@ -238,7 +238,7 @@ export function extraIncurredEx(line) {
   const sum = extraLineSum(line);
   if (line?.final === true) return sum;
   const percent = extraDonePercent(line);
-  if (percent == null) return sum;
+  if (percent == null) return 0;
   return round2(sum * percent / 100);
 }
 

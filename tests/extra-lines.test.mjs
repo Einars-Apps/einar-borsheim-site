@@ -184,7 +184,7 @@ test("ferdig tillegg teller i ferdigstilt pris og senker gjenstår", () => {
   assert.equal(costChanges(stored, opened, prices).some((change) => change.field === "final"), true);
 });
 
-test("estimert tillegg ligger helt i gjenstår og påløpt, ferdig ligger i ferdigstilt", () => {
+test("tomt tillegg teller 0 i påløpt og hele summen i gjenstår", () => {
   const open = liveCost({
     cost: { extras: [{ id: "ta-aapen", description: "Ekstra", quantity: 1, unitPrice: 1000 }] },
     prices,
@@ -193,7 +193,7 @@ test("estimert tillegg ligger helt i gjenstår og påløpt, ferdig ligger i ferd
   assert.equal(open.extras[0].sum, 1000);
   assert.equal(open.estimated.exVat, 1000);
   assert.equal(open.remaining.exVat, 1000);
-  assert.equal(open.incurred.exVat, 1000);
+  assert.equal(open.incurred.exVat, 0);
   assert.equal(open.finalized.exVat, 0);
   const done = liveCost({
     cost: { extras: [{ id: "ta-ferdig", description: "Ekstra", quantity: 1, unitPrice: 1000, final: true }] },
@@ -236,8 +236,10 @@ test("hittil utført deler påløpt og gjenstår, og ferdig ignorerer prosenten"
     prices,
     items: [],
   });
-  assert.equal(empty.incurred.exVat, 1000);
+  assert.equal(empty.estimated.exVat, 1000);
+  assert.equal(empty.incurred.exVat, 0);
   assert.equal(empty.remaining.exVat, 1000);
+  assert.equal(empty.finalized.exVat, 0);
   assert.equal(extraDoneLabel(empty.extras[0]), "");
 
   const zero = liveCost({
@@ -303,12 +305,31 @@ test("prosenten endrer ikke hovedposter eller rund sum", () => {
   assert.equal(meter(withPercent).doneSum, meter(plain).doneSum);
   assert.equal(withPercent.estimated.exVat, plain.estimated.exVat);
   assert.equal(withPercent.finalized.exVat, plain.finalized.exVat);
-  assert.equal(withPercent.incurred.exVat, plain.incurred.exVat - 500);
+  assert.equal(plain.incurred.exVat, withPercent.incurred.exVat - 500);
   assert.equal(withPercent.remaining.exVat, plain.remaining.exVat - 500);
   const untouched = patchCost(lines, prices, { lineId: "rs", field: "donePercent", value: 50 });
   assert.equal(untouched.fikenLines.find((line) => line.id === "rs").donePercent, undefined);
   assert.equal(untouched.fikenLines.find((line) => line.id === "meter").done, 4);
   assert.equal(untouched.fikenLines.find((line) => line.id === "rs").done, 0.5);
+});
+
+test("ett ferdig tillegg og tomme tillegg: bare det ferdige er påløpt", () => {
+  const summary = liveCost({
+    cost: {
+      extras: [
+        { id: "ta-ferdig", description: "Ferdig jobb", quantity: 1, unitPrice: 1000, final: true },
+        { id: "ta-tom", description: "Ikke startet", quantity: 1, unitPrice: 400 },
+        { id: "ta-annet", description: "Heller ikke startet", quantity: 2, unitPrice: 300 },
+      ],
+    },
+    prices,
+    items: [],
+  });
+  assert.equal(summary.extras.find((line) => line.id === "ta-annet").sum, 600);
+  assert.equal(summary.estimated.exVat, 2000);
+  assert.equal(summary.finalized.exVat, 1000);
+  assert.equal(summary.incurred.exVat, 1000);
+  assert.equal(summary.remaining.exVat, 1000);
 });
 
 test("feltappen har ett samlet tillegg, ikke tre opprett-knapper", () => {
