@@ -411,7 +411,7 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
       type: "text",
       inputmode: "decimal",
       value: donePercent == null ? "" : formatQty(donePercent),
-      placeholder: "Tomt beholder dagens summer",
+      placeholder: "Tomt teller som 0 % i Påløpt",
       "aria-label": "Hittil utført, prosent",
     }), (value) => onExtra?.(row.id, "donePercent", value)));
   const remove = button("Slett tillegg", {

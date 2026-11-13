@@ -395,7 +395,9 @@ test("tilleggsarbeider summeres inn i nåværende kostnad", () => {
   assert.equal(summary.extras[0].sum, 1000);
   assert.equal(summary.extrasExVat, 1000);
   assert.equal(summary.estimated.exVat, 1000);
-  assert.equal(summary.incurred.exVat, 1000);
+  assert.equal(summary.remaining.exVat, 1000);
+  assert.equal(summary.finalized.exVat, 0);
+  assert.equal(summary.incurred.exVat, 0);
   assert.equal(summary.lines.some((line) => line.id === "groft"), false);
   const changes = costChanges({ extras: [] }, cost, prices);
   assert.deepEqual(changes.map((change) => change.field), ["quantity", "unitPrice"]);
