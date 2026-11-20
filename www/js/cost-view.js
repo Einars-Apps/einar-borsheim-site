@@ -20,7 +20,9 @@ import {
   extraCustomerText,
   extraDoneLabel,
   extraDonePercent,
+  extraGoodsLines,
   extraParts,
+  extraTimerLabel,
   isRoundSumLine,
   lineAmountText,
   ROUND_SUM_HELP,
@@ -365,8 +367,7 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
   }), (value) => onExtra?.(row.id, "description", value));
   const unitPrice = numberField(parts.unitPrice, "Enhetspris, kr eks. mva", (value) => onExtra?.(row.id, "unitPrice", value));
   const quantity = numberField(parts.quantity, "Antall", (value) => onExtra?.(row.id, "quantity", value));
-  const hours = numberField(parts.hours, "Timer", (value) => onExtra?.(row.id, "hours", value));
-  const timePrice = numberField(parts.timePrice, "Timepris, kr eks. mva", (value) => onExtra?.(row.id, "timePrice", value));
+  const timerLabel = extraTimerLabel(row);
   const post = el("select", { "aria-label": "Knytt til post" });
   post.append(el("option", { value: "" }, "Andre tillegg"));
   for (const line of lines) {
@@ -444,10 +445,7 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
       field("Enhetspris, kr eks. mva", unitPrice),
       field("Antall", quantity),
     ]),
-    el("div", { class: "extra-pair" }, [
-      field("Timer", hours),
-      field("Timepris, kr eks. mva", timePrice),
-    ]),
+    timerLabel ? el("p", { class: "meta extra-timer" }, timerLabel) : null,
     el("p", { class: "qty-label" }, "Varekostnad"),
     goods,
     addGood,
@@ -468,7 +466,8 @@ function extraEditor(row, lines, { onDeleteExtra, onExtra }) {
 
 function extraSentence(row) {
   const text = extraCustomerText(row);
-  if (!text) return null;
+  const goods = extraGoodsLines(row);
+  if (!text && !goods.length) return null;
   const finished = row.final === true;
   return el("div", { class: "post-tillegg" }, [
     finished
@@ -476,7 +475,8 @@ function extraSentence(row) {
       : el("p", { class: "estimate-badge", title: ESTIMATE_HELP }, "Estimert"),
     finished ? null : el("p", { class: "meta estimate-help" }, ESTIMATE_HELP),
     extraDoneLabel(row) ? el("p", { class: "meta extra-done" }, extraDoneLabel(row)) : null,
-    el("p", {}, text),
+    text ? el("p", {}, text) : null,
+    ...goods.map((line) => el("p", { class: "extra-vare" }, line)),
   ]);
 }
 
@@ -772,14 +772,14 @@ export function renderCostOverview({
 
   const otherExtras = editable
     ? placed.other
-    : placed.other.filter((row) => extraCustomerText(row));
+    : placed.other.filter((row) => extraCustomerText(row) || extraGoodsLines(row).length || extraTimerLabel(row));
   const pricedExtras = (summary.extras || []).some((row) => extraCustomerText(row));
   const extraSum = el("p", { class: "cost-money" }, `Sum tilleggsarbeider: ${formatKr(summary.extrasExVat || 0)} eks. mva`);
   const extraBlock = [];
   if (editable || otherExtras.length) {
     extraBlock.push(el("h3", { class: "h-app" }, "Andre tillegg"));
     extraBlock.push(el("p", { class: "meta" }, editable
-      ? "Ett tillegg kan ha enhetspris, timer og varer. Timepris settes her, og kan variere. Tomme felt teller ikke. Pris er eks. mva."
+      ? "Ett tillegg kan ha enhetspris og varer. Tomme felt teller ikke. Pris er eks. mva."
       : "Tillegg som ikke hører til en bestemt post."));
     for (const row of otherExtras) {
       if (editable) extraBlock.push(extraEditor(row, ordered, { onDeleteExtra, onExtra }));

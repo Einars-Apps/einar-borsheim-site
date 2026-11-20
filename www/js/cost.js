@@ -252,18 +252,27 @@ export function extraCustomerText(line) {
     bits.push(`${formatQty(parts.hours)} t à ${formatKr(parts.timePrice)}`);
   }
   const goods = parts.goods.filter((item) => (round2(item.amount) || 0) > 0);
-  if (goods.length) {
-    const list = goods.map((item) => `${item.description || "Vare"} ${formatKr(item.amount)}`).join(", ");
-    bits.push(`varer: ${list}`);
-  }
+  if (goods.length) bits.push(`${goods.length === 1 ? "1 vare" : `${goods.length} varer`}`);
   const name = parts.description || "Tillegg";
   if (!bits.length) return isFinal(line) ? `${name}: Ferdig.` : "";
   const sentence = `${name}: ${bits.join(" + ")} = ${formatKr(extraLineSum(line))} eks. mva`;
   return isFinal(line) ? `${sentence} Ferdig.` : sentence;
 }
 
+export function extraGoodsLines(line) {
+  return extraParts(line).goods
+    .filter((item) => (round2(item.amount) || 0) > 0)
+    .map((item) => `Varekostnad: ${item.description || "Vare"} ${formatKr(item.amount)} eks. mva`);
+}
+
+export function extraTimerLabel(line) {
+  const parts = extraParts(line);
+  if (!(parts.hours > 0) || !(parts.timePrice > 0)) return "";
+  return `Timer: ${formatQty(parts.hours)} t à ${formatKr(parts.timePrice)} eks. mva`;
+}
+
 export function extraReportLine(line) {
-  return extraCustomerText(line);
+  return [extraCustomerText(line), ...extraGoodsLines(line)].filter(Boolean).join("\n");
 }
 
 export function normalizeExtras(raw) {
@@ -1222,7 +1231,7 @@ export function costReportText(summary, history = [], payments = []) {
     lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}${tillegg}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. ${priceNote} Enhetspris ${formatKr(line.unitPrice)}.`);
   }
   lines.push("", "Tilleggsarbeider");
-  const extras = (summary?.extras || []).map((line) => extraCustomerText(line)).filter(Boolean);
+  const extras = (summary?.extras || []).map((line) => extraReportLine(line)).filter(Boolean);
   if (!extras.length) lines.push("Ingen tilleggsarbeider.");
   for (const line of extras) lines.push(line);
   if (extras.length) lines.push(`Sum tilleggsarbeider ${formatKr(summary?.extrasExVat || 0)} eks. mva.`);

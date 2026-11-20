@@ -5,6 +5,8 @@ import {
   costChanges,
   costReportText,
   extraCustomerText,
+  extraGoodsLines,
+  extraTimerLabel,
   extraDoneLabel,
   extraDonePercent,
   extraLineSum,
@@ -56,7 +58,8 @@ test("gamle timer- og varelinjer prises som før og vises i det samlede formatet
   assert.equal(extraParts(timer).quantity, 0);
   assert.equal(extraParts(goods).goods[0].amount, 1200);
   assert.match(extraCustomerText(timer), /Graving: 4 t à kr/);
-  assert.match(extraCustomerText(goods), /Puss: varer: Puss kr/);
+  assert.match(extraCustomerText(goods), /Puss: 1 vare/);
+  assert.match(extraGoodsLines(goods)[0], /Varekostnad: Puss/);
   const untouched = persistableCost(summary);
   assert.equal(untouched.extras[0].kind, "timer");
   assert.equal(untouched.extras[0].hours, undefined);
@@ -102,9 +105,11 @@ test("ett tillegg summerer enhetspris, timer og flere varer", () => {
   const text = extraCustomerText(line);
   assert.match(text, /^Pusset ujevnheter på vegg: 2 à kr/);
   assert.match(text, /4 t à kr/);
-  assert.match(text, /varer: Puss kr/);
-  assert.match(text, /List kr/);
-  assert.equal(text.includes("Skruer"), false);
+  assert.match(text, /2 varer/);
+  assert.match(extraGoodsLines(line)[0], /Varekostnad: Puss/);
+  assert.match(extraGoodsLines(line)[1], /Varekostnad: List/);
+  assert.equal(extraGoodsLines(line).some((item) => item.includes("Skruer")), false);
+  assert.match(extraTimerLabel(line), /Timer: 4 t à/);
   assert.match(text, /= kr[\s\u00a0]*4[\s\u00a0]*880,00 eks\. mva/);
   assert.match(costReportText(summary, []), /4 t à kr/);
   assert.match(costReportText(summary, []), /Sum tilleggsarbeider/);
@@ -338,7 +343,9 @@ test("feltappen har ett samlet tillegg, ikke tre opprett-knapper", () => {
   assert.equal(view.includes("Legg til timer"), false);
   assert.equal(view.includes("Legg til varekostnad"), false);
   assert.match(view, /\+ Legg til vare/);
-  assert.match(view, /Timepris, kr eks\. mva/);
+  assert.equal(view.slice(view.indexOf("function extraEditor"), view.indexOf("function extraSentence")).includes("Timepris, kr eks. mva"), false);
+  assert.match(view, /extraTimerLabel\(row\)/);
+  assert.match(view, /extraGoodsLines\(row\)/);
   assert.match(view, /Enhetspris, kr eks\. mva/);
   assert.match(view, /Merke «\$\{name\}» som ferdig med endelig pris\?/);
   assert.match(view, /Ferdig – endelig pris/);

@@ -432,7 +432,8 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .extra-box { display: flex; flex-direction: column; gap: 10px; }
 .extra-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .extra-good { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; }
-@media (max-width: 560px) {
+.extra-vare, .extra-timer { margin: 0; }
+@media (max-width: 800px) {
   .extra-pair, .extra-good { grid-template-columns: 1fr; }
 }
 .extra-box h3 { margin: 8px 0 0; }
