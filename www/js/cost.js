@@ -248,7 +248,7 @@ export function extraCustomerText(line) {
   if (parts.quantity > 0 && parts.unitPrice > 0) {
     bits.push(`${formatQty(parts.quantity)} à ${formatKr(parts.unitPrice)}`);
   }
-  if (parts.hours > 0 && parts.timePrice > 0) {
+  if (round2(parts.hours * parts.timePrice) > 0) {
     bits.push(`${formatQty(parts.hours)} t à ${formatKr(parts.timePrice)}`);
   }
   const goods = parts.goods.filter((item) => (round2(item.amount) || 0) > 0);
@@ -267,7 +267,7 @@ export function extraGoodsLines(line) {
 
 export function extraTimerLabel(line) {
   const parts = extraParts(line);
-  if (!(parts.hours > 0) || !(parts.timePrice > 0)) return "";
+  if (!(round2(parts.hours * parts.timePrice) > 0)) return "";
   return `Timer: ${formatQty(parts.hours)} t à ${formatKr(parts.timePrice)} eks. mva`;
 }
 

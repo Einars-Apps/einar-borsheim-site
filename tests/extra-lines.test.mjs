@@ -10,6 +10,7 @@ import {
   extraDoneLabel,
   extraDonePercent,
   extraLineSum,
+  extraReportLine,
   extraParts,
   liveCost,
   patchCost,
@@ -335,6 +336,29 @@ test("ett ferdig tillegg og tomme tillegg: bare det ferdige er påløpt", () => 
   assert.equal(summary.finalized.exVat, 1000);
   assert.equal(summary.incurred.exVat, 1000);
   assert.equal(summary.remaining.exVat, 1000);
+});
+
+test("nullstilt timer skjules, en med beløp blir stående", () => {
+  const zeroed = { id: "ta-null", kind: "timer", description: "Gammel", quantity: 0, unitPrice: 0 };
+  const emptyHours = { id: "ta-timer", description: "Flyttet", hours: 0, timePrice: 0, quantity: 2, unitPrice: 450 };
+  const emptyRate = { id: "ta-sats", description: "Uten pris", hours: 4, timePrice: 0, quantity: 1, unitPrice: 100 };
+  for (const line of [zeroed, emptyHours, emptyRate]) {
+    assert.equal(extraTimerLabel(line), "");
+    assert.equal(/t à|Timer:/.test(extraCustomerText(line)), false);
+    assert.equal(/t à|Timer:/.test(extraReportLine(line)), false);
+  }
+  assert.match(extraCustomerText(emptyHours), /2 à/);
+  assert.equal(extraLineSum(zeroed), 0);
+  const kept = { id: "ta-behold", kind: "timer", description: "Graving", quantity: 3, unitPrice: 800 };
+  assert.match(extraTimerLabel(kept), /Timer: 3 t à/);
+  assert.match(extraReportLine(kept), /3 t à/);
+  assert.equal(extraLineSum(kept), 2400);
+  const summary = liveCost({
+    cost: { extras: [zeroed, emptyHours, emptyRate, kept] },
+    prices,
+    items: [],
+  });
+  assert.equal(summary.estimated.exVat, 2400 + 900 + 100);
 });
 
 test("feltappen har ett samlet tillegg, ikke tre opprett-knapper", () => {
