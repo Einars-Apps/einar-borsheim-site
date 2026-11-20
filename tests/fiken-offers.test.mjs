@@ -96,6 +96,36 @@ test("ny henting overskriver ikke linjer Einar har endret", () => {
   assert.equal(keptLock.finalizedAt.seconds, 4);
 });
 
+test("ny henting henter ikke tilbake en slettet post", () => {
+  const incoming = [{
+    id: "ft-5-0",
+    label: "Ny tekst fra Fiken",
+    unit: "meter",
+    planned: 20,
+    done: 0,
+    unitPrice: 900,
+    source: "fra Fiken-tilbud nr 10001",
+  }];
+  const merged = mergeFikenLines([{
+    id: "ft-5-0",
+    label: "Graving",
+    unit: "stk",
+    planned: 10,
+    done: 4,
+    unitPrice: 1000,
+    source: "fra Fiken-tilbud nr 1",
+    removed: true,
+    removedAt: { seconds: 9, nanoseconds: 0 },
+  }], incoming, { overwriteManual: true });
+  const line = merged.lines.find((entry) => entry.id === "ft-5-0");
+  assert.equal(line.removed, true);
+  assert.equal(line.label, "Graving");
+  assert.equal(line.planned, 10);
+  assert.equal(line.done, 4);
+  assert.equal(line.removedAt.seconds, 9);
+  assert.equal(merged.lines.length, 1);
+});
+
 test("kostnadslinje fra Fiken inngår i estimatet, og endring merkes som manuell", () => {
   const cost = {
     agreedExVat: 0,

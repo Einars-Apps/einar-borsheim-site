@@ -8,6 +8,7 @@ import {
   changeText,
   costChanges,
   costReportText,
+  deletePostConfirm,
   liveCost,
   nextInstallmentNumber,
   originalOffer,
@@ -19,6 +20,7 @@ import {
   paymentReportText,
   paymentTotals,
   persistableCost,
+  removedLineText,
   storedTimestamp,
 } from "../www/js/cost.js";
 
@@ -595,4 +597,44 @@ test("budsjettrom kommer bare fra låste poster, minus godkjent tillegg", () => 
   assert.match(view, /Send en forespørsel/);
   assert.equal(readFileSync("kunde/kunde.js", "utf8").includes("requestHref:"), false);
   assert.match(readFileSync("www/app.js", "utf8"), /requestHref: "#seksjon-foresporsler"/);
+});
+
+test("slettet Fiken-post forsvinner fra nåværende sum og blir i opprinnelig tilbud", () => {
+  const cost = {
+    fikenLines: [
+      { id: "a", label: "Graving", unit: "stk", planned: 10, done: 4, unitPrice: 100, source: "fra Fiken-tilbud nr 1" },
+      { id: "b", label: "Kum", unit: "stk", planned: 2, done: 0, unitPrice: 500, source: "fra Fiken-tilbud nr 1" },
+    ],
+  };
+  const before = liveCost({ cost, prices, items: [] });
+  assert.equal(before.estimated.exVat, 2000);
+  assert.equal(before.baseline.exVat, 2000);
+  assert.equal(before.incurred.exVat, 400);
+  assert.match(deletePostConfirm(before.lines.find((line) => line.id === "a")), /Slette posten «Graving»/);
+  assert.match(deletePostConfirm(before.lines.find((line) => line.id === "a")), /Registrert mengde tas ut av summen/);
+  assert.equal(/Registrert mengde/.test(deletePostConfirm(before.lines.find((line) => line.id === "b"))), false);
+  const removed = patchCost(cost, prices, { removeLineId: "b", removedAt: new Date("2026-11-20T12:00:00Z") });
+  const gone = removed.fikenLines.find((line) => line.id === "b");
+  assert.equal(gone.removed, true);
+  assert.ok(gone.removedAt instanceof Date);
+  const stored = persistableCost(removed);
+  assert.equal(stored.fikenLines.find((line) => line.id === "b").removed, true);
+  const after = liveCost({ cost: stored, prices, items: [] });
+  assert.equal(after.lines.some((line) => line.id === "b"), false);
+  assert.equal(after.removedLines[0].label, "Kum");
+  assert.equal(after.estimated.exVat, 1000);
+  assert.equal(after.remaining.exVat, 1000);
+  assert.equal(after.incurred.exVat, 400);
+  assert.equal(after.finalized.exVat, 0);
+  assert.equal(after.baseline.exVat, 2000);
+  assert.match(removedLineText(after.removedLines[0]), /Utgår: Kum −kr/);
+  assert.equal(costReportText(after, []).includes("Kum: planlagt"), false);
+  assert.match(costReportText(after, []), /Utgår: Kum/);
+  assert.equal(costChanges(cost, removed, prices).some((change) => change.field === "removed"), false);
+  const restored = patchCost(stored, prices, { restoreLineId: "b" });
+  assert.equal(restored.fikenLines.find((line) => line.id === "b").removed, undefined);
+  assert.equal(liveCost({ cost: restored, prices, items: [] }).estimated.exVat, 2000);
+  const stamped = patchCost(cost, prices, { removeLineId: "b", removedAt: { _methodName: "serverTimestamp" } });
+  assert.equal(stamped.fikenLines.find((line) => line.id === "b").removedAt._methodName, undefined);
+  assert.equal(typeof stamped.fikenLines.find((line) => line.id === "b").removedAt.seconds, "number");
 });

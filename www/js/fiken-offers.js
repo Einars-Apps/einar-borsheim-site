@@ -21,6 +21,11 @@ function cloneLine(line) {
   }
   const note = String(line?.finalNote || "").replace(/\s+/g, " ").trim().slice(0, 200);
   if (note) copy.finalNote = note;
+  if (line?.removed === true) {
+    copy.removed = true;
+    const when = storedTimestamp(line.removedAt);
+    if (when != null) copy.removedAt = when;
+  }
   return copy;
 }
 
@@ -38,6 +43,7 @@ export function mergeFikenLines(existing, incoming, { overwriteManual = false } 
   for (const raw of incoming || []) {
     const incomingLine = cloneLine(raw);
     const current = byId.get(incomingLine.id);
+    if (current?.removed === true) continue;
     if (!current) {
       lines.push({ ...incomingLine, done: incomingLine.done || 0, manual: false });
       byId.set(incomingLine.id, lines[lines.length - 1]);

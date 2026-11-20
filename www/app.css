@@ -432,7 +432,10 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .extra-box { display: flex; flex-direction: column; gap: 10px; }
 .extra-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .extra-good { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; }
-.extra-vare, .extra-timer { margin: 0; }
+.extra-vare, .extra-timer, .removed-offer { margin: 0; }
+.removed-posts { margin-top: 8px; }
+.removed-posts summary { cursor: pointer; color: var(--muted); }
+.removed-row { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin: 8px 0 0; }
 @media (max-width: 800px) {
   .extra-pair, .extra-good { grid-template-columns: 1fr; }
 }
