@@ -147,6 +147,7 @@ export function normalizeFikenLines(raw) {
       manual: line?.manual === true,
       ...finalFields(line),
       ...noteField(line),
+      ...removedFields(line),
     });
   }
   return lines;
@@ -524,9 +525,10 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       manual: false,
     };
   }).filter((line) => line.planned > 0 || line.addition > 0 || line.done > 0 || line.final);
-  const fiken = state.fikenLines.map((line) => {
+  const fikenAll = state.fikenLines.map((line) => {
     const money = lineMoney(line);
-    const countedEx = takeLine(line, money, line);
+    const removed = line.removed === true;
+    const countedEx = removed ? 0 : takeLine(line, money, line);
     return {
       ...line,
       addition: money.addition,
@@ -539,8 +541,12 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
       basis: line.final === true ? "låst" : (money.addition ? "endret" : "planlagt"),
       finalNote: line.finalNote || "",
       fromFiken: true,
+      removed,
+      omittedEx: removed ? currentContribution(line) : 0,
     };
   });
+  const fiken = fikenAll.filter((line) => !line.removed);
+  const removedLines = fikenAll.filter((line) => line.removed);
   let extrasOpen = 0;
   let extrasFinal = 0;
   let extraProgressEx = 0;
@@ -571,7 +577,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
   const preview = withVat(finalBase + state.agreedExVat + offers.previewExVat + openEx);
   const baseline = originalOffer({
     agreedExVat: state.agreedExVat,
-    lines,
+    lines: [...lines, ...removedLines],
     offers,
     quotes,
   });
@@ -581,6 +587,7 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
     agreedExVat: state.agreedExVat,
     baseline,
     lines,
+    removedLines,
     extras,
     extrasExVat,
     offers,
@@ -638,7 +645,7 @@ export function originalOfferLineText(row) {
 }
 
 export function customerOfferDifference(summary) {
-  const offerSum = originalOfferTotal(originalOfferRows(summary?.lines));
+  const offerSum = originalOfferTotal(originalOfferRows([...(summary?.lines || []), ...(summary?.removedLines || [])]));
   const baseline = summary?.baseline || {};
   const originalTotal = baseline.kind === "manuell" && baseline.exVat > 0 ? baseline.exVat : offerSum;
   const useLines = baseline.kind === "godkjent" && originalTotal > 0;
@@ -724,6 +731,32 @@ function noteField(line) {
   return note ? { finalNote: note } : {};
 }
 
+function removedFields(line) {
+  if (line?.removed !== true) return {};
+  const when = storedTimestamp(line.removedAt);
+  return when != null ? { removed: true, removedAt: when } : { removed: true };
+}
+
+export function deletePostConfirm(line) {
+  const name = String(line?.label || "Posten").replace(/\s+/g, " ").trim() || "Posten";
+  const base = `Slette posten «${name}»? Den tas ut av oversikten og nåværende sum.`;
+  const done = round2(line?.done) || 0;
+  if (line?.final === true || done > 0) return `${base} Registrert mengde tas ut av summen.`;
+  return base;
+}
+
+export function removedLineText(line) {
+  const amount = round2(line?.omittedEx);
+  const shown = amount > 0 ? amount : plannedLineExVat(line);
+  return `Utgår: ${line?.label || "Post"} −${formatKr(shown)} eks. mva`;
+}
+
+function currentContribution(line) {
+  if (isRoundSumLine(line)) return roundSumPrice(line).countedEx;
+  const money = lineMoney(line);
+  return line.final === true ? money.doneSum : money.plannedSum;
+}
+
 // serverTimestamp() er et FieldValue-merke. Firestore avviser det inni en array,
 // og fikenLines er en array. Et vanlig tidspunkt (Date, Timestamp eller { seconds }) er lov.
 export function storedTimestamp(value, now = new Date()) {
@@ -800,8 +833,22 @@ export function patchCost(raw, prices, patch = {}) {
     applyQtyPatch(next.lines[lineId], field, value, patch);
   }
   const fiken = next.fikenLines.find((line) => line.id === lineId);
-  if (fiken && applyQtyPatch(fiken, field, value, patch)) {
+  if (fiken && fiken.removed !== true && applyQtyPatch(fiken, field, value, patch)) {
     fiken.manual = true;
+  }
+  if (patch.removeLineId) {
+    const line = next.fikenLines.find((entry) => entry.id === patch.removeLineId);
+    if (line) {
+      line.removed = true;
+      line.removedAt = storedTimestamp(patch.removedAt) || storedTimestamp(new Date());
+    }
+  }
+  if (patch.restoreLineId) {
+    const line = next.fikenLines.find((entry) => entry.id === patch.restoreLineId);
+    if (line) {
+      delete line.removed;
+      delete line.removedAt;
+    }
   }
   if (patch.addExtra) {
     const id = String(patch.extraId || newExtraId()).slice(0, 39);
@@ -1229,6 +1276,10 @@ export function costReportText(summary, history = [], payments = []) {
         ? `${partial ? `${partial}. ` : ""}Ferdig – endelig pris ${formatKr(line.doneSum)} eks. mva.`
         : `Estimert ${formatKr(line.plannedSum)} eks. mva, påløpt ${formatKr(line.doneSum)} eks. mva. ${ESTIMATE_HELP}`;
     lines.push(`${line.label}${source}: planlagt ${formatQty(line.planned)} ${line.unit}${tillegg}, utført ${formatQty(line.done)} ${line.unit}, avvik ${signedQty(line.deviation)} ${line.unit}. ${priceNote} Enhetspris ${formatKr(line.unitPrice)}.`);
+  }
+  if (summary?.removedLines?.length) {
+    lines.push("", "Utgår");
+    for (const line of summary.removedLines) lines.push(removedLineText(line));
   }
   lines.push("", "Tilleggsarbeider");
   const extras = (summary?.extras || []).map((line) => extraReportLine(line)).filter(Boolean);

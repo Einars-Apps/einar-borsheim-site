@@ -6,8 +6,10 @@ import {
   formatQty,
   nextInstallmentNumber,
   customerOfferDifference,
+  deletePostConfirm,
   originalOfferLineText,
   originalOfferRows,
+  removedLineText,
   partialFinalText,
   paymentBalance,
   paymentInstallments,
@@ -618,6 +620,8 @@ export function renderCostOverview({
   onQuantity,
   onAddExtra,
   onDeleteExtra,
+  onDeleteLine,
+  onRestoreLine,
   onExtra,
   onAddPayment,
   onDeletePayment,
@@ -743,6 +747,13 @@ export function renderCostOverview({
         doneStep,
         el("label", { class: "checkline" }, [finalBox, el("span", {}, "Ferdig – endelig pris")]),
         invoiced ? el("p", { class: "meta" }, invoiced) : null,
+        editable && line.fromFiken ? button("Slett", {
+          class: "btn btn-danger",
+          onClick: () => {
+            if (!window.confirm(deletePostConfirm(line))) return;
+            onDeleteLine?.(line.id);
+          },
+        }) : null,
         line.final ? field("Årsak til endret omfang (valgfritt)", commitField(el("input", {
           type: "text",
           maxlength: "200",
@@ -769,6 +780,22 @@ export function renderCostOverview({
     }
     lines.append(el("article", { class: line.final ? "qty-line qty-line-final" : "qty-line" }, body));
   }
+  const removed = summary.removedLines || [];
+  if (editable && removed.length) {
+    lines.append(el("details", { class: "removed-posts" }, [
+      el("summary", {}, `Slettede poster (${removed.length})`),
+      ...removed.map((line) => el("p", { class: "removed-row" }, [
+        el("span", {}, line.label),
+        button("Gjenopprett", {
+          class: "btn btn-ghost",
+          onClick: () => onRestoreLine?.(line.id),
+        }),
+      ])),
+    ]));
+  }
+  const removedNotes = !editable && audience === "kunde" && removed.length
+    ? removed.map((line) => el("p", { class: "removed-offer" }, removedLineText(line)))
+    : [];
 
   const otherExtras = editable
     ? placed.other
@@ -832,7 +859,7 @@ export function renderCostOverview({
         : "Ingen avtalte poster i Tilbud og endringer ennå."));
 
   if (audience === "kunde") {
-    const offerRows = originalOfferRows(summary.lines);
+    const offerRows = originalOfferRows([...(summary.lines || []), ...(summary.removedLines || [])]);
     const compared = customerOfferDifference(summary);
     const originalTotal = compared.originalTotal;
     const original = offerRows.length || originalTotal > 0
@@ -851,6 +878,7 @@ export function renderCostOverview({
       : null;
     const changeParts = [
       scopeNote,
+      ...removedNotes,
       extraBlock.length ? el("section", { class: "extra-box" }, extraBlock) : null,
       agreedRows,
       budgetNote,
