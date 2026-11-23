@@ -458,3 +458,61 @@ nav a:focus-visible {
     bottom: calc(4.6rem + env(safe-area-inset-bottom));
   }
 }
+
+.hero-photo {
+  margin: 1.6rem 0 0;
+}
+
+.hero-photo figure,
+.hero-photo {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.hero-photo img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  box-shadow: 0 10px 24px #1c1a1608;
+  background: #eee;
+}
+
+.job-photos h2 {
+  margin-top: 0;
+}
+
+.job-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 0.8rem 0 0;
+  align-items: start;
+}
+
+.job-photos-2col .job-photo-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.job-photo-grid figure {
+  margin: 0;
+}
+
+.job-photo-grid img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 10px;
+  background: #eee;
+}
+
+.job-photo-wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 800px) {
+  .job-photo-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
