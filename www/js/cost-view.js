@@ -839,9 +839,10 @@ export function renderCostOverview({
       ]))),
     ])
     : null;
-  const budgetNote = budgetText
+  const budgetLines = String(budgetText || "").split("\n").filter(Boolean);
+  const budgetNote = budgetLines.length
     ? el("div", { class: budgetUnder ? "budget-under" : "budget-over", role: "status" }, [
-      el("p", {}, budgetText),
+      ...budgetLines.map((line) => el("p", {}, line)),
       budgetUnder && requestHref && audience !== "kunde"
         ? el("a", { class: "btn btn-primary", href: requestHref }, "Send en forespørsel")
         : null,

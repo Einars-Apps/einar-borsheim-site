@@ -582,7 +582,8 @@ export function liveCost({ cost, prices = DEFAULT_PRICES, items, previewChoices 
     quotes,
   });
   const differenceExVat = round2(estimated.exVat - baseline.exVat);
-  const budget = budgetRoom({ lines, extrasExVat, approvedOfferEx: offers.approvedExVat, requestEx });
+  const removedEx = round2(removedLines.reduce((sum, line) => sum + plannedLineExVat(line), 0));
+  const budget = budgetRoom({ lines, extrasExVat, approvedOfferEx: offers.approvedExVat, requestEx, removedEx });
   return {
     agreedExVat: state.agreedExVat,
     baseline,
@@ -659,7 +660,7 @@ export function customerOfferDifference(summary) {
   };
 }
 
-function budgetRoom({ lines, extrasExVat, approvedOfferEx, requestEx }) {
+function budgetRoom({ lines, extrasExVat, approvedOfferEx, requestEx, removedEx = 0 }) {
   const changes = [];
   let lockedGap = 0;
   let tillegg = round2((extrasExVat || 0) + (approvedOfferEx || 0) + (requestEx || 0));
@@ -701,24 +702,41 @@ function budgetRoom({ lines, extrasExVat, approvedOfferEx, requestEx }) {
       note: String(line.finalNote || "").trim(),
     });
   }
-  const signedEx = round2(lockedGap - tillegg);
+  const removed = round2(removedEx) || 0;
+  const signedEx = round2(lockedGap - tillegg + removed);
   const amount = withVat(Math.abs(signedEx));
   return {
     direction: signedEx > 0 ? "under" : signedEx < 0 ? "over" : "even",
     exVat: amount.exVat,
     incVat: amount.incVat,
     signedEx,
+    tilleggEx: tillegg,
+    avvikEx: round2(-lockedGap),
+    removedEx: round2(-removed),
     changes,
   };
 }
 
+function signedBudgetKr(value) {
+  const number = round2(value);
+  const body = formatKr(Math.abs(number));
+  if (number > 0) return `+${body}`;
+  if (number < 0) return `−${body}`;
+  return body;
+}
+
 export function budgetStatusText(budget) {
-  if (!budget || budget.direction === "even" || !(budget.exVat > 0)) return "";
-  const money = `${formatKr(budget.exVat)} eks. mva (${formatKr(budget.incVat)} inkl. mva)`;
-  if (budget.direction === "under") {
-    return `Under tilbudet så langt: ${money}.`;
-  }
-  return `Over tilbudet så langt: ${money}. Det kommer av avtalt tillegg og avvik på ferdige poster.`;
+  if (!budget) return "";
+  const rows = [];
+  if (round2(budget.tilleggEx)) rows.push(`Avtalte tillegg: ${signedBudgetKr(budget.tilleggEx)}`);
+  if (round2(budget.avvikEx)) rows.push(`Avvik på ferdige poster: ${signedBudgetKr(budget.avvikEx)}`);
+  if (round2(budget.removedEx)) rows.push(`Utgåtte poster: ${signedBudgetKr(budget.removedEx)}`);
+  if (budget.direction === "even" || !(budget.exVat > 0)) return rows.join("\n");
+  const money = `${formatKr(budget.incVat)} inkl. mva`;
+  const head = budget.direction === "under"
+    ? `Under tilbudet så langt: ${formatKr(budget.exVat)} eks. mva (${money}).`
+    : `Over tilbudet så langt: ${signedBudgetKr(budget.exVat)} eks. mva (${money}).`;
+  return [...rows, head].join("\n");
 }
 
 function isFinal(line) {

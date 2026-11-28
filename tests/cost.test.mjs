@@ -553,7 +553,8 @@ test("budsjettrom kommer bare fra låste poster, minus godkjent tillegg", () => 
   assert.notEqual(under.remaining.exVat, 372500);
   assert.equal(under.budget.changes.length, 1);
   assert.match(scopeChangeText(under.budget.changes[0]), /Masseutskifte grøft under nybygg \(RS\): planlagt 1, utført 0,5 – kr −71[\s\u00a0\u202f]*000,00 eks\. mva/);
-  assert.match(budgetStatusText(under.budget), /^Under tilbudet så langt: kr 71[\s\u00a0\u202f]*000,00 eks\. mva \(kr 88[\s\u00a0\u202f]*750,00 inkl\. mva\)\.$/);
+  assert.match(budgetStatusText(under.budget), /Avvik på ferdige poster: −kr 71[\s\u00a0\u202f]*000,00/);
+  assert.match(budgetStatusText(under.budget), /Under tilbudet så langt: kr 71[\s\u00a0\u202f]*000,00 eks\. mva \(kr 88[\s\u00a0\u202f]*750,00 inkl\. mva\)\./);
   assert.equal(/forespørsel/.test(budgetStatusText(under.budget)), false);
   const noted = patchCost({ fikenLines: lines }, prices, { lineId: "masse", field: "finalNote", value: "Halve jobben var ikke mulig å utføre" });
   const withNote = liveCost({ cost: noted, prices, items: [] });
@@ -586,9 +587,35 @@ test("budsjettrom kommer bare fra låste poster, minus godkjent tillegg", () => 
   });
   assert.equal(over.budget.direction, "over");
   assert.equal(over.budget.exVat, 10000);
-  assert.match(budgetStatusText(over.budget), /^Over tilbudet så langt: kr 10[\s\u00a0\u202f]*000,00 eks\. mva/);
-  assert.match(budgetStatusText(over.budget), /avtalt tillegg og avvik på ferdige poster/);
+  assert.match(budgetStatusText(over.budget), /Avvik på ferdige poster: \+kr 10[\s\u00a0\u202f]*000,00/);
+  assert.match(budgetStatusText(over.budget), /Over tilbudet så langt: \+kr 10[\s\u00a0\u202f]*000,00 eks\. mva/);
   assert.equal(budgetStatusText({ direction: "even", exVat: 0, incVat: 0 }), "");
+
+  const explained = liveCost({
+    cost: {
+      fikenLines: [
+        { id: "rest", label: "Øvrig arbeid", unit: "stk", planned: 1, done: 1, unitPrice: 342000, final: true },
+        { id: "avvik", label: "Avvikspost", unit: "stk", planned: 1, done: 0, unitPrice: 9500, final: true },
+        { id: "skjaere", label: "Skjære asfalt", unit: "stk", planned: 1, done: 0, unitPrice: 6000, removed: true },
+        { id: "ny", label: "Ny asfalt", unit: "stk", planned: 1, done: 0, unitPrice: 15000, removed: true },
+      ],
+      extras: [{ id: "ta-1", description: "Andre tillegg", quantity: 1, unitPrice: 42600, final: true }],
+    },
+    prices,
+    items: [],
+  });
+  assert.equal(explained.baseline.exVat, 372500);
+  assert.equal(explained.estimated.exVat, 384600);
+  assert.equal(explained.differenceExVat, 12100);
+  assert.equal(explained.budget.direction, "over");
+  assert.equal(explained.budget.exVat, 12100);
+  assert.equal(explained.budget.incVat, 15125);
+  const explainedText = budgetStatusText(explained.budget);
+  assert.match(explainedText, /Avtalte tillegg: \+kr 42[\s\u00a0\u202f]*600,00/);
+  assert.match(explainedText, /Avvik på ferdige poster: −kr 9[\s\u00a0\u202f]*500,00/);
+  assert.match(explainedText, /Utgåtte poster: −kr 21[\s\u00a0\u202f]*000,00/);
+  assert.match(explainedText, /Over tilbudet så langt: \+kr 12[\s\u00a0\u202f]*100,00 eks\. mva \(kr 15[\s\u00a0\u202f]*125,00 inkl\. mva\)/);
+  assert.match(costReportText(explained, []), /Utgåtte poster: −kr 21[\s\u00a0\u202f]*000,00/);
 
   const view = readFileSync("www/js/cost-view.js", "utf8");
   assert.match(view, /class: "final-badge" \}, "Ferdig"/);
